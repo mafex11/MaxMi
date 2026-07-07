@@ -83,8 +83,12 @@ extension Store {
                 FROM versions v JOIN threads t ON t.id = v.thread_id
                 WHERE v.extract_status = 'pending'
                   AND (v.is_frozen = 1 OR v.hour_bucket < ? OR v.committed_at <= ?)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM retry_queue r
+                    WHERE r.kind = 'extract' AND r.version_id = v.id AND r.next_attempt_at > ?
+                  )
                 ORDER BY v.committed_at
-                """, arguments: [currentBucket, nowMs - idleThresholdMs])
+                """, arguments: [currentBucket, nowMs - idleThresholdMs, nowMs])
             return rows.map { r in
                 PendingVersion(id: r["id"], threadID: r["thread_id"], hourBucket: r["hour_bucket"],
                                content: r["content"], contentHash: r["content_hash"],

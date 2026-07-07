@@ -14,6 +14,7 @@ final class MenuBarController {
     var accessibilityGranted: Bool = true { didSet { permissionItem.isHidden = accessibilityGranted } }
 
     func install(onTogglePause: @escaping () -> Void, onQuit: @escaping () -> Void) {
+        guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = "🧠"
         let menu = NSMenu()

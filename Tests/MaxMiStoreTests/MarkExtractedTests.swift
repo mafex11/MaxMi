@@ -88,4 +88,13 @@ final class MarkExtractedTests: XCTestCase {
         try store.clearRetry(id: due[0].id)
         XCTAssertTrue(try store.dueRetries(nowMs: h10 + 999_000).isEmpty)
     }
+    func testVersionWithUndueRetryIsNotWork() throws {
+        let a = try commit("x", at: h10)
+        _ = try commit("y", at: h11, url: "https://e.com/other")
+        try store.enqueueRetry(kind: "extract", versionID: a.vid, derivativeID: nil, error: "offline", nowMs: h10 + 301_000)
+        let gated = try store.pendingWork(nowMs: h10 + 302_000, idleThresholdMs: 300_000)
+        XCTAssertFalse(gated.contains { $0.id == a.vid }, "undue retry gates the version")
+        let after = try store.pendingWork(nowMs: h10 + 400_000, idleThresholdMs: 300_000)
+        XCTAssertTrue(after.contains { $0.id == a.vid }, "due retry releases it")
+    }
 }
