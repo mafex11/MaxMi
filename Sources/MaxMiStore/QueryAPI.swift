@@ -57,4 +57,14 @@ extension Store {
     public func totalFactCount() throws -> Int {
         try db.dbQueue.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM derivatives") ?? 0 }
     }
+
+    /// Test/support helper: thread id for a source_key (any app).
+    public func threadID(forKey key: String) throws -> String {
+        try db.dbQueue.read {
+            guard let tid = try String.fetchOne($0, sql: "SELECT id FROM threads WHERE source_key = ?", arguments: [key]) else {
+                throw DatabaseError(message: "no thread for key \(key)")
+            }
+            return tid
+        }
+    }
 }
