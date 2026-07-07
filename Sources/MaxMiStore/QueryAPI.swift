@@ -4,6 +4,7 @@ import MaxMiCore
 
 public struct FactHit: Sendable, Equatable {
     public let content: String
+    /// Cosine distance (1 − cosine similarity), derived from vec0 L2 on unit vectors.
     public let distance: Double
     public let sourceTitle: String?
     public let sourceKey: String
@@ -30,9 +31,16 @@ extension Store {
                 JOIN threads t ON t.id = dv.thread_id
                 ORDER BY e.distance
                 """, arguments: [blob, limit])
-                .map { FactHit(content: $0["content"], distance: $0["distance"],
-                               sourceTitle: $0["source_title"], sourceKey: $0["source_key"],
-                               committedAt: $0["committed_at"]) }
+                .map { row in
+                    // vec0 table uses L2 distance (default when no distance_metric specified).
+                    // All vectors are unit-normalized, so L2 = sqrt(2 − 2·cos_sim).
+                    // Convert to cosine distance via: cosine_distance = L2² / 2
+                    let l2: Double = row["distance"]
+                    let cosineDistance = (l2 * l2) / 2.0
+                    return FactHit(content: row["content"], distance: cosineDistance,
+                                   sourceTitle: row["source_title"], sourceKey: row["source_key"],
+                                   committedAt: row["committed_at"])
+                }
         }
     }
 

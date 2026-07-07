@@ -71,4 +71,38 @@ final class QueryAPITests: XCTestCase {
         try seedThread(url: "https://a.com", title: "A", facts: [("F1.", 1), ("F2.", 2)], at: t0)
         XCTAssertEqual(try store.totalFactCount(), 2)
     }
+
+    func testFactHitsReturnsCosineDistanceNotRawL2() throws {
+        // Regression: vec0 table uses L2 distance by default, but the similarity floor
+        // and all client code expect cosine distance. Verify the conversion at read boundary.
+
+        // Build unit vector B at known angle to stored vectors:
+        // B = [0.6, 0.8, 0, ...] (already normalized: 0.6² + 0.8² = 1.0)
+        var b = [Float](repeating: 0.0, count: 1536)
+        b[0] = 0.6  // component along axis 0
+        b[1] = 0.8  // component along axis 1
+
+        // Store facts with unit vectors along axis 0 and axis 1
+        try seedThread(url: "https://test.com", title: "Test",
+                       facts: [("Axis-0 fact.", 0), ("Axis-1 fact.", 1)],
+                       at: t0)
+
+        // Query with vector B
+        let hits = try store.factHits(near: b, limit: 5)
+        XCTAssertEqual(hits.count, 2)
+
+        // First hit should be axis-1 (0.8 similarity, 0.2 distance) - CLOSEST
+        XCTAssertEqual(hits[0].content, "Axis-1 fact.")
+        // dot(B, [0,1,0,...]) = 0.8 → cosine_distance = 1 - 0.8 = 0.2
+        XCTAssertEqual(hits[0].distance, 0.2, accuracy: 0.01, "axis-1 component dominates in B")
+
+        // Second hit should be axis-0 (0.6 similarity, 0.4 distance)
+        XCTAssertEqual(hits[1].content, "Axis-0 fact.")
+        // dot(B, [1,0,0,...]) = 0.6 → cosine_distance = 1 - 0.6 = 0.4
+        // If factHits returned raw L2, we'd see L2 = sqrt(2 - 2·0.6) = sqrt(0.8) ≈ 0.894
+        XCTAssertEqual(hits[1].distance, 0.4, accuracy: 0.01, "factHits must return cosine distance, not raw L2")
+
+        // Verify ordering: smaller distance comes first
+        XCTAssertLessThan(hits[0].distance, hits[1].distance, "results ordered by distance ascending")
+    }
 }
