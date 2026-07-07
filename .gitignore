@@ -1,0 +1,15 @@
+# private intercept captures — contain real browsing content, never commit
+captures/
+*.log
+
+# secrets
+.env
+.env.*
+
+# swift build artifacts
+.build/
+*.xcodeproj
+.DS_Store
+
+# assembled app
+*.app
