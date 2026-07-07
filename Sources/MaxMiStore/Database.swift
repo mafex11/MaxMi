@@ -23,7 +23,10 @@ public final class MaxMiDatabase {
         }
         dbQueue = try DatabaseQueue(path: path, configuration: config)
         if isFile {
-            try dbQueue.write { try $0.execute(sql: "PRAGMA journal_mode = WAL") }
+            // Must be outside transaction (GRDB starts a deferred transaction in .write).
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "PRAGMA journal_mode = WAL")
+            }
             for suffix in ["", "-wal", "-shm"] {
                 try? FileManager.default.setAttributes(
                     [.posixPermissions: 0o600], ofItemAtPath: path + suffix)
