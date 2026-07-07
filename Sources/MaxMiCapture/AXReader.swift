@@ -1,0 +1,46 @@
+import ApplicationServices
+import AppKit
+
+public enum AXReader {
+    public static func snapshotFrontmostWindow(pid: pid_t, maxNodes: Int = 20_000, maxDepth: Int = 40) -> (window: AXNode, title: String?)? {
+        let app = AXUIElementCreateApplication(pid)
+        guard let window = copyAttr(app, kAXFocusedWindowAttribute) as! AXUIElement?
+                ?? (copyAttr(app, kAXWindowsAttribute) as? [AXUIElement])?.first else { return nil }
+        var budget = maxNodes
+        let node = convert(window, depth: 0, maxDepth: maxDepth, budget: &budget)
+        let title = copyAttr(window, kAXTitleAttribute) as? String
+        return (node, title)
+    }
+
+    private static func convert(_ el: AXUIElement, depth: Int, maxDepth: Int, budget: inout Int) -> AXNode {
+        budget -= 1
+        let role = copyAttr(el, kAXRoleAttribute) as? String ?? "?"
+        let value = copyAttr(el, kAXValueAttribute) as? String
+        let title = copyAttr(el, kAXTitleAttribute) as? String
+        // AXURL (WebKit/Gecko) then AXDocument (Chromium) — spec §5 primary URL source.
+        let url = (copyAttr(el, "AXURL") as? URL)?.absoluteString
+            ?? (copyAttr(el, "AXURL") as? String)
+            ?? (copyAttr(el, "AXDocument") as? String)
+        let focused = (copyAttr(el, kAXFocusedAttribute) as? Bool) ?? false
+        var frame: CGRect? = nil
+        if let v = copyAttr(el, "AXFrame") {
+            var r = CGRect.zero
+            if AXValueGetValue(v as! AXValue, .cgRect, &r) { frame = r }
+        }
+        var children: [AXNode] = []
+        if depth < maxDepth, budget > 0,
+           let kids = copyAttr(el, kAXChildrenAttribute) as? [AXUIElement] {
+            for kid in kids {
+                if budget <= 0 { break }
+                children.append(convert(kid, depth: depth + 1, maxDepth: maxDepth, budget: &budget))
+            }
+        }
+        return AXNode(role: role, value: value, title: title, url: url,
+                      frame: frame, focused: focused, children: children)
+    }
+
+    private static func copyAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {
+        var v: CFTypeRef?
+        return AXUIElementCopyAttributeValue(el, name as CFString, &v) == .success ? v : nil
+    }
+}

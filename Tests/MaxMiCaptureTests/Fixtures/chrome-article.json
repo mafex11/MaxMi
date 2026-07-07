@@ -1,0 +1,12 @@
+{
+  "role": "AXWindow", "value": null, "title": "How SQLite Works", "url": null, "frame": {"x":0,"y":0,"width":1440,"height":900}, "focused": false,
+  "children": [
+    {"role": "AXToolbar", "value": null, "title": null, "url": null, "frame": {"x":0,"y":0,"width":1440,"height":42}, "focused": false, "children": [
+      {"role": "AXTextField", "value": "how does sqli", "title": "Address and search bar", "url": null, "frame": {"x":250,"y":6,"width":700,"height":30}, "focused": true, "children": []}
+    ]},
+    {"role": "AXWebArea", "value": null, "title": null, "url": "https://sqlite.org/arch.html", "frame": {"x":0,"y":42,"width":1440,"height":858}, "focused": false, "children": [
+      {"role": "AXStaticText", "value": "Architecture of SQLite", "title": null, "url": null, "frame": {"x":40,"y":80,"width":400,"height":28}, "focused": false, "children": []},
+      {"role": "AXStaticText", "value": "This document describes the architecture.", "title": null, "url": null, "frame": {"x":40,"y":120,"width":800,"height":20}, "focused": false, "children": []}
+    ]}
+  ]
+}

@@ -13,3 +13,9 @@ captures/
 
 # assembled app
 *.app
+
+# database files
+*.db
+*.db-wal
+*.db-shm
+.superpowers/

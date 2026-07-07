@@ -1,0 +1,16 @@
+{
+  "role": "AXWindow", "value": null, "title": "Meet - Daily Sync", "url": null, "frame": {"x":0,"y":0,"width":1440,"height":900}, "focused": false,
+  "children": [
+    {"role": "AXToolbar", "value": null, "title": null, "url": null, "frame": {"x":0,"y":0,"width":1440,"height":40}, "focused": false, "children": [
+      {"role": "AXComboBox", "value": "meet.google.com/abc-defg-hij", "title": null, "url": null, "frame": {"x":200,"y":5,"width":600,"height":30}, "focused": false, "children": []}
+    ]},
+    {"role": "AXWebArea", "value": null, "title": null, "url": "https://meet.google.com/abc-defg-hij", "frame": {"x":0,"y":40,"width":1440,"height":860}, "focused": false, "children": [
+      {"role": "AXStaticText", "value": "Daily Sync", "title": null, "url": null, "frame": {"x":20,"y":60,"width":200,"height":20}, "focused": false, "children": []},
+      {"role": "AXGroup", "value": null, "title": null, "url": null, "frame": {"x":0,"y":100,"width":1440,"height":700}, "focused": false, "children": [
+        {"role": "AXStaticText", "value": "Participants joined", "title": null, "url": null, "frame": {"x":20,"y":120,"width":300,"height":20}, "focused": false, "children": []},
+        {"role": "AXStaticText", "value": "Left column later row", "title": null, "url": null, "frame": {"x":20,"y":300,"width":300,"height":20}, "focused": false, "children": []}
+      ]},
+      {"role": "AXStaticText", "value": "Right of title", "title": null, "url": null, "frame": {"x":400,"y":60,"width":200,"height":20}, "focused": false, "children": []}
+    ]}
+  ]
+}
