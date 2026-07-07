@@ -25,7 +25,7 @@ public struct EnvConfig: Sendable, Equatable {
                 if val.count >= 2, (val.hasPrefix("\"") && val.hasSuffix("\"")) || (val.hasPrefix("'") && val.hasSuffix("'")) {
                     val = String(val.dropFirst().dropLast())
                 }
-                kv[key] = val
+                kv[key] = val.isEmpty ? nil : val
             }
         }
         return EnvConfig(

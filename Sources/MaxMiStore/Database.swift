@@ -11,8 +11,9 @@ public final class MaxMiDatabase {
             var err: UnsafeMutablePointer<CChar>? = nil
             let rc = sqlite3_vec_init(db.sqliteConnection, &err, nil)
             if rc != SQLITE_OK {
-                throw DatabaseError(resultCode: ResultCode(rawValue: rc),
-                                    message: err.map { String(cString: $0) } ?? "sqlite3_vec_init failed")
+                let msg = err.map { String(cString: $0) } ?? "sqlite3_vec_init failed"
+                sqlite3_free(err)
+                throw DatabaseError(resultCode: ResultCode(rawValue: rc), message: msg)
             }
         }
         let isFile = path != ":memory:"

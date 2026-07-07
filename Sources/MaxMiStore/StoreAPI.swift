@@ -72,6 +72,8 @@ public final class Store {
 
 extension Store {
     public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
+        // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
+        // can serve as baseline; its unextracted facts are suppressed from the newer diff).
         try db.dbQueue.read { d in
             let currentBucket = HourBucket.bucket(forMs: nowMs)
             let rows = try Row.fetchAll(d, sql: """

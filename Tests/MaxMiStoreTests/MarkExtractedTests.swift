@@ -35,7 +35,7 @@ final class MarkExtractedTests: XCTestCase {
     func testImplicitlyFrozenPastHourIsWorkWithFrozenBaseline() throws {
         try commit("hour ten content", at: h10)
         _ = try commit("hour eleven content", at: h11)   // freezes h10 row
-        // h11 row: not idle yet -> only... wait, h10 row was completed? No: both pending.
+        // h10 frozen and extractable; h11 fresh (not idle).
         let work = try store.pendingWork(nowMs: h11 + 1_000, idleThresholdMs: 300_000)
         XCTAssertEqual(work.count, 1, "frozen h10 row is work; fresh h11 row is not")
         XCTAssertEqual(work[0].hourBucket, 495_442)

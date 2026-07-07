@@ -32,4 +32,14 @@ final class MigrationTests: XCTestCase {
                 """)) // UNIQUE(thread_id, hour_bucket)
         }
     }
+    func testFileBackedDatabaseOpensWithWAL() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let path = dir.appendingPathComponent("t.db").path
+        let db = try MaxMiDatabase(path: path)
+        try db.dbQueue.read { d in
+            XCTAssertEqual(try String.fetchOne(d, sql: "PRAGMA journal_mode"), "wal")
+        }
+        let perms = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int
+        XCTAssertEqual(perms, 0o600)
+    }
 }

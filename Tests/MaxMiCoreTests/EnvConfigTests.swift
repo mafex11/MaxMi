@@ -34,4 +34,9 @@ final class EnvConfigTests: XCTestCase {
         let b = try write("GEMINI_API_KEY=second")
         XCTAssertEqual(EnvConfig.load(searchPaths: [a, b]).geminiAPIKey, "first")
     }
+    func testEmptyValueTreatedAsAbsent() throws {
+        let u = try write("GEMINI_API_KEY=")
+        let c = EnvConfig.load(searchPaths: [u])
+        XCTAssertNil(c.geminiAPIKey, "empty-string value yields nil")
+    }
 }

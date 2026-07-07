@@ -102,6 +102,7 @@ final class AppWiring {
     }
 
     private func attemptCapture(browser: Browser, pid: pid_t, attemptsLeft: Int) {
+        guard !paused else { return }
         guard let (window, title) = AXReader.snapshotFrontmostWindow(pid: pid) else {
             retryOrGiveUp(browser: browser, pid: pid, attemptsLeft: attemptsLeft); return
         }
@@ -115,7 +116,7 @@ final class AppWiring {
                 captureCount += 1
                 menuBar.captureCount = captureCount
             }
-        } catch ExtractionError.emptyContent, ExtractionError.noWebArea {
+        } catch ExtractionError.emptyContent, ExtractionError.noWebArea, ExtractionError.noURL {
             retryOrGiveUp(browser: browser, pid: pid, attemptsLeft: attemptsLeft)
         } catch {
             NSLog("MaxMi capture skipped: \(error)")             // logged, skipped, never crash (spec §10)
