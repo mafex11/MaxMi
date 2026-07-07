@@ -1,0 +1,37 @@
+import XCTest
+@testable import MaxMiCore
+
+final class EnvConfigTests: XCTestCase {
+    func write(_ s: String) throws -> URL {
+        let u = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent(".env")
+        try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try s.write(to: u, atomically: true, encoding: .utf8)
+        return u
+    }
+    func testParsesKeysCommentsAndQuotes() throws {
+        let u = try write("""
+        # comment
+        GEMINI_API_KEY="abc123"
+        MAXMI_EMBED_DIMS=768
+
+        MAXMI_EXTRACT_MODEL=gemini-2.5-flash-lite
+        """)
+        let c = EnvConfig.load(searchPaths: [u])
+        XCTAssertEqual(c.geminiAPIKey, "abc123")
+        XCTAssertEqual(c.embedDims, 768)
+        XCTAssertEqual(c.extractModel, "gemini-2.5-flash-lite")
+        XCTAssertEqual(c.embedModel, "gemini-embedding-001") // default survives
+    }
+    func testMissingFileYieldsDefaultsAndNilKey() {
+        let c = EnvConfig.load(searchPaths: [URL(fileURLWithPath: "/nonexistent/.env")])
+        XCTAssertNil(c.geminiAPIKey)
+        XCTAssertEqual(c.embedDims, 1536)
+        XCTAssertEqual(c.extractModel, "gemini-flash-lite-latest")
+    }
+    func testFirstExistingPathWins() throws {
+        let a = try write("GEMINI_API_KEY=first")
+        let b = try write("GEMINI_API_KEY=second")
+        XCTAssertEqual(EnvConfig.load(searchPaths: [a, b]).geminiAPIKey, "first")
+    }
+}
