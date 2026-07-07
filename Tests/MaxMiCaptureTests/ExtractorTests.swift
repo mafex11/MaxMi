@@ -66,4 +66,42 @@ final class ExtractorTests: XCTestCase {
             XCTAssertEqual($0 as? ExtractionError, .noURL)
         }
     }
+    func testWebAreaTextFieldNeverChosenAsAddressBar() throws {
+        // regression: web area with nil url comes FIRST, contains an AXTextField with domain-like value
+        let fx = AXNode(
+            role: "AXWindow", value: nil, title: "Browser Window", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1200, height: 800), focused: false,
+            children: [
+                AXNode(
+                    role: "AXWebArea", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 0, y: 38, width: 1200, height: 762), focused: false,
+                    children: [
+                        AXNode(
+                            role: "AXTextField", value: "typed-into-page.example.com", title: nil, url: nil,
+                            frame: CGRect(x: 100, y: 100, width: 400, height: 30), focused: false,
+                            children: []
+                        ),
+                        AXNode(
+                            role: "AXStaticText", value: "Page content here.", title: nil, url: nil,
+                            frame: CGRect(x: 20, y: 150, width: 600, height: 20), focused: false,
+                            children: []
+                        )
+                    ]
+                ),
+                AXNode(
+                    role: "AXToolbar", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 0, y: 0, width: 1200, height: 38), focused: false,
+                    children: [
+                        AXNode(
+                            role: "AXTextField", value: "real-address.com", title: "Address and search", url: nil,
+                            frame: CGRect(x: 300, y: 4, width: 500, height: 30), focused: false,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+        let cap = try BrowserTabExtractor.extract(window: fx, windowTitle: nil)
+        XCTAssertEqual(cap.url, "https://real-address.com", "address bar from toolbar, not in-page field")
+    }
 }

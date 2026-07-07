@@ -21,7 +21,7 @@ public enum BrowserTabExtractor {
             return TabCapture(url: urlString, title: windowTitle ?? window.title, content: content)
         }
         // 2. Fallback: toolbar address field. Refuse mid-typing states outright.
-        let address = firstNode(in: window) { addressRoles.contains($0.role) && ($0.value?.contains(".") ?? false) }
+        let address = firstNode(in: window, where: { addressRoles.contains($0.role) && ($0.value?.contains(".") ?? false) }, excludingRole: "AXWebArea")
         if let address {
             if address.focused { throw ExtractionError.addressFieldFocused }
             guard var raw = address.value, !raw.isEmpty else { throw ExtractionError.noURL }
@@ -53,6 +53,13 @@ public enum BrowserTabExtractor {
     private static func firstNode(in root: AXNode, where match: (AXNode) -> Bool) -> AXNode? {
         if match(root) { return root }
         for child in root.children { if let hit = firstNode(in: child, where: match) { return hit } }
+        return nil
+    }
+
+    private static func firstNode(in root: AXNode, where match: (AXNode) -> Bool, excludingRole: String) -> AXNode? {
+        if match(root) { return root }
+        if root.role == excludingRole { return nil }
+        for child in root.children { if let hit = firstNode(in: child, where: match, excludingRole: excludingRole) { return hit } }
         return nil
     }
 }
