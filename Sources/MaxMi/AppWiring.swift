@@ -78,18 +78,21 @@ final class AppWiring {
             onQuit: { NSApp.terminate(nil) }
         )
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
+        guard self.observer == nil else { return }  // prevent double-start
         let observer = FocusObserver { [weak self] browser, pid in
             self?.captureFrontmost(browser: browser, pid: pid)
         }
         observer.start()
         self.observer = observer
         // Pipeline sweep every 30s: picks up idle/frozen versions and due retries (spec §3a sweeper).
-        pipelineTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, !self.paused else { return }
                 await self.pipeline.tick()
             }
         }
+        RunLoop.main.add(t, forMode: .common)
+        pipelineTimer = t
     }
 
     func captureFrontmost(browser: Browser, pid: pid_t) {
