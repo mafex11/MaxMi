@@ -91,4 +91,53 @@ final class LazyToolsTests: XCTestCase {
 
         try? FileManager.default.removeItem(atPath: tempDir.path)
     }
+
+    func testKeyProviderFailure_ThenRecovery() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dbPath = tempDir.appendingPathComponent("test.db").path
+        defer { try? FileManager.default.removeItem(atPath: tempDir.path) }
+
+        // Create and seed a database with testCipher
+        let db = try MaxMiDatabase(path: dbPath)
+        let store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
+        let nowMs = EpochMs(Date().timeIntervalSince1970 * 1000)
+        let result = try store.commitCapture(
+            CaptureInput(sourceApp: "TestApp", sourceKey: "test://url", sourceTitle: "Test Thread", content: "test content"),
+            nowMs: nowMs
+        )
+        guard case .committed(let versionID, _) = result else {
+            XCTFail("Failed to commit capture")
+            return
+        }
+        let threadID = try await db.dbQueue.read { d in
+            try String.fetchOne(d, sql: "SELECT thread_id FROM versions WHERE id=?", arguments: [versionID])!
+        }
+        let facts = try await store.insertDerivatives(versionID: versionID, threadID: threadID, facts: ["Test fact"], nowMs: nowMs)
+        XCTAssertEqual(facts.count, 1)
+
+        setenv("MAXMI_DB_PATH", dbPath, 1)
+        defer { unsetenv("MAXMI_DB_PATH") }
+
+        // Failing provider
+        var shouldFail = true
+        let lazyTools = LazyTools(keyProvider: {
+            if shouldFail {
+                throw KeychainKeyStore.KeyError.unavailable(-1)
+            }
+            return Data(repeating: 7, count: 32)  // same bytes as testCipher
+        })
+
+        // First call: locked
+        let result1 = await lazyTools.call(name: "list_active_threads", arguments: [:])
+        XCTAssertTrue(result1.isError, "Expected error when key unavailable")
+        XCTAssertEqual(result1.text, "Memory is locked — open the MaxMi app once to unlock.")
+
+        // Recovery: provider stops throwing
+        shouldFail = false
+
+        // Second call: succeeds
+        let result2 = await lazyTools.call(name: "list_active_threads", arguments: [:])
+        XCTAssertFalse(result2.isError, "Expected success after recovery, got: \(result2.text)")
+        XCTAssertTrue(result2.text.contains("Test Thread"), "Expected thread title in result")
+    }
 }

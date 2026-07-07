@@ -8,8 +8,12 @@ import MaxMiRelay
 public final class LazyTools: ToolProvider, @unchecked Sendable {
     private var cached: MaxMiTools?
     private let lock = NSLock()
+    private var lockedOut = false
+    private let keyProvider: () throws -> Data
 
-    public init() {}
+    public init(keyProvider: @escaping () throws -> Data = KeychainKeyStore.getOrCreate) {
+        self.keyProvider = keyProvider
+    }
 
     public var toolDefinitions: [[String: Any]] {
         // Schemas are static; build a throwaway provider only for definitions.
@@ -26,6 +30,9 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
             return ToolResult(text: "Unknown tool: \(name)", isError: true)
         }
         guard let tools = resolve() else {
+            if lockedOut {
+                return ToolResult(text: "Memory is locked — open the MaxMi app once to unlock.", isError: true)
+            }
             return ToolResult(text: MemoryQueries.noDBText, isError: false)
         }
         return await tools.call(name: name, arguments: arguments)
@@ -33,6 +40,7 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
 
     private func resolve() -> MaxMiTools? {
         lock.lock(); defer { lock.unlock() }
+        lockedOut = false                                  // reset on each attempt (recovery without restart)
         if let cached { return cached }
         let dbPath = ProcessInfo.processInfo.environment["MAXMI_DB_PATH"]
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -46,8 +54,14 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
                 appSupport.appendingPathComponent(".env"),
                 URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
             ])
-            // TODO(M3 Task 4): Keychain key
-            let queries = MemoryQueries(store: Store(db: db, cipher: AESGCMFieldCipher.testCipher), relay: GeminiClient(config: config))
+            let keyData: Data
+            do { keyData = try keyProvider() }
+            catch {
+                logStderr("keychain unavailable: \(error)")
+                lockedOut = true
+                return nil
+            }
+            let queries = MemoryQueries(store: Store(db: db, cipher: AESGCMFieldCipher(keyData: keyData)), relay: GeminiClient(config: config))
             let tools = MaxMiTools(queries: queries)
             if config.geminiAPIKey != nil {
                 cached = tools
