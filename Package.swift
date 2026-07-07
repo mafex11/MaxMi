@@ -28,10 +28,14 @@ let package = Package(
         .executableTarget(name: "MaxMi", dependencies: [
             "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay",
         ]),
+        .executableTarget(name: "MaxMiMCP", dependencies: [
+            "MaxMiCore", "MaxMiStore", "MaxMiRelay",
+        ]),
         .testTarget(name: "MaxMiCoreTests", dependencies: ["MaxMiCore"]),
         .testTarget(name: "MaxMiStoreTests", dependencies: ["MaxMiStore"]),
         .testTarget(name: "MaxMiCaptureTests", dependencies: ["MaxMiCapture"],
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "MaxMiRelayTests", dependencies: ["MaxMiRelay"]),
+        .testTarget(name: "MaxMiMCPTests", dependencies: ["MaxMiMCP"]),
     ]
 )
