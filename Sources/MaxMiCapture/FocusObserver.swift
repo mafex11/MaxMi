@@ -13,6 +13,8 @@ public enum Browser: String, CaseIterable, Sendable {
     }
 }
 
+/// Observes browser focus changes and triggers captures.
+/// Callers MUST call stop() before releasing; deinit cannot tear down MainActor state under Swift 6.
 @MainActor
 public final class FocusObserver {
     let debounceMs: Int
@@ -22,6 +24,8 @@ public final class FocusObserver {
     var debounceTask: Task<Void, Never>?
     var recaptureTimer: Timer?
     var axObserver: AXObserver?
+    var observedPid: pid_t?
+    var workspaceObserver: NSObjectProtocol?
     var current: (browser: Browser, pid: pid_t)?
 
     public init(debounceMs: Int = 1_000, recaptureIntervalSec: Double = 45,
@@ -32,7 +36,8 @@ public final class FocusObserver {
     }
 
     public func start() {
-        NSWorkspace.shared.notificationCenter.addObserver(
+        guard workspaceObserver == nil else { return }
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
@@ -42,7 +47,10 @@ public final class FocusObserver {
     }
 
     public func stop() {
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        if let token = workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+        }
+        workspaceObserver = nil
         recaptureTimer?.invalidate(); recaptureTimer = nil
         debounceTask?.cancel()
         detachAXObserver()
@@ -50,14 +58,22 @@ public final class FocusObserver {
     }
 
     func frontmostChanged(_ app: NSRunningApplication) {
-        detachAXObserver()
-        recaptureTimer?.invalidate(); recaptureTimer = nil
         guard let bid = app.bundleIdentifier, let browser = Browser(rawValue: bid) else {
+            detachAXObserver()
+            recaptureTimer?.invalidate(); recaptureTimer = nil
             current = nil; return   // non-browser frontmost -> ignore (spec §5)
         }
-        current = (browser, app.processIdentifier)
-        if browser.isChromium { ChromiumKick.apply(pid: app.processIdentifier) }
-        attachAXObserver(pid: app.processIdentifier)
+        let newPid = app.processIdentifier
+        if let cur = current, cur.pid == newPid, cur.browser == browser {
+            // same browser, same pid -> skip detach/re-attach churn
+            scheduleCapture()
+            return
+        }
+        detachAXObserver()
+        recaptureTimer?.invalidate(); recaptureTimer = nil
+        current = (browser, newPid)
+        if browser.isChromium { ChromiumKick.apply(pid: newPid) }
+        attachAXObserver(pid: newPid)
         scheduleCapture()
         recaptureTimer = Timer.scheduledTimer(withTimeInterval: recaptureIntervalSec, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.scheduleCapture() }
@@ -88,12 +104,17 @@ public final class FocusObserver {
         AXObserverAddNotification(observer, appEl, kAXTitleChangedNotification as CFString, refcon)
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
         axObserver = observer
+        observedPid = pid
     }
 
     func detachAXObserver() {
-        if let axObserver {
+        if let axObserver, let pid = observedPid {
+            let appEl = AXUIElementCreateApplication(pid)
+            AXObserverRemoveNotification(axObserver, appEl, kAXFocusedUIElementChangedNotification as CFString)
+            AXObserverRemoveNotification(axObserver, appEl, kAXTitleChangedNotification as CFString)
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(axObserver), .defaultMode)
         }
         axObserver = nil
+        observedPid = nil
     }
 }
