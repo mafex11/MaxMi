@@ -96,9 +96,8 @@ IF settings['content_encrypted'] != 'true':
   <dict><key>keychain-access-groups</key>
         <array><string>6B7UDKRDH2.dev.mafex.maxmi</string></array></dict>
   ```
-- `make-app.sh` changes: sign `maxmi-mcp` and the app binary individually, then the bundle:
-  `codesign --force --options runtime? NO —` keep hardened runtime OFF for M3 (it adds library-validation friction with zero benefit for a local build). Sign with:
-  `codesign --force --sign "Apple Development: esskayhd@outlook.com (6B7UDKRDH2)" --entitlements packaging/MaxMi.entitlements` — inner binary first, then the .app (replaces `--deep --sign -`).
+- `make-app.sh` changes: hardened runtime stays OFF for M3 (it adds library-validation friction with zero benefit for a local build). Sign inner-to-outer — first `Contents/MacOS/maxmi-mcp`, then the `.app` bundle — each with:
+  `codesign --force --sign "Apple Development: esskayhd@outlook.com (6B7UDKRDH2)" --entitlements packaging/MaxMi.entitlements` (replaces the old `--deep --sign -`; `--deep` is dropped because inner-first explicit signing is the correct order).
 - The identity string goes in a `SIGN_IDENTITY` variable defaulting to that cert, overridable via env for future machines.
 - **One final TCC re-grant** is required when the signature changes ad-hoc→identity (document in README + echo from make-app.sh). After that, rebuilds keep the same signing identity → TCC and Keychain ACLs persist. Exit criterion: two consecutive rebuilds, zero prompts.
 - maxmi-mcp keeps needing no TCC at all; it gains only the keychain entitlement.
