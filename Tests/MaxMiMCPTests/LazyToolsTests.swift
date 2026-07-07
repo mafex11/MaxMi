@@ -34,7 +34,7 @@ final class LazyToolsTests: XCTestCase {
         setenv("MAXMI_DB_PATH", dbPath, 1)
         defer { unsetenv("MAXMI_DB_PATH") }
 
-        let lazyTools = LazyTools()
+        let lazyTools = LazyTools(keyProvider: { Data(repeating: 7, count: 32) })
         let result2 = await lazyTools.call(name: "list_active_threads", arguments: [:])
 
         XCTAssertFalse(result2.isError, "Expected success, got error: \(result2.text)")
@@ -83,7 +83,7 @@ final class LazyToolsTests: XCTestCase {
         setenv("MAXMI_DB_PATH", dbPath, 1)
         defer { unsetenv("MAXMI_DB_PATH") }
 
-        let lazyTools = LazyTools()
+        let lazyTools = LazyTools(keyProvider: { Data(repeating: 7, count: 32) })
         let result = await lazyTools.call(name: "unknown_tool", arguments: [:])
 
         XCTAssertTrue(result.isError, "Unknown tool should return isError=true even with DB")

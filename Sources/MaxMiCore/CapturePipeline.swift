@@ -68,14 +68,15 @@ public actor CapturePipeline {
             }
             do {
                 try store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
-                                        error: String(describing: e), nowMs: now)
+                                        error: e.kind, nowMs: now)
             } catch {
                 log("enqueueRetry failed: \(error)")
             }
         } catch {
             do {
+                // Never interpolate error values that could contain content
                 try store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
-                                        error: String(describing: error), nowMs: now)
+                                        error: "unexpectedError", nowMs: now)
             } catch {
                 log("enqueueRetry failed: \(error)")
             }

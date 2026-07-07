@@ -118,4 +118,16 @@ final class PipelineTests: XCTestCase {
         await p.tick()
         XCTAssertEqual(s.extractedOK.count, 1, "nothing meaningful on page is a valid outcome")
     }
+    func testMalformedResponseDoesNotLeakContentIntoRetryQueue() async {
+        let (p, s, r) = makeSUT()
+        s.work = [version()]
+        let sensitivePayload = String(repeating: "x", count: 200)
+        r.extractResult = .failure(RelayError.malformedResponse(sensitivePayload))
+        await p.tick()
+        XCTAssertEqual(s.retries.count, 1)
+        let errorStored = s.retries.first?.error ?? ""
+        XCTAssertFalse(errorStored.contains(sensitivePayload),
+                       "retry error must not contain response payload")
+        XCTAssertEqual(errorStored, "malformedResponse", "should be the static kind label")
+    }
 }

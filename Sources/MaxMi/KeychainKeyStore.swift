@@ -11,41 +11,63 @@ enum KeychainKeyStore {
     static let accessGroup = "3DL5T4M53M.dev.mafex.maxmi"
 
     static func getOrCreate() throws -> Data {
+        // Try grouped read first (signed build with entitlements).
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccessGroup as String: accessGroup,
+            kSecUseDataProtectionKeychain as String: true,
             kSecReturnData as String: true,
         ]
         var result: CFTypeRef?
         var status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data }
-        guard status == errSecItemNotFound else { throw KeyError.unavailable(status) }
 
+        // If not found in the grouped keychain OR missing entitlements, try group-less read.
+        // This allows signed builds to pick up a dev-created key instead of forking.
+        if status == errSecItemNotFound || status == errSecMissingEntitlement {
+            var ungroupedQuery = query
+            ungroupedQuery.removeValue(forKey: kSecAttrAccessGroup as String)
+            status = SecItemCopyMatching(ungroupedQuery as CFDictionary, &result)
+            if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data }
+        }
+
+        guard status == errSecItemNotFound || status == errSecMissingEntitlement else {
+            throw KeyError.unavailable(status)
+        }
+
+        // No key exists — generate a fresh one.
         let fresh = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
         var add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccessGroup as String: accessGroup,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecUseDataProtectionKeychain as String: true,
             kSecValueData as String: fresh,
         ]
         status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecSuccess { return fresh }
+
         // Unsigned dev builds: retry without access group (spec §5 fallback).
         if status == errSecMissingEntitlement {
             fputs("keychain: no access-group entitlement, using default group\n", stderr)
             add.removeValue(forKey: kSecAttrAccessGroup as String)
             status = SecItemAdd(add as CFDictionary, nil)
             if status == errSecSuccess { return fresh }
-            // Re-read also needs to drop the access group
-            query.removeValue(forKey: kSecAttrAccessGroup as String)
         }
-        if status == errSecDuplicateItem {           // lost the creation race — re-read
+
+        // Lost the creation race — re-read (must handle both grouped/ungrouped).
+        if status == errSecDuplicateItem {
             query[kSecReturnData as String] = true
             status = SecItemCopyMatching(query as CFDictionary, &result)
             if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data }
+            // If that failed, try without access group (may have raced with dev build).
+            query.removeValue(forKey: kSecAttrAccessGroup as String)
+            status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data }
         }
+
         throw KeyError.unavailable(status)
     }
 }
