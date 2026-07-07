@@ -69,3 +69,103 @@ public final class Store {
         }
     }
 }
+
+extension Store {
+    public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
+        try db.dbQueue.read { d in
+            let currentBucket = HourBucket.bucket(forMs: nowMs)
+            let rows = try Row.fetchAll(d, sql: """
+                SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
+                       t.source_app, t.source_key,
+                       (SELECT p.content FROM versions p
+                         WHERE p.thread_id = v.thread_id AND p.hour_bucket < v.hour_bucket
+                         ORDER BY p.hour_bucket DESC LIMIT 1) AS previous_frozen_content
+                FROM versions v JOIN threads t ON t.id = v.thread_id
+                WHERE v.extract_status = 'pending'
+                  AND (v.is_frozen = 1 OR v.hour_bucket < ? OR v.committed_at <= ?)
+                ORDER BY v.committed_at
+                """, arguments: [currentBucket, nowMs - idleThresholdMs])
+            return rows.map { r in
+                PendingVersion(id: r["id"], threadID: r["thread_id"], hourBucket: r["hour_bucket"],
+                               content: r["content"], contentHash: r["content_hash"],
+                               sourceApp: r["source_app"], sourceKey: r["source_key"],
+                               previousFrozenContent: r["previous_frozen_content"])
+            }
+        }
+    }
+
+    public func markExtracted(versionID: String, contentHashRead: String) throws -> Bool {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE versions SET extract_status='completed' WHERE id=? AND content_hash=?",
+                          arguments: [versionID, contentHashRead])
+            return d.changesCount > 0
+        }
+    }
+
+    public func markExtractFailed(versionID: String) throws {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE versions SET extract_status='failed' WHERE id=?", arguments: [versionID])
+        }
+    }
+
+    public func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PendingDerivative] {
+        try db.dbQueue.write { d in
+            var inserted: [PendingDerivative] = []
+            for fact in facts {
+                let id = Ident.uuidv7(nowMs: nowMs)
+                try d.execute(sql: """
+                    INSERT OR IGNORE INTO derivatives (id, thread_id, version_id, content, content_hash, committed_at, embedding_status)
+                    VALUES (?,?,?,?,?,?,'pending')
+                    """, arguments: [id, threadID, versionID, fact, ContentHash.sha256Hex(fact), nowMs])
+                if d.changesCount > 0 { inserted.append(PendingDerivative(id: id, content: fact)) }
+            }
+            return inserted
+        }
+    }
+
+    public func markEmbedded(derivativeID: String) throws {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE derivatives SET embedding_status='completed' WHERE id=?", arguments: [derivativeID])
+        }
+    }
+
+    public func pendingDerivatives(versionID: String) throws -> [PendingDerivative] {
+        try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: "SELECT id, content FROM derivatives WHERE version_id=? AND embedding_status='pending'",
+                             arguments: [versionID])
+                .map { PendingDerivative(id: $0["id"], content: $0["content"]) }
+        }
+    }
+
+    public func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws {
+        try db.dbQueue.write { d in
+            let existing = try Row.fetchOne(d, sql: """
+                SELECT id, attempts FROM retry_queue
+                WHERE kind=? AND ifnull(version_id,'')=ifnull(?,'') AND ifnull(derivative_id,'')=ifnull(?,'')
+                """, arguments: [kind, versionID, derivativeID])
+            let attempts = (existing?["attempts"] as Int? ?? 0)
+            let backoff: EpochMs = min(30_000 * EpochMs(1 << min(attempts, 10)), 3_600_000)
+            if let existing {
+                try d.execute(sql: "UPDATE retry_queue SET attempts=?, next_attempt_at=?, last_error=? WHERE id=?",
+                              arguments: [attempts + 1, nowMs + backoff, error, existing["id"] as String])
+            } else {
+                try d.execute(sql: """
+                    INSERT INTO retry_queue (id, kind, version_id, derivative_id, attempts, next_attempt_at, last_error)
+                    VALUES (?,?,?,?,1,?,?)
+                    """, arguments: [Ident.uuidv7(nowMs: nowMs), kind, versionID, derivativeID, nowMs + backoff, error])
+            }
+        }
+    }
+
+    public func dueRetries(nowMs: EpochMs) throws -> [(id: String, kind: String, versionID: String?, derivativeID: String?)] {
+        try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: "SELECT * FROM retry_queue WHERE next_attempt_at <= ? ORDER BY next_attempt_at",
+                             arguments: [nowMs])
+                .map { ($0["id"], $0["kind"], $0["version_id"], $0["derivative_id"]) }
+        }
+    }
+
+    public func clearRetry(id: String) throws {
+        try db.dbQueue.write { try $0.execute(sql: "DELETE FROM retry_queue WHERE id=?", arguments: [id]) }
+    }
+}
