@@ -23,7 +23,7 @@ enum KeychainKeyStore {
         guard status == errSecItemNotFound else { throw KeyError.unavailable(status) }
 
         let fresh = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-        let add: [String: Any] = [
+        var add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccessGroup as String: accessGroup,
@@ -32,6 +32,15 @@ enum KeychainKeyStore {
         ]
         status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecSuccess { return fresh }
+        // Unsigned dev builds: retry without access group (spec §5 fallback).
+        if status == errSecMissingEntitlement {
+            fputs("keychain: no access-group entitlement, using default group\n", stderr)
+            add.removeValue(forKey: kSecAttrAccessGroup as String)
+            status = SecItemAdd(add as CFDictionary, nil)
+            if status == errSecSuccess { return fresh }
+            // Re-read also needs to drop the access group
+            query.removeValue(forKey: kSecAttrAccessGroup as String)
+        }
         if status == errSecDuplicateItem {           // lost the creation race — re-read
             query[kSecReturnData as String] = true
             status = SecItemCopyMatching(query as CFDictionary, &result)
