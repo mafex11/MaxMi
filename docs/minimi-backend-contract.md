@@ -52,3 +52,9 @@ Analytics, proxied through their backend (very frequent). Ignore for cloning.
    Rewritten to second-person only for display.
 3. **Embed each fact whole** (no chunking); store 1536-dim vector. `{text} -> {embedding}`.
 4. Diffing: they pass `previous_content` so the model only extracts NEW facts vs the last version.
+   ⚠ RESOLVED (inconclusively): checked the raw intercept — all 6 extract calls in the session had
+   `previous_content = null` because each was a first capture of a distinct URL. No same-thread
+   re-extract was captured, so the log CANNOT disambiguate "last stored row" vs "last extraction
+   snapshot". Moot for MaxMi: our design extracts only on freeze/idle and diffs against the latest
+   FROZEN version (spec §3a), so there is never a competing within-hour baseline. Do not re-grep the
+   log expecting an answer — capture a same-URL re-extract if this ever needs confirming for parity.
