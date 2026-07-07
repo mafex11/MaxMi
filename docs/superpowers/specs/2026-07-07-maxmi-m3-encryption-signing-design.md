@@ -43,9 +43,9 @@ MaxMiStore/
 MaxMi (app) + MaxMiMCP:
   KeychainKeyStore.swift   get-or-create the 256-bit key as kSecClassGenericPassword,
                            service "dev.mafex.maxmi.dbkey", keychain access group
-                           "6B7UDKRDH2.dev.mafex.maxmi", kSecAttrAccessibleAfterFirstUnlock
+                           "3DL5T4M53M.dev.mafex.maxmi", kSecAttrAccessibleAfterFirstUnlock
 packaging/
-  MaxMi.entitlements       keychain-access-groups: ["6B7UDKRDH2.dev.mafex.maxmi"]
+  MaxMi.entitlements       keychain-access-groups: ["3DL5T4M53M.dev.mafex.maxmi"]
   make-app.sh              sign both binaries with the Apple Development identity + entitlements
 ```
 
@@ -66,7 +66,7 @@ enc:v1:BASE64( nonce[12] ‖ ciphertext ‖ tag[16] )
 
 ## 5. Key management
 
-- **Creation:** first launch of either binary calls `KeychainKeyStore.getOrCreate()` — `SecItemCopyMatching` for service `dev.mafex.maxmi.dbkey`; on `errSecItemNotFound`, generate `SymmetricKey(size: .bits256)`, `SecItemAdd` with `kSecAttrAccessGroup = "6B7UDKRDH2.dev.mafex.maxmi"`, `kSecAttrAccessibleAfterFirstUnlock`. Race-safe: on add-collision (`errSecDuplicateItem`), re-read.
+- **Creation:** first launch of either binary calls `KeychainKeyStore.getOrCreate()` — `SecItemCopyMatching` for service `dev.mafex.maxmi.dbkey`; on `errSecItemNotFound`, generate `SymmetricKey(size: .bits256)`, `SecItemAdd` with `kSecAttrAccessGroup = "3DL5T4M53M.dev.mafex.maxmi"`, `kSecAttrAccessibleAfterFirstUnlock`. Race-safe: on add-collision (`errSecDuplicateItem`), re-read.
 - **AfterFirstUnlock caveat (expected, not a bug):** if Claude spawns `maxmi-mcp` before the user's first unlock since boot (e.g. auto-launched connector at login), the key is unreadable and tools return the §9 "Memory is locked" message until unlock. Correct degraded behavior — do not chase it as a defect.
 - **Sharing:** the access group + stable signing identity is what lets MaxMi.app (writer) and maxmi-mcp (reader) use one key without prompts. Both binaries get the same entitlements file.
 - **Never on disk:** the key exists only in Keychain and process memory. It is NOT in `.env`, not in the DB, not in UserDefaults.
@@ -97,7 +97,7 @@ IF settings['content_encrypted'] != 'true':
 - `packaging/MaxMi.entitlements`:
   ```xml
   <dict><key>keychain-access-groups</key>
-        <array><string>6B7UDKRDH2.dev.mafex.maxmi</string></array></dict>
+        <array><string>3DL5T4M53M.dev.mafex.maxmi</string></array></dict>
   ```
 - `make-app.sh` changes: hardened runtime stays OFF for M3 (it adds library-validation friction with zero benefit for a local build). Sign inner-to-outer — first `Contents/MacOS/maxmi-mcp`, then the `.app` bundle — each with:
   `codesign --force --sign "Apple Development: esskayhd@outlook.com (6B7UDKRDH2)" --entitlements packaging/MaxMi.entitlements` (replaces the old `--deep --sign -`; `--deep` is dropped because inner-first explicit signing is the correct order).

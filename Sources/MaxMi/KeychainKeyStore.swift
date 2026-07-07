@@ -8,7 +8,7 @@ enum KeychainKeyStore {
     enum KeyError: Error { case unavailable(OSStatus) }
 
     static let service = "dev.mafex.maxmi.dbkey"
-    static let accessGroup = "6B7UDKRDH2.dev.mafex.maxmi"
+    static let accessGroup = "3DL5T4M53M.dev.mafex.maxmi"
 
     static func getOrCreate() throws -> Data {
         var query: [String: Any] = [
