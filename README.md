@@ -27,7 +27,7 @@ This produces `MaxMi.app` in the repo root. The app bundle is gitignored.
 
 ## Encryption
 
-MaxMi encrypts memory content using AES-256-GCM (`enc:v1:` wire format). The encryption key is stored in macOS Keychain under service `dev.mafex.maxmi.dbkey`, shared with the `maxmi-mcp` server via keychain-access-groups entitlements. Deleting the Keychain key makes old memories unrecoverable. Metadata, URLs, and embeddings remain cleartext by design for efficient search and deduplication. See `docs/superpowers/specs/2026-06-19-m3-encryption.md` §8 for the threat model.
+MaxMi encrypts memory content using AES-256-GCM (`enc:v1:` wire format). The encryption key is stored in macOS Keychain under service `dev.mafex.maxmi.dbkey`, shared with the `maxmi-mcp` server via keychain-access-groups entitlements. Deleting the Keychain key makes old memories unrecoverable. Metadata, URLs, and embeddings remain cleartext by design for efficient search and deduplication. See `docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md` §8 for the threat model.
 
 ## Connect to Claude (MCP)
 

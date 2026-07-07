@@ -130,4 +130,16 @@ final class PipelineTests: XCTestCase {
                        "retry error must not contain response payload")
         XCTAssertEqual(errorStored, "malformedResponse", "should be the static kind label")
     }
+    func testUnreadableMemoryMarkerSkipsProcessing() async {
+        let (p, s, r) = makeSUT()
+        let corrupt = PipelineVersion(id: "v-bad", threadID: "t1",
+                                      content: "[unreadable memory]", contentHash: "hash1",
+                                      sourceApp: "Web", sourceKey: "https://e.com",
+                                      previousFrozenContent: nil)
+        s.work = [corrupt]
+        await p.tick()
+        XCTAssertTrue(r.extractCalls.isEmpty, "should not send corruption marker to relay")
+        XCTAssertEqual(s.failed, ["v-bad"], "should be marked as failed to prevent reprocessing")
+        XCTAssertTrue(s.extractedOK.isEmpty, "should not be marked as extracted")
+    }
 }

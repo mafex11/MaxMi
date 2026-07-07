@@ -20,7 +20,7 @@ extension Store {
             while true {
                 let encrypted: Int = try db.dbQueue.write { d in
                     let rows = try Row.fetchAll(d, sql:
-                        "SELECT id, content FROM \(table) WHERE content NOT LIKE 'enc:v1:%' LIMIT ?",
+                        "SELECT id, content FROM \(table) WHERE substr(content,1,7) <> 'enc:v1:' LIMIT ?",
                         arguments: [batchSize])
                     for r in rows {
                         let enc = try cipher.encrypt(r["content"])

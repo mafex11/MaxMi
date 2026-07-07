@@ -75,7 +75,7 @@ enc:v1:BASE64( nonce[12] ‖ ciphertext ‖ tag[16] )
 
 ## 6. Migration of existing data (in-place, idempotent)
 
-New GRDB migration `v2-encrypt-content` does NOT do the encryption itself (migrations run under the migrator without the cipher). Instead: schema migration `v2` is a no-op marker; the **encryption backfill** runs at app startup after Store init, gated on a `settings` row:
+The **encryption backfill** runs at app startup after Store init, gated solely on a `settings` row (no GRDB migration marker):
 
 ```
 IF settings['content_encrypted'] != 'true':

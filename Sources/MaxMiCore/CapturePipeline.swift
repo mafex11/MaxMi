@@ -41,6 +41,17 @@ public actor CapturePipeline {
     }
 
     private func process(_ v: PipelineVersion, now: EpochMs) async {
+        // Skip processing corruption markers — don't send junk to Gemini.
+        guard v.content != "[unreadable memory]" else {
+            log("skipping version \(v.id): unreadable memory marker")
+            do {
+                try store.markExtractFailed(versionID: v.id)
+            } catch {
+                log("markExtractFailed failed: \(error)")
+            }
+            return
+        }
+
         do {
             let facts = try await relay.extract(newContent: v.content,
                                                 previousContent: v.previousFrozenContent,
