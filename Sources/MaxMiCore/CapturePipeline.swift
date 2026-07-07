@@ -17,10 +17,26 @@ public actor CapturePipeline {
     public func tick() async {
         let now = clock()
         // Retry queue is a wake-up list: clear due rows; their versions re-qualify via pendingWork.
-        if let due = try? store.dueRetries(nowMs: now) {
-            for r in due { try? store.clearRetry(id: r.id) }
+        var due: [(id: String, kind: String, versionID: String?, derivativeID: String?)] = []
+        do {
+            due = try store.dueRetries(nowMs: now)
+        } catch {
+            log("dueRetries failed: \(error)")
         }
-        guard let work = try? store.pendingWork(nowMs: now, idleThresholdMs: idleThresholdMs) else { return }
+        for r in due {
+            do {
+                try store.clearRetry(id: r.id)
+            } catch {
+                log("clearRetry failed: \(error)")
+            }
+        }
+        var work: [PipelineVersion] = []
+        do {
+            work = try store.pendingWork(nowMs: now, idleThresholdMs: idleThresholdMs)
+        } catch {
+            log("pendingWork failed: \(error)")
+            return
+        }
         for v in work { await process(v, now: now) }
     }
 
@@ -43,12 +59,31 @@ public actor CapturePipeline {
             // Hash guard (§3a): false = content moved mid-flight; stays pending for next tick.
             _ = try store.markExtracted(versionID: v.id, contentHashRead: v.contentHash)
         } catch let e as RelayError {
-            if case .malformedResponse = e { try? store.markExtractFailed(versionID: v.id) }
-            try? store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
-                                    error: String(describing: e), nowMs: now)
+            if case .malformedResponse = e {
+                do {
+                    try store.markExtractFailed(versionID: v.id)
+                } catch {
+                    log("markExtractFailed failed: \(error)")
+                }
+            }
+            do {
+                try store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
+                                        error: String(describing: e), nowMs: now)
+            } catch {
+                log("enqueueRetry failed: \(error)")
+            }
         } catch {
-            try? store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
-                                    error: String(describing: error), nowMs: now)
+            do {
+                try store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
+                                        error: String(describing: error), nowMs: now)
+            } catch {
+                log("enqueueRetry failed: \(error)")
+            }
         }
     }
+
+    private func log(_ message: String) {
+        FileHandle.standardError.write(Data("MaxMi pipeline: \(message)\n".utf8))
+    }
 }
+
