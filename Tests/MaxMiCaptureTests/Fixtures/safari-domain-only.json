@@ -1,0 +1,11 @@
+{
+  "role": "AXWindow", "value": null, "title": "Example Article", "url": null, "frame": {"x":0,"y":0,"width":1200,"height":800}, "focused": false,
+  "children": [
+    {"role": "AXToolbar", "value": null, "title": null, "url": null, "frame": {"x":0,"y":0,"width":1200,"height":38}, "focused": false, "children": [
+      {"role": "AXTextField", "value": "example.com", "title": "Address and search", "url": null, "frame": {"x":300,"y":4,"width":500,"height":30}, "focused": false, "children": []}
+    ]},
+    {"role": "AXGroup", "value": null, "title": null, "url": null, "frame": {"x":0,"y":38,"width":1200,"height":762}, "focused": false, "children": [
+      {"role": "AXStaticText", "value": "Article body text.", "title": null, "url": null, "frame": {"x":20,"y":60,"width":600,"height":20}, "focused": false, "children": []}
+    ]}
+  ]
+}
