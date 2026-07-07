@@ -19,8 +19,12 @@ final class LazyTools: ToolProvider, @unchecked Sendable {
     }
 
     func call(name: String, arguments: [String: Any]) async -> ToolResult {
+        let validNames = MaxMiToolsDefinitions.all.compactMap { $0["name"] as? String }
+        guard validNames.contains(name) else {
+            return ToolResult(text: "Unknown tool: \(name)", isError: true)
+        }
         guard let tools = resolve() else {
-            return ToolResult(text: "MaxMi hasn't captured anything yet — is the menu-bar app running?", isError: false)
+            return ToolResult(text: MemoryQueries.noDBText, isError: false)
         }
         return await tools.call(name: name, arguments: arguments)
     }
@@ -42,7 +46,9 @@ final class LazyTools: ToolProvider, @unchecked Sendable {
             ])
             let queries = MemoryQueries(store: Store(db: db), relay: GeminiClient(config: config))
             let tools = MaxMiTools(queries: queries)
-            cached = tools
+            if config.geminiAPIKey != nil {
+                cached = tools
+            }
             return tools
         } catch {
             logStderr("DB open failed: \(error)")
@@ -55,5 +61,6 @@ let server = MCPServer(tools: LazyTools())
 while let line = readLine(strippingNewline: true) {
     if let reply = await server.handle(line) {
         print(reply)
+        fflush(stdout)
     }
 }

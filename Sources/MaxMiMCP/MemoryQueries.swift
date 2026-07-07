@@ -37,7 +37,10 @@ public final class MemoryQueries: @unchecked Sendable {
             vector = cached
         } else {
             do { vector = try await relay.embed(text: q) }
-            catch { return ToolResult(text: Self.offlineText, isError: true) }
+            catch {
+                logStderr("embed failed: \(error)")
+                return ToolResult(text: Self.offlineText, isError: true)
+            }
             lruPut(q, vector)
         }
 
