@@ -8,7 +8,7 @@ final class CommitCaptureTests: XCTestCase {
     var db: MaxMiDatabase!
     override func setUpWithError() throws {
         db = try MaxMiDatabase.inMemory()
-        store = Store(db: db)
+        store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
     }
     func input(_ content: String, url: String = "https://example.com/a") -> CaptureInput {
         CaptureInput(sourceApp: "Web", sourceKey: url, sourceTitle: "T", content: content)
@@ -43,7 +43,8 @@ final class CommitCaptureTests: XCTestCase {
         XCTAssertEqual(v1, v2, "same hour -> same row")
         try db.dbQueue.read { d in
             let row = try Row.fetchOne(d, sql: "SELECT * FROM versions")!
-            XCTAssertEqual(row["content"], "first plus more")
+            let decrypted = try AESGCMFieldCipher.testCipher.decrypt(row["content"])
+            XCTAssertEqual(decrypted, "first plus more")
             XCTAssertEqual(row["extract_status"], "pending", "content change resets status")
         }
     }
@@ -64,7 +65,8 @@ final class CommitCaptureTests: XCTestCase {
         try db.dbQueue.read { d in
             let row = try Row.fetchOne(d, sql: "SELECT * FROM versions WHERE hour_bucket=?",
                                        arguments: [495_442])!
-            XCTAssertEqual(row["content"], "c")
+            let decrypted = try AESGCMFieldCipher.testCipher.decrypt(row["content"])
+            XCTAssertEqual(decrypted, "c")
             XCTAssertEqual(row["is_frozen"], 0, "un-frozen by write")
         }
     }

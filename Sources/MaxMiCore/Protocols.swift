@@ -10,6 +10,15 @@ public enum RelayError: Error {
     case network(underlying: Error)
     case httpStatus(Int)        // 429/5xx -> retryable
     case malformedResponse(String)
+
+    public var kind: String {
+        switch self {
+        case .notConfigured: return "notConfigured"
+        case .network: return "network"
+        case .httpStatus(let code): return "httpStatus(\(code))"
+        case .malformedResponse: return "malformedResponse"
+        }
+    }
 }
 
 public struct PipelineVersion: Sendable, Equatable {

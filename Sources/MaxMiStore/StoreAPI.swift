@@ -20,12 +20,21 @@ public enum CommitResult: Equatable, Sendable {
 
 public final class Store {
     let db: MaxMiDatabase
-    public init(db: MaxMiDatabase) { self.db = db }
+    let cipher: any FieldCipher
+    public init(db: MaxMiDatabase, cipher: any FieldCipher) {
+        self.db = db; self.cipher = cipher
+    }
+
+    /// Decrypt for reads; integrity/malformed failures become a marker, never a throw.
+    func decryptOrMarker(_ stored: String) -> String {
+        (try? cipher.decrypt(stored)) ?? "[unreadable memory]"
+    }
 
     public func commitCapture(_ input: CaptureInput, nowMs: EpochMs) throws -> CommitResult {
         let hash = ContentHash.sha256Hex(input.content)
         let bucket = HourBucket.bucket(forMs: nowMs)
         let words = input.content.split(whereSeparator: \.isWhitespace).count
+        let storedContent = try cipher.encrypt(input.content)
 
         return try db.dbQueue.write { d in
             // 1. Upsert thread; dedup on unchanged tree hash.
@@ -56,14 +65,14 @@ public final class Store {
                 try d.execute(sql: """
                     UPDATE versions SET content=?, content_hash=?, word_count=?, committed_at=?,
                                         extract_status='pending', is_frozen=0 WHERE id=?
-                    """, arguments: [input.content, hash, words, nowMs, vid])
+                    """, arguments: [storedContent, hash, words, nowMs, vid])
                 return .committed(versionID: vid, contentHash: hash)
             } else {
                 let vid = Ident.uuidv7(nowMs: nowMs)
                 try d.execute(sql: """
                     INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status)
                     VALUES (?,?,?,?,?,?,0,?,'pending')
-                    """, arguments: [vid, threadID, bucket, input.content, hash, words, nowMs])
+                    """, arguments: [vid, threadID, bucket, storedContent, hash, words, nowMs])
                 return .committed(versionID: vid, contentHash: hash)
             }
         }
@@ -93,9 +102,9 @@ extension Store {
                 """, arguments: [currentBucket, nowMs - idleThresholdMs, nowMs])
             return rows.map { r in
                 PendingVersion(id: r["id"], threadID: r["thread_id"], hourBucket: r["hour_bucket"],
-                               content: r["content"], contentHash: r["content_hash"],
+                               content: decryptOrMarker(r["content"]), contentHash: r["content_hash"],
                                sourceApp: r["source_app"], sourceKey: r["source_key"],
-                               previousFrozenContent: r["previous_frozen_content"])
+                               previousFrozenContent: (r["previous_frozen_content"] as String?).map(decryptOrMarker))
             }
         }
     }
@@ -119,10 +128,12 @@ extension Store {
             var inserted: [PendingDerivative] = []
             for fact in facts {
                 let id = Ident.uuidv7(nowMs: nowMs)
+                let hash = ContentHash.sha256Hex(fact)
+                let storedContent = try cipher.encrypt(fact)
                 try d.execute(sql: """
                     INSERT OR IGNORE INTO derivatives (id, thread_id, version_id, content, content_hash, committed_at, embedding_status)
                     VALUES (?,?,?,?,?,?,'pending')
-                    """, arguments: [id, threadID, versionID, fact, ContentHash.sha256Hex(fact), nowMs])
+                    """, arguments: [id, threadID, versionID, storedContent, hash, nowMs])
                 if d.changesCount > 0 { inserted.append(PendingDerivative(id: id, content: fact)) }
             }
             return inserted
@@ -139,7 +150,7 @@ extension Store {
         try db.dbQueue.read { d in
             try Row.fetchAll(d, sql: "SELECT id, content FROM derivatives WHERE version_id=? AND embedding_status='pending'",
                              arguments: [versionID])
-                .map { PendingDerivative(id: $0["id"], content: $0["content"]) }
+                .map { PendingDerivative(id: $0["id"], content: decryptOrMarker($0["content"])) }
         }
     }
 

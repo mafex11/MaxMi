@@ -50,6 +50,7 @@ final class AppWiring {
     var pipelineTimer: Timer?
     var paused = false
     private(set) var captureCount = 0
+    let encryptionAvailable: Bool
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -65,7 +66,19 @@ final class AppWiring {
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
         ])
         let db = try MaxMiDatabase(path: appSupport.appendingPathComponent("maxmi.db").path)
-        store = Store(db: db)
+        // Spec §6 ordering: key -> backfill -> capture. No key => capture stays paused
+        // and we never write plaintext post-M3 (spec §9).
+        let cipher: any FieldCipher
+        var encryptionAvailable = true
+        do {
+            cipher = AESGCMFieldCipher(keyData: try KeychainKeyStore.getOrCreate())
+        } catch {
+            NSLog("MaxMi: encryption key unavailable: \(error)")
+            cipher = AESGCMFieldCipher.testCipher   // placeholder; never used for writes (capture paused)
+            encryptionAvailable = false
+        }
+        store = Store(db: db, cipher: cipher)
+        self.encryptionAvailable = encryptionAvailable
         let relay = GeminiClient(config: config)
         pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
         menuBar = MenuBarController()
@@ -77,6 +90,10 @@ final class AppWiring {
             onTogglePause: { [weak self] in self?.paused.toggle(); self?.menuBar.paused = self?.paused ?? false },
             onQuit: { NSApp.terminate(nil) }
         )
+        menuBar.encryptionAvailable = encryptionAvailable
+        guard encryptionAvailable else { return }          // capture paused per §9
+        do { try store.encryptExistingContent(nowMs: epochNowMs()) }   // §6: backfill before capture
+        catch { NSLog("MaxMi: backfill failed, will retry next launch: \(error)") }
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
         guard self.observer == nil else { return }  // prevent double-start
         let observer = FocusObserver { [weak self] browser, pid in

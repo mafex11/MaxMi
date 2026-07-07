@@ -13,7 +13,7 @@
 - Wire format verbatim: `enc:v1:` + base64 of AES-GCM `combined` (nonce[12] ‖ ciphertext ‖ tag[16]). No AAD.
 - `decrypt` passthrough rule: input without the `enc:v1:` prefix returns unchanged. Prefixed-but-unauthenticatable input throws `CipherError.integrityFailure`; Store read paths render such rows as `[unreadable memory]` (verbatim string), never crash a query.
 - Hashes (`ContentHash.sha256Hex`) ALWAYS over plaintext, computed BEFORE encryption. `word_count` from plaintext. Encrypted columns: `versions.content`, `derivatives.content` ONLY.
-- Keychain: `kSecClassGenericPassword`, service `dev.mafex.maxmi.dbkey`, access group `6B7UDKRDH2.dev.mafex.maxmi`, `kSecAttrAccessibleAfterFirstUnlock`; duplicate-add → re-read. Keychain touched only in `Sources/MaxMi/` and `Sources/MaxMiMCP/main.swift`/wiring — never in MaxMiCore/MaxMiStore/tests.
+- Keychain: `kSecClassGenericPassword`, service `dev.mafex.maxmi.dbkey`, access group `3DL5T4M53M.dev.mafex.maxmi`, `kSecAttrAccessibleAfterFirstUnlock`; duplicate-add → re-read. Keychain touched only in `Sources/MaxMi/` and `Sources/MaxMiMCP/main.swift`/wiring — never in MaxMiCore/MaxMiStore/tests.
 - Backfill: batches of 200 per transaction, `WHERE content NOT LIKE 'enc:v1:%'`, gated on `settings['content_encrypted'] != 'true'`, capture paused until complete, ordering key→backfill→capture.
 - Signing: `SIGN_IDENTITY` env var defaulting to `Apple Development: esskayhd@outlook.com (6B7UDKRDH2)`; inner binary (`maxmi-mcp`) first, then the .app; entitlements file with keychain-access-groups; fall back to ad-hoc with a loud warning if the identity is missing. Hardened runtime OFF.
 - Build/test with `DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"`; zero new warnings in our targets.
@@ -522,7 +522,7 @@ git commit -m "feat(store): idempotent in-place encryption backfill for pre-M3 r
 enum KeychainKeyStore {
     enum KeyError: Error { case unavailable(OSStatus) }
     /// Get-or-create the 32-byte DB key. Spec §5: kSecClassGenericPassword,
-    /// service dev.mafex.maxmi.dbkey, access group 6B7UDKRDH2.dev.mafex.maxmi,
+    /// service dev.mafex.maxmi.dbkey, access group 3DL5T4M53M.dev.mafex.maxmi,
     /// AfterFirstUnlock. Duplicate-add race -> re-read.
     static func getOrCreate() throws -> Data
 }
@@ -541,7 +541,7 @@ enum KeychainKeyStore {
     enum KeyError: Error { case unavailable(OSStatus) }
 
     static let service = "dev.mafex.maxmi.dbkey"
-    static let accessGroup = "6B7UDKRDH2.dev.mafex.maxmi"
+    static let accessGroup = "3DL5T4M53M.dev.mafex.maxmi"
 
     static func getOrCreate() throws -> Data {
         var query: [String: Any] = [
@@ -646,7 +646,7 @@ git commit -m "feat(app,mcp): Keychain-backed encryption key with locked-state d
 <dict>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>6B7UDKRDH2.dev.mafex.maxmi</string>
+		<string>3DL5T4M53M.dev.mafex.maxmi</string>
 	</array>
 </dict>
 </plist>

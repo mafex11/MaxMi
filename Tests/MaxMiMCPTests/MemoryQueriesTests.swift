@@ -23,7 +23,7 @@ final class MemoryQueriesTests: XCTestCase {
     }
 
     override func setUpWithError() throws {
-        store = Store(db: try MaxMiDatabase.inMemory())
+        store = Store(db: try MaxMiDatabase.inMemory(), cipher: AESGCMFieldCipher.testCipher)
     }
 
     func seed(_ facts: [(String, Int)], url: String = "https://gintama.example", title: String = "Gin Tama") throws {

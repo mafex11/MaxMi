@@ -6,12 +6,14 @@ final class MenuBarController {
     private let countItem = NSMenuItem(title: "Captures: 0", action: nil, keyEquivalent: "")
     private let permissionItem = NSMenuItem(title: "⚠ Grant Accessibility…", action: nil, keyEquivalent: "")
     private let keyItem = NSMenuItem(title: "⚠ No GEMINI_API_KEY in .env", action: nil, keyEquivalent: "")
+    private let encryptionItem = NSMenuItem(title: "⚠ Memory encryption unavailable", action: nil, keyEquivalent: "")
     private let pauseItem = NSMenuItem(title: "Pause Capture", action: nil, keyEquivalent: "p")
 
     var captureCount: Int = 0 { didSet { countItem.title = "Captures: \(captureCount)" } }
     var paused: Bool = false { didSet { pauseItem.title = paused ? "Resume Capture" : "Pause Capture" } }
     var hasAPIKey: Bool = true { didSet { keyItem.isHidden = hasAPIKey } }
     var accessibilityGranted: Bool = true { didSet { permissionItem.isHidden = accessibilityGranted } }
+    var encryptionAvailable: Bool = true { didSet { encryptionItem.isHidden = encryptionAvailable } }
 
     func install(onTogglePause: @escaping () -> Void, onQuit: @escaping () -> Void) {
         guard statusItem == nil else { return }
@@ -20,12 +22,14 @@ final class MenuBarController {
         let menu = NSMenu()
         permissionItem.isHidden = accessibilityGranted
         keyItem.isHidden = hasAPIKey
+        encryptionItem.isHidden = encryptionAvailable
         permissionItem.action = #selector(NSApplication.openAccessibilitySettings)
         permissionItem.target = NSApp
         menu.addItem(countItem)
         menu.addItem(.separator())
         menu.addItem(permissionItem)
         menu.addItem(keyItem)
+        menu.addItem(encryptionItem)
         menu.addItem(pauseItem)
         pauseItem.setAction { onTogglePause() }
         menu.addItem(.separator())
