@@ -61,11 +61,11 @@ final class MigrationTests: XCTestCase {
 
         // Open writable database
         let writable = try MaxMiDatabase(path: path)
-        let writableStore = Store(db: writable)
+        let writableStore = Store(db: writable, cipher: AESGCMFieldCipher.testCipher)
 
         // Open read-only database on same path
         let readonly = try MaxMiDatabase(path: path, readOnly: true)
-        let readonlyStore = Store(db: readonly)
+        let readonlyStore = Store(db: readonly, cipher: AESGCMFieldCipher.testCipher)
 
         // Commit a capture through the writable store
         let nowMs = EpochMs(Date().timeIntervalSince1970 * 1000)

@@ -5,7 +5,7 @@ import MaxMiCore
 
 final class ToolsTests: XCTestCase {
     func makeTools() throws -> MaxMiTools {
-        let store = Store(db: try MaxMiDatabase.inMemory())
+        let store = Store(db: try MaxMiDatabase.inMemory(), cipher: AESGCMFieldCipher.testCipher)
         let q = MemoryQueries(store: store, relay: MockRelay(.failure(RelayError.notConfigured)))
         return MaxMiTools(queries: q)
     }

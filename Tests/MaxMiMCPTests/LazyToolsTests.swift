@@ -10,7 +10,7 @@ final class LazyToolsTests: XCTestCase {
 
         // Create and seed a database
         let db = try MaxMiDatabase(path: dbPath)
-        let store = Store(db: db)
+        let store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
         let nowMs = EpochMs(Date().timeIntervalSince1970 * 1000)
         let result = try store.commitCapture(
             CaptureInput(sourceApp: "TestApp", sourceKey: "test://url", sourceTitle: "Test Thread", content: "test content"),

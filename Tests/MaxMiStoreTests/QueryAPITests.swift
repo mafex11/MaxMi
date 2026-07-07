@@ -10,7 +10,7 @@ final class QueryAPITests: XCTestCase {
 
     override func setUpWithError() throws {
         db = try MaxMiDatabase.inMemory()
-        store = Store(db: db)
+        store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
     }
 
     func unit(_ hot: Int) -> [Float] {

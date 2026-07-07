@@ -65,7 +65,8 @@ final class AppWiring {
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
         ])
         let db = try MaxMiDatabase(path: appSupport.appendingPathComponent("maxmi.db").path)
-        store = Store(db: db)
+        // TODO(M3 Task 4): Keychain key
+        store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
         let relay = GeminiClient(config: config)
         pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
         menuBar = MenuBarController()

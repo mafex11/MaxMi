@@ -11,7 +11,7 @@ final class MarkExtractedTests: XCTestCase {
 
     override func setUpWithError() throws {
         db = try MaxMiDatabase.inMemory()
-        store = Store(db: db)
+        store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
     }
     @discardableResult
     func commit(_ content: String, at: EpochMs, url: String = "https://e.com/p") throws -> (vid: String, hash: String) {

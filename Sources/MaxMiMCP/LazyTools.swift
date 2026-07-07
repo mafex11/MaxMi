@@ -46,7 +46,8 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
                 appSupport.appendingPathComponent(".env"),
                 URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
             ])
-            let queries = MemoryQueries(store: Store(db: db), relay: GeminiClient(config: config))
+            // TODO(M3 Task 4): Keychain key
+            let queries = MemoryQueries(store: Store(db: db, cipher: AESGCMFieldCipher.testCipher), relay: GeminiClient(config: config))
             let tools = MaxMiTools(queries: queries)
             if config.geminiAPIKey != nil {
                 cached = tools

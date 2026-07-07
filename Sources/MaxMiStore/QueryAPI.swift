@@ -37,7 +37,7 @@ extension Store {
                     // Convert to cosine distance via: cosine_distance = L2² / 2
                     let l2: Double = row["distance"]
                     let cosineDistance = (l2 * l2) / 2.0
-                    return FactHit(content: row["content"], distance: cosineDistance,
+                    return FactHit(content: decryptOrMarker(row["content"]), distance: cosineDistance,
                                    sourceTitle: row["source_title"], sourceKey: row["source_key"],
                                    committedAt: row["committed_at"])
                 }
@@ -57,7 +57,7 @@ extension Store {
                     ORDER BY committed_at DESC LIMIT 3
                     """, arguments: [t["id"] as String])
                 return ThreadSummary(sourceTitle: t["source_title"], sourceKey: t["source_key"],
-                                     updatedAt: t["updated_at"], recentFacts: facts)
+                                     updatedAt: t["updated_at"], recentFacts: facts.map(decryptOrMarker))
             }
         }
     }
