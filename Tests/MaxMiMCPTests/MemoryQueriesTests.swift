@@ -105,4 +105,37 @@ final class MemoryQueriesTests: XCTestCase {
         XCTAssertFalse(r.isError)
         XCTAssertTrue(r.text.contains("No memories matched"))
     }
+
+    func testListActiveThreadsMarkdownAndOrder() async throws {
+        try seed([("Old fact 1.", 1), ("Old fact 2.", 2), ("Old fact 3.", 3), ("Old fact 4.", 4)],
+                 url: "https://old.example", title: "Old Page")
+        try seed([("New fact.", 10)], url: "https://new.example", title: "New Page")
+        // make new.example more recent:
+        _ = try store.commitCapture(CaptureInput(sourceApp: "Web", sourceKey: "https://new.example",
+                                                 sourceTitle: "New Page", content: "changed"),
+                                    nowMs: t0 + 600_000)
+        let q = queries(MockRelay(.success(unit(1))))
+        let r = q.listActiveThreads(limit: nil)
+        XCTAssertFalse(r.isError)
+        let newIdx = r.text.range(of: "New Page")!.lowerBound
+        let oldIdx = r.text.range(of: "Old Page")!.lowerBound
+        XCTAssertLessThan(newIdx, oldIdx, "recency order")
+        XCTAssertTrue(r.text.contains("Old fact 4."))
+        XCTAssertFalse(r.text.contains("Old fact 1."), "only own 3 latest facts")
+    }
+
+    func testListEmptyDBFriendly() {
+        let q = queries(MockRelay(.success(unit(1))))
+        let r = q.listActiveThreads(limit: nil)
+        XCTAssertTrue(r.text.contains("hasn't captured anything yet"))
+    }
+
+    func testMeetingMemoryStubAllActions() {
+        let q = queries(MockRelay(.success(unit(1))))
+        for action in ["list", "get_context", "search"] {
+            let r = q.meetingMemory(action: action)
+            XCTAssertFalse(r.isError)
+            XCTAssertTrue(r.text.contains("No meetings captured yet"))
+        }
+    }
 }

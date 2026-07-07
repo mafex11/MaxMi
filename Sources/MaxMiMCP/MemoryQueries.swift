@@ -84,4 +84,25 @@ public final class MemoryQueries: @unchecked Sendable {
             lruVectors.removeValue(forKey: lruKeys.removeFirst())
         }
     }
+
+    public func listActiveThreads(limit: Int?) -> ToolResult {
+        let k = min(max(limit ?? Self.listDefault, 1), Self.hardCap)
+        do {
+            let threads = try store.recentThreads(limit: k)
+            guard !threads.isEmpty else { return ToolResult(text: Self.noDBText) }
+            var md = "## Recently active threads\n"
+            for t in threads {
+                md += "\n### \(t.sourceTitle ?? t.sourceKey)\n\(t.sourceKey) — last seen \(relative(t.updatedAt))\n"
+                for f in t.recentFacts { md += "- \(f)\n" }
+                if t.recentFacts.isEmpty { md += "_(no facts extracted yet)_\n" }
+            }
+            return ToolResult(text: md)
+        } catch {
+            return ToolResult(text: "Memory database unavailable: \(error)", isError: true)
+        }
+    }
+
+    public func meetingMemory(action: String) -> ToolResult {
+        ToolResult(text: Self.stubText)
+    }
 }
