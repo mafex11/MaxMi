@@ -1,6 +1,7 @@
 import XCTest
 import GRDB
 @testable import MaxMiStore
+import MaxMiCore
 
 final class MigrationTests: XCTestCase {
     func testSchemaAndVecPresent() throws {
@@ -53,5 +54,35 @@ final class MigrationTests: XCTestCase {
         XCTAssertThrowsError(try ro.dbQueue.write { d in
             try d.execute(sql: "INSERT INTO settings VALUES ('k','v',1)")
         })
+    }
+    func testConcurrentWALRead_WhileWritableOpen() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let path = dir.appendingPathComponent("wal.db").path
+
+        // Open writable database
+        let writable = try MaxMiDatabase(path: path)
+        let writableStore = Store(db: writable)
+
+        // Open read-only database on same path
+        let readonly = try MaxMiDatabase(path: path, readOnly: true)
+        let readonlyStore = Store(db: readonly)
+
+        // Commit a capture through the writable store
+        let nowMs = EpochMs(Date().timeIntervalSince1970 * 1000)
+        let result = try writableStore.commitCapture(
+            CaptureInput(sourceApp: "TestApp", sourceKey: "test://concurrent", sourceTitle: "Concurrent Test", content: "test content"),
+            nowMs: nowMs
+        )
+        guard case .committed = result else {
+            XCTFail("Failed to commit capture")
+            return
+        }
+
+        // Read-only handle should see the new row (WAL isolation allows this)
+        let threads = try readonlyStore.recentThreads(limit: 10)
+        XCTAssertEqual(threads.count, 1, "Read-only handle should see committed write via WAL")
+        XCTAssertEqual(threads[0].sourceTitle, "Concurrent Test")
+
+        try? FileManager.default.removeItem(atPath: dir.path)
     }
 }
