@@ -67,6 +67,7 @@ enc:v1:BASE64( nonce[12] ‖ ciphertext ‖ tag[16] )
 ## 5. Key management
 
 - **Creation:** first launch of either binary calls `KeychainKeyStore.getOrCreate()` — `SecItemCopyMatching` for service `dev.mafex.maxmi.dbkey`; on `errSecItemNotFound`, generate `SymmetricKey(size: .bits256)`, `SecItemAdd` with `kSecAttrAccessGroup = "6B7UDKRDH2.dev.mafex.maxmi"`, `kSecAttrAccessibleAfterFirstUnlock`. Race-safe: on add-collision (`errSecDuplicateItem`), re-read.
+- **AfterFirstUnlock caveat (expected, not a bug):** if Claude spawns `maxmi-mcp` before the user's first unlock since boot (e.g. auto-launched connector at login), the key is unreadable and tools return the §9 "Memory is locked" message until unlock. Correct degraded behavior — do not chase it as a defect.
 - **Sharing:** the access group + stable signing identity is what lets MaxMi.app (writer) and maxmi-mcp (reader) use one key without prompts. Both binaries get the same entitlements file.
 - **Never on disk:** the key exists only in Keychain and process memory. It is NOT in `.env`, not in the DB, not in UserDefaults.
 - **Loss semantics (documented, accepted):** if the Keychain item is deleted, encrypted rows are unrecoverable ciphertext; the app keeps running (passthrough reads show `enc:v1:` blobs as unreadable, new captures encrypt under a new key). No recovery mechanism in M3 — this is a personal build with the browsing history equivalent of a cache.
@@ -87,6 +88,8 @@ IF settings['content_encrypted'] != 'true':
 - Idempotent two ways: the prefix check skips done rows; the settings flag skips the whole pass.
 - Interrupt-safe: batched transactions; a crash mid-batch rolls back that batch only; next launch resumes.
 - Runs in the app only (the writer). `maxmi-mcp` never migrates (read-only) — the passthrough decrypt rule means it reads mixed states correctly during the window.
+- **Capture is paused until the backfill completes** (same mechanism as the §9 Keychain-unavailable pause). GRDB would serialize the writes anyway, but pausing removes the backfill-vs-new-capture interleaving entirely; at ~260 rows the pause is imperceptible.
+- **Startup ordering is explicit: key available → backfill → normal operation.** The backfill is gated on the same key check as everything else — if the Keychain is unavailable at first M3 launch, both capture AND the backfill wait (plaintext stays at rest until the keychain unlocks; passthrough reads keep everything functional in the interim).
 - Backfill logs progress to stderr; ~260 rows ≈ instant.
 
 ## 7. Signing & packaging
@@ -128,7 +131,7 @@ Protects against: casual file reading, backups/Time Machine leakage, other-user 
 4. Both binaries signed with the Apple Development identity; `codesign -dv` shows the team ID; **rebuild twice → zero TCC prompts, zero Keychain prompts** (after the one documented final re-grant).
 5. maxmi-mcp (separate process) decrypts via the shared Keychain key with no prompt.
 6. Full test suite green with `FixedKeyCipher` (no Keychain dependency in CI); tests prove ciphertext-at-rest and decrypted reads.
-7. Kill the Keychain item deliberately → app degrades per §9 (no plaintext writes, no crash) — then restore by re-adding the key is NOT required (loss semantics documented).
+7. Kill the Keychain item deliberately → app degrades per §9 (no plaintext writes, no crash). Key restoration/recovery is out of scope and untested — loss semantics are documented in §5, not exercised.
 
 ## 12. Later milestones (unchanged)
 
