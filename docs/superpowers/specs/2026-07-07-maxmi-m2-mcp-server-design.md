@@ -75,7 +75,7 @@ Registered names, order, and shapes mirror Minimi's tool list exactly.
 
 ### `list_active_threads`
 - Input: `{ limit?: number (default 10, max 20) }`
-- Behavior: threads ordered by `updated_at` DESC; for each, its 2–3 most recent facts (by `committed_at`). Threads with zero facts still listed (title + URL + last-seen) — recent captures may not have extracted yet.
+- Behavior: threads ordered by `updated_at` DESC; for each thread, **that thread's own** 3 most recent facts (`WHERE thread_id = ? ORDER BY committed_at DESC LIMIT 3` — per-thread recency, not global). Threads with zero facts still listed (title + URL + last-seen) — recent captures may not have extracted yet.
 - Output (markdown): `### <source_title>` + URL + last-seen line + fact bullets per thread.
 
 ### `meeting_memory` (stub)
@@ -86,10 +86,14 @@ Registered names, order, and shapes mirror Minimi's tool list exactly.
 ## 5. Server behavior details
 
 - **Transport:** stdio. stdout carries ONLY protocol JSON; all logging to stderr.
-- **Protocol:** JSON-RPC 2.0; `initialize` returns protocolVersion `2025-06-18`, capabilities `{tools: {}}`, serverInfo `{name: "maxmi", version: <CFBundleShortVersionString-equivalent constant>}`. Handles `notifications/initialized` (ignore), `ping` (empty result), unknown methods → `-32601`.
-- **DB path:** `~/Library/Application Support/MaxMi/maxmi.db`, read-only. Missing DB → tools return friendly "MaxMi hasn't captured anything yet — is the menu-bar app running?" rather than crashing at startup (server must start cleanly even before first capture; it re-checks per call).
+- **Protocol:** JSON-RPC 2.0; `initialize` returns protocolVersion `2025-06-18`, capabilities `{tools: {}}`, serverInfo `{name: "maxmi", version: MaxMiVersion.current}`. Handles `notifications/initialized` (ignore), `ping` (empty result), unknown methods → `-32601`.
+- **Version constant:** SwiftPM generates no Info.plist for executables, so the version lives in code: `Sources/MaxMiCore/Version.swift` — `public enum MaxMiVersion { public static let current = "0.2.0" }` — shared by the app and the MCP server, bumped manually per release (packaging/Info.plist's CFBundleShortVersionString is updated to match in the same commit).
+- **DB path:** `~/Library/Application Support/MaxMi/maxmi.db` by default, overridable via env var `MAXMI_DB_PATH` (for tests against fixture DBs and for MCP-registration-time overrides). Read-only. Missing DB → tools return friendly "MaxMi hasn't captured anything yet — is the menu-bar app running?" rather than crashing at startup (server must start cleanly even before first capture; it re-checks per call).
 - **Config:** same `.env` search as the app (AppSupport/MaxMi/.env, then CWD/.env) via EnvConfig.
 - **Per-call DB open vs long-lived handle:** long-lived read-only GRDB DatabaseQueue opened lazily on first tool call (WAL readers see committed writes without reopening).
+- **Query-embedding latency:** each `search_memory` call costs one Gemini embed (~200–500 ms cold). Accepted for M2 — Minimi pays the same per-search round-trip through its backend, and an MCP tool call already sits inside a multi-second assistant turn. One cheap mitigation ships now: an in-process LRU cache (last 32 query→vector pairs, exact-string match) so repeated queries in a session skip the network. No semantic/similarity caching (YAGNI).
+- **Similarity floor:** KNN returns k nearest even when nearest is garbage (small DB, orthogonal query). `search_memory` drops hits with cosine distance > 0.75 (sqlite-vec vec0 default metric; distance = 1 − cosine similarity, so this keeps similarity ≥ 0.25). The floor is a named constant in MemoryQueries with a comment that it's empirically tunable; when the floor filters everything, return the empty-result message plus a hint: `Nothing sufficiently similar. Try different wording, or list_active_threads for recent activity.`
+- **Relative time format:** Swift's `RelativeDateTimeFormatter` (`.named` style, en_US locale pinned so output is stable across machines) — "2 hours ago", "yesterday". Minimi's exact string style wasn't captured in the intercept; this is our choice, not a parity requirement.
 
 ## 6. Install & registration (decided: documented manual, no auto-config)
 
@@ -113,6 +117,9 @@ Registered names, order, and shapes mirror Minimi's tool list exactly.
   - `search_memory`: known fixture facts with hand-built orthogonal embeddings → correct ordering, limit honored, 20 cap enforced, empty-result text, offline error text (mock relay throws), third-person text passes through verbatim.
   - `list_active_threads`: recency order, fact sub-bullets, zero-fact thread included, cap.
   - `meeting_memory`: all three actions → stub text.
+  - Similarity floor: an orthogonal query against fixture embeddings → empty-result-with-hint, not garbage hits.
+  - Query LRU cache: a second identical query does not hit the (mock) relay again.
+  - `MAXMI_DB_PATH` override respected (points tests at fixture DBs).
   - Read-only mode: writes through the read-only handle fail; reads succeed while a second writable connection commits (WAL concurrency smoke test).
 - **Live exit test** (manual, per §1): register in Claude Code + Claude Desktop, ask the two golden questions against the real 225-fact DB.
 
