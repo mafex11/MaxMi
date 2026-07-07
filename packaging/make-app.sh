@@ -12,11 +12,11 @@ cp packaging/Info.plist "$APP/Contents/Info.plist"
 
 # Sign with a real identity so TCC grants and Keychain ACLs survive rebuilds (spec §7).
 # Inner binary first, then the bundle. Falls back to ad-hoc with a loud warning.
+# No entitlements needed — login keychain sharing works by service name + same identity.
 SIGN_IDENTITY="${SIGN_IDENTITY:-Apple Development: esskayhd@outlook.com (6B7UDKRDH2)}"
 if security find-identity -v -p codesigning | grep -qF "$SIGN_IDENTITY"; then
-  codesign --force --sign "$SIGN_IDENTITY" --entitlements packaging/MaxMi.entitlements \
-    "$APP/Contents/MacOS/maxmi-mcp"
-  codesign --force --sign "$SIGN_IDENTITY" --entitlements packaging/MaxMi.entitlements "$APP"
+  codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/maxmi-mcp"
+  codesign --force --sign "$SIGN_IDENTITY" "$APP"
   echo "Signed with: $SIGN_IDENTITY"
 else
   echo "WARNING: signing identity not found — falling back to AD-HOC signing." >&2

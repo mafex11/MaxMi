@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Per-field AES-256-GCM encryption of `versions.content` and `derivatives.content` (`enc:v1:` format, Keychain key shared app↔MCP via access group) plus signing both binaries with the existing Apple Development identity — per the spec at `docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md`.
+**Goal:** Per-field AES-256-GCM encryption of `versions.content` and `derivatives.content` (`enc:v1:` format, Keychain key shared app↔MCP via login keychain by service name) plus signing both binaries with the existing Apple Development identity — per the spec at `docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md`.
 
 **Architecture:** A `FieldCipher` protocol in MaxMiCore (AESGCMFieldCipher for real use, FixedKeyCipher for tests) injected into `Store`; write paths encrypt, read paths decrypt, hashes stay computed over plaintext so every M1/M2 invariant survives unchanged. A startup backfill (app only, gated key→backfill→capture) encrypts existing rows in place. Keychain access happens ONLY in the two executables' wiring, never in library code or tests.
 
@@ -13,9 +13,9 @@
 - Wire format verbatim: `enc:v1:` + base64 of AES-GCM `combined` (nonce[12] ‖ ciphertext ‖ tag[16]). No AAD.
 - `decrypt` passthrough rule: input without the `enc:v1:` prefix returns unchanged. Prefixed-but-unauthenticatable input throws `CipherError.integrityFailure`; Store read paths render such rows as `[unreadable memory]` (verbatim string), never crash a query.
 - Hashes (`ContentHash.sha256Hex`) ALWAYS over plaintext, computed BEFORE encryption. `word_count` from plaintext. Encrypted columns: `versions.content`, `derivatives.content` ONLY.
-- Keychain: `kSecClassGenericPassword`, service `dev.mafex.maxmi.dbkey`, access group `3DL5T4M53M.dev.mafex.maxmi`, `kSecAttrAccessibleAfterFirstUnlock`; duplicate-add → re-read. Keychain touched only in `Sources/MaxMi/` and `Sources/MaxMiMCP/main.swift`/wiring — never in MaxMiCore/MaxMiStore/tests.
+- Keychain: `kSecClassGenericPassword`, service `dev.mafex.maxmi.dbkey`, login keychain (no access group, no entitlement needed), `kSecAttrAccessibleAfterFirstUnlock`; duplicate-add → re-read. Keychain touched only in `Sources/MaxMi/` and `Sources/MaxMiMCP/main.swift`/wiring — never in MaxMiCore/MaxMiStore/tests. Both binaries signed with same identity → up to 2 one-time "Always Allow" keychain prompts, then silent.
 - Backfill: batches of 200 per transaction, `WHERE content NOT LIKE 'enc:v1:%'`, gated on `settings['content_encrypted'] != 'true'`, capture paused until complete, ordering key→backfill→capture.
-- Signing: `SIGN_IDENTITY` env var defaulting to `Apple Development: esskayhd@outlook.com (6B7UDKRDH2)`; inner binary (`maxmi-mcp`) first, then the .app; entitlements file with keychain-access-groups; fall back to ad-hoc with a loud warning if the identity is missing. Hardened runtime OFF.
+- Signing: `SIGN_IDENTITY` env var defaulting to `Apple Development: esskayhd@outlook.com (6B7UDKRDH2)`; inner binary (`maxmi-mcp`) first, then the .app; no entitlements file needed; fall back to ad-hoc with a loud warning if the identity is missing. Hardened runtime OFF.
 - Build/test with `DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"`; zero new warnings in our targets.
 - Commit messages conventional, NO Co-Authored-By / AI attribution trailers.
 - Repo `/Users/mafex/code/personal/MaxMi/`, branch `m3-encryption` off main.
@@ -32,8 +32,7 @@ Sources/MaxMiMCP/KeychainKeyStore.swift    (same file content — see Task 4 not
 Sources/MaxMi/AppWiring.swift              cipher wiring, key→backfill→capture ordering, menu warning
 Sources/MaxMiMCP/LazyTools.swift           cipher wiring, "Memory is locked" path
 Sources/MaxMi/MenuBarController.swift      "Memory encryption unavailable" warning item
-packaging/MaxMi.entitlements               keychain-access-groups
-packaging/make-app.sh                      identity signing, inner-first, ad-hoc fallback
+packaging/make-app.sh                      identity signing, inner-first, ad-hoc fallback (no entitlements)
 Tests/MaxMiCoreTests/FieldCipherTests.swift
 Tests/MaxMiStoreTests/*                    existing suites get FixedKeyCipher; new EncryptionAtRestTests, BackfillTests
 README.md                                  signing note + final-re-grant note
@@ -522,8 +521,8 @@ git commit -m "feat(store): idempotent in-place encryption backfill for pre-M3 r
 enum KeychainKeyStore {
     enum KeyError: Error { case unavailable(OSStatus) }
     /// Get-or-create the 32-byte DB key. Spec §5: kSecClassGenericPassword,
-    /// service dev.mafex.maxmi.dbkey, access group 3DL5T4M53M.dev.mafex.maxmi,
-    /// AfterFirstUnlock. Duplicate-add race -> re-read.
+    /// service dev.mafex.maxmi.dbkey, login keychain (shared by service name,
+    /// no access group entitlement), AfterFirstUnlock. Duplicate-add race -> re-read.
     static func getOrCreate() throws -> Data
 }
 ```
@@ -537,17 +536,21 @@ import Security
 
 // NOTE: duplicated verbatim in Sources/MaxMi/ and Sources/MaxMiMCP/ — two executable
 // targets, one 40-line function; a shared target for this alone isn't worth it.
+//
+// LOGIN KEYCHAIN SHARING: Both binaries (MaxMi.app + maxmi-mcp) share the encryption
+// key via the login keychain, identified by service name. Both are signed with the same
+// identity, so keychain ACLs recognize them as the same app. First read in each binary
+// prompts once for "Always Allow" (at most 2 prompts total), then silent. No keychain
+// access group entitlement needed (that would require a provisioning profile).
 enum KeychainKeyStore {
     enum KeyError: Error { case unavailable(OSStatus) }
 
     static let service = "dev.mafex.maxmi.dbkey"
-    static let accessGroup = "3DL5T4M53M.dev.mafex.maxmi"
 
     static func getOrCreate() throws -> Data {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccessGroup as String: accessGroup,
             kSecReturnData as String: true,
         ]
         var result: CFTypeRef?
@@ -556,17 +559,15 @@ enum KeychainKeyStore {
         guard status == errSecItemNotFound else { throw KeyError.unavailable(status) }
 
         let fresh = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-        var add: [String: Any] = [
+        let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccessGroup as String: accessGroup,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
             kSecValueData as String: fresh,
         ]
         status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecSuccess { return fresh }
         if status == errSecDuplicateItem {           // lost the creation race — re-read
-            query[kSecReturnData as String] = true
             status = SecItemCopyMatching(query as CFDictionary, &result)
             if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data }
         }
@@ -637,31 +638,16 @@ git commit -m "feat(app,mcp): Keychain-backed encryption key with locked-state d
 - Modify: `packaging/make-app.sh`, `README.md`
 - Test: build + codesign verification + the spec §11 live walkthrough (controller/human).
 
-- [ ] **Step 1: Entitlements** — `packaging/MaxMi.entitlements`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>3DL5T4M53M.dev.mafex.maxmi</string>
-	</array>
-</dict>
-</plist>
-```
-
-- [ ] **Step 2: make-app.sh** — replace the codesign section:
+- [ ] **Step 1: make-app.sh** — replace the codesign section:
 
 ```bash
 # Sign with a real identity so TCC grants and Keychain ACLs survive rebuilds (spec §7).
 # Inner binary first, then the bundle. Falls back to ad-hoc with a loud warning.
+# No entitlements needed — login keychain sharing works by service name + same identity.
 SIGN_IDENTITY="${SIGN_IDENTITY:-Apple Development: esskayhd@outlook.com (6B7UDKRDH2)}"
 if security find-identity -v -p codesigning | grep -qF "$SIGN_IDENTITY"; then
-  codesign --force --sign "$SIGN_IDENTITY" --entitlements packaging/MaxMi.entitlements \
-    "$APP/Contents/MacOS/maxmi-mcp"
-  codesign --force --sign "$SIGN_IDENTITY" --entitlements packaging/MaxMi.entitlements "$APP"
+  codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/maxmi-mcp"
+  codesign --force --sign "$SIGN_IDENTITY" "$APP"
   echo "Signed with: $SIGN_IDENTITY"
 else
   echo "WARNING: signing identity not found — falling back to AD-HOC signing." >&2
@@ -672,27 +658,27 @@ echo "Built $APP"
 ```
 Also delete the now-stale ad-hoc comment block above it. Keep the MCP registration echo.
 
-- [ ] **Step 3: README** — update the TCC note: signed builds keep their Accessibility grant across rebuilds; ONE final re-grant is needed when upgrading from an ad-hoc build (`tccutil reset Accessibility dev.mafex.maxmi`, relaunch, grant). Add an "Encryption" section: content columns are AES-256-GCM (`enc:v1:`), key in Keychain (service `dev.mafex.maxmi.dbkey`), shared with maxmi-mcp via access group; deleting the key makes old memories unrecoverable; metadata/URLs/embeddings remain cleartext by design (link spec §8).
+- [ ] **Step 2: README** — update the TCC note: signed builds keep their Accessibility grant across rebuilds; ONE final re-grant is needed when upgrading from an ad-hoc build (`tccutil reset Accessibility dev.mafex.maxmi`, relaunch, grant). Add an "Encryption" section: content columns are AES-256-GCM (`enc:v1:`), key in Keychain (service `dev.mafex.maxmi.dbkey`), shared with maxmi-mcp via login keychain by service name (both binaries signed with same identity → at most 2 one-time "Always Allow" prompts, then silent); deleting the key makes old memories unrecoverable; metadata/URLs/embeddings remain cleartext by design (link spec §8).
 
-- [ ] **Step 4: Build + sign + verify**
+- [ ] **Step 3: Build + sign + verify**
 
 ```bash
 DEVELOPER_DIR=... swift test          # full suite green
 ./packaging/make-app.sh               # must print "Signed with: Apple Development..."
 codesign -dv MaxMi.app 2>&1 | grep -E "Authority|TeamIdentifier"    # TeamIdentifier=6B7UDKRDH2
-codesign -d --entitlements - MaxMi.app/Contents/MacOS/maxmi-mcp     # shows the access group
+codesign -d --entitlements - MaxMi.app     # should show NO keychain-access-groups / empty or minimal
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 ```bash
 git add packaging README.md
-git commit -m "feat(packaging): sign with Apple Development identity + keychain entitlements"
+git commit -m "feat(packaging): sign with Apple Development identity (no entitlements needed)"
 ```
 
-- [ ] **Step 6: Live verification (controller/human — spec §11)**
+- [ ] **Step 5: Live verification (controller/human — spec §11)**
 1. ONE final TCC reset + re-grant (signature changed ad-hoc→identity): `tccutil reset Accessibility dev.mafex.maxmi`, launch, grant.
 2. First launch: backfill runs (stderr log), then capture resumes. `sqlite3 ... "SELECT content FROM derivatives LIMIT 3"` → only `enc:v1:` strings; `strings maxmi.db | grep -i gintama` (or any known fact word) → nothing.
-3. search_memory via maxmi-mcp → decrypted facts, no Keychain prompt (shared access group works).
+3. search_memory via maxmi-mcp → decrypted facts, up to 2 one-time "Always Allow" keychain prompts (one per binary), then works silently.
 4. Browse a new page → new capture → fact extracted → searchable (fresh-write path).
 5. Rebuild twice (`./packaging/make-app.sh` ×2, relaunch) → zero TCC prompts, zero Keychain prompts. THE payoff criterion.
 6. Optional §11.7: delete the key (`security delete-generic-password -s dev.mafex.maxmi.dbkey`), relaunch → menu shows "Memory encryption unavailable", capture paused, no crash; re-create by relaunching once more (fresh key; old rows unreadable — expected loss semantics). Skippable if you don't want to burn the real key — do it BEFORE step 4's real browsing if at all.
@@ -701,7 +687,7 @@ git commit -m "feat(packaging): sign with Apple Development identity + keychain 
 
 ## Self-Review (done at plan-writing time)
 
-**Spec coverage:** §3 architecture/file map → Tasks 1–4 match (FieldCipher in Core, Store cipher param, Backfill.swift, KeychainKeyStore in both executables, entitlements, make-app.sh). §4 wire format + passthrough + integrity-marker → Task 1 (format/passthrough/integrity tests) + Task 2 (marker rendering, mixed-state test). §5 key mgmt → Task 4 (service/group/accessible constants, duplicate-add race, AfterFirstUnlock caveat honored by lockedOut-reset logic; test seam via keyProvider injection; Keychain only in executables). §6 backfill → Task 3 (batch 200, prefix+flag idempotency, interrupt test) + Task 4 wiring (key→backfill→capture ordering, capture-paused-until-complete via the guard/sequencing in start()). §7 signing → Task 5 (identity, inner-first, entitlements, SIGN_IDENTITY override, ad-hoc fallback with warning, hardened runtime absent). §8 threat model → README note (Task 5 Step 3). §9 errors → Task 4 (menu warning + paused capture; MCP locked message verbatim; backfill-failure-continues), Task 2 (corrupt row marker). §10 tests → Tasks 1–3 test lists match the spec's bullets 1:1; Keychain/signing live-only per spec. §11 exit criteria → Task 5 Step 6 walks all seven.
+**Spec coverage:** §3 architecture/file map → Tasks 1–4 match (FieldCipher in Core, Store cipher param, Backfill.swift, KeychainKeyStore in both executables, make-app.sh signing with no entitlements). §4 wire format + passthrough + integrity-marker → Task 1 (format/passthrough/integrity tests) + Task 2 (marker rendering, mixed-state test). §5 key mgmt → Task 4 (service/accessible constants, login keychain sharing by service name + same identity, duplicate-add race, AfterFirstUnlock caveat honored by lockedOut-reset logic; test seam via keyProvider injection; Keychain only in executables). §6 backfill → Task 3 (batch 200, prefix+flag idempotency, interrupt test) + Task 4 wiring (key→backfill→capture ordering, capture-paused-until-complete via the guard/sequencing in start()). §7 signing → Task 5 (identity, inner-first, no entitlements, SIGN_IDENTITY override, ad-hoc fallback with warning, hardened runtime absent). §8 threat model → README note (Task 5 Step 2). §9 errors → Task 4 (menu warning + paused capture; MCP locked message verbatim; backfill-failure-continues), Task 2 (corrupt row marker). §10 tests → Tasks 1–3 test lists match the spec's bullets 1:1; Keychain/signing live-only per spec. §11 exit criteria → Task 5 Step 5 walks all seven.
 
 **Placeholders:** none. The Task-2 "TODO(Task 4)" cipher in wiring is an explicit inter-task seam with named replacement, not an unfinished step.
 
