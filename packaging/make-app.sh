@@ -7,9 +7,12 @@ APP="MaxMi.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/MaxMi "$APP/Contents/MacOS/MaxMi"
+cp .build/release/MaxMiMCP "$APP/Contents/MacOS/maxmi-mcp"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
 
 # Ad-hoc codesign AFTER assembly (project_yuki_signing: deep-sign post-assembly,
 # and expect to re-grant Accessibility after every rebuild — tccutil reset Accessibility dev.mafex.maxmi).
 codesign --force --deep --sign - "$APP"
 echo "Built $APP"
+echo "MCP server bundled. Register with:"
+echo "  claude mcp add maxmi -- \"$PWD/$APP/Contents/MacOS/maxmi-mcp\""

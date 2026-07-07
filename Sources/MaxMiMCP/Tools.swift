@@ -1,10 +1,7 @@
 import Foundation
 
-public struct MaxMiTools: ToolProvider {
-    let queries: MemoryQueries
-    public init(queries: MemoryQueries) { self.queries = queries }
-
-    public var toolDefinitions: [[String: Any]] {
+public enum MaxMiToolsDefinitions {
+    public static var all: [[String: Any]] {
         [
             ["name": "search_memory",
              "description": "Semantic search over everything the user has read on screen. Returns matching memory facts (third person) with sources, as markdown.",
@@ -24,6 +21,15 @@ public struct MaxMiTools: ToolProvider {
                                             "query": ["type": "string"]],
                              "required": ["action"]]],
         ]
+    }
+}
+
+public struct MaxMiTools: ToolProvider {
+    let queries: MemoryQueries
+    public init(queries: MemoryQueries) { self.queries = queries }
+
+    public var toolDefinitions: [[String: Any]] {
+        MaxMiToolsDefinitions.all
     }
 
     public func call(name: String, arguments: [String: Any]) async -> ToolResult {

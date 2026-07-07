@@ -25,6 +25,25 @@ This produces `MaxMi.app` in the repo root. The app bundle is gitignored.
    ```
    Then launch the app again and grant the permission.
 
+## Connect to Claude (MCP)
+
+The app bundles `maxmi-mcp`, a local MCP server that lets Claude search your memory.
+
+**Claude Code:**
+```bash
+claude mcp add maxmi -- /path/to/MaxMi.app/Contents/MacOS/maxmi-mcp
+```
+
+**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+```json
+{ "mcpServers": { "maxmi": { "command": "/path/to/MaxMi.app/Contents/MacOS/maxmi-mcp" } } }
+```
+
+Tools: `search_memory` (semantic search over captured facts), `list_active_threads`
+(recent pages), `meeting_memory` (stub until meetings ship). Reads the DB read-only;
+never interferes with capture. Uses the same `.env` Gemini key to embed queries.
+Optional: `MAXMI_DB_PATH` env var overrides the DB location.
+
 ## Documentation
 
 See `docs/superpowers/specs/` for technical specifications and `docs/superpowers/plans/` for implementation plans.

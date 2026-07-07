@@ -30,4 +30,9 @@ final class ToolsTests: XCTestCase {
         let r = try await makeTools().call(name: "meeting_memory", arguments: ["action": "list"])
         XCTAssertTrue(r.text.contains("No meetings captured yet"))
     }
+    func testToolDefinitionsConsistency() throws {
+        let instance = try makeTools().toolDefinitions.map { $0["name"] as? String }
+        let staticDefs = MaxMiToolsDefinitions.all.map { $0["name"] as? String }
+        XCTAssertEqual(instance, staticDefs, "MaxMiTools.toolDefinitions must match MaxMiToolsDefinitions.all")
+    }
 }
