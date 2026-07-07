@@ -5,8 +5,9 @@ import CSQLiteVec
 public final class MaxMiDatabase {
     public let dbQueue: DatabaseQueue
 
-    public init(path: String) throws {
+    public init(path: String, readOnly: Bool = false) throws {
         var config = Configuration()
+        config.readonly = readOnly
         config.prepareDatabase { db in
             var err: UnsafeMutablePointer<CChar>? = nil
             let rc = sqlite3_vec_init(db.sqliteConnection, &err, nil)
@@ -17,13 +18,13 @@ public final class MaxMiDatabase {
             }
         }
         let isFile = path != ":memory:"
-        if isFile {
+        if isFile && !readOnly {
             try FileManager.default.createDirectory(
                 at: URL(fileURLWithPath: path).deletingLastPathComponent(),
                 withIntermediateDirectories: true)
         }
         dbQueue = try DatabaseQueue(path: path, configuration: config)
-        if isFile {
+        if isFile && !readOnly {
             // Must be outside transaction (GRDB starts a deferred transaction in .write).
             try dbQueue.inDatabase { db in
                 try db.execute(sql: "PRAGMA journal_mode = WAL")
@@ -33,7 +34,9 @@ public final class MaxMiDatabase {
                     [.posixPermissions: 0o600], ofItemAtPath: path + suffix)
             }
         }
-        try Migrations.migrator.migrate(dbQueue)
+        if !readOnly {
+            try Migrations.migrator.migrate(dbQueue)
+        }
     }
 
     public static func inMemory() throws -> MaxMiDatabase {

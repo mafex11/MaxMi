@@ -42,4 +42,16 @@ final class MigrationTests: XCTestCase {
         let perms = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int
         XCTAssertEqual(perms, 0o600)
     }
+    func testReadOnlyOpenRejectsWritesAllowsReads() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let path = dir.appendingPathComponent("ro.db").path
+        _ = try MaxMiDatabase(path: path)                     // create + migrate writable
+        let ro = try MaxMiDatabase(path: path, readOnly: true)
+        try ro.dbQueue.read { d in
+            XCTAssertTrue(try d.tableExists("threads"))
+        }
+        XCTAssertThrowsError(try ro.dbQueue.write { d in
+            try d.execute(sql: "INSERT INTO settings VALUES ('k','v',1)")
+        })
+    }
 }
