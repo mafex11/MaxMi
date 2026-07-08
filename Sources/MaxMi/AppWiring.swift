@@ -41,6 +41,15 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
     func clearRetry(id: String) throws { try store.clearRetry(id: id) }
 }
 
+// Known-capturable apps that use generic fallback (spec §3).
+private let KnownApps: Set<String> = [
+    "net.whatsapp.WhatsApp",
+    "com.apple.Notes",
+    "notion.id",
+    "md.obsidian",
+    "com.apple.mail"
+]
+
 @MainActor
 final class AppWiring {
     let store: Store
@@ -51,6 +60,9 @@ final class AppWiring {
     var paused = false
     private(set) var captureCount = 0
     let encryptionAvailable: Bool
+    let registry = ParserRegistry()
+    var recentApps: [(bundleID: String, name: String)] = []
+    var lastSourceKey: String?
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -91,7 +103,19 @@ final class AppWiring {
     func start() {
         menuBar.install(
             onTogglePause: { [weak self] in self?.paused.toggle(); self?.menuBar.paused = self?.paused ?? false },
-            onQuit: { NSApp.terminate(nil) }
+            onQuit: { NSApp.terminate(nil) },
+            recentApps: { [weak self] in self?.recentApps ?? [] },
+            pausedApps: { [weak self] in (try? self?.store.pausedApps()) ?? [] },
+            onToggleAppPause: { [weak self] bundleID in
+                guard let self else { return }
+                let paused = (try? self.store.pausedApps().contains(bundleID)) ?? false
+                try? self.store.setAppPaused(bundleID, paused: !paused, nowMs: epochNowMs())
+            },
+            lastSourceKey: { [weak self] in self?.lastSourceKey },
+            onPauseCurrentThread: { [weak self] in
+                guard let self, let key = self.lastSourceKey else { return }
+                try? self.store.setThreadPaused(key, paused: true, nowMs: epochNowMs())
+            }
         )
         menuBar.encryptionAvailable = encryptionAvailable
         guard encryptionAvailable else { return }          // capture paused per §9
@@ -100,7 +124,9 @@ final class AppWiring {
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
         guard self.observer == nil else { return }  // prevent double-start
         let observer = FocusObserver(
-            isCapturable: { bid in Browser(rawValue: bid) != nil },
+            isCapturable: { [registry] bid in
+                Browser(rawValue: bid) != nil || registry.parser(for: bid) != nil || KnownApps.contains(bid)
+            },
             onCapture: { [weak self] app, pid in
                 self?.captureFrontmost(app: app, pid: pid)
             }
@@ -120,38 +146,76 @@ final class AppWiring {
 
     func captureFrontmost(app: AppInfo, pid: pid_t) {
         guard !paused else { return }
-        // Temporary: only handle browsers until Task 6 adds full registry dispatch
-        guard let browser = Browser(rawValue: app.bundleID) else { return }
-        // Chromium post-kick: empty tree is "retry shortly", NOT a failed capture (spec §10).
-        attemptCapture(browser: browser, pid: pid, attemptsLeft: browser.isChromium ? 3 : 1)
+        guard !((try? store.pausedApps().contains(app.bundleID)) ?? false) else { return }
+
+        // Chromium browsers and Slack need retry-shortly for post-kick empty trees (spec §10).
+        let needsRetry = Browser(rawValue: app.bundleID)?.isChromium == true || app.bundleID == ParserRegistry.slackBundleID
+        let attemptsLeft = needsRetry ? 3 : 1
+        attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft)
     }
 
-    private func attemptCapture(browser: Browser, pid: pid_t, attemptsLeft: Int) {
+    private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int) {
         guard !paused else { return }
         guard let (window, title) = AXReader.snapshotFrontmostWindow(pid: pid) else {
-            retryOrGiveUp(browser: browser, pid: pid, attemptsLeft: attemptsLeft); return
+            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft); return
         }
+
+        // Build AppInfo with authoritative AXReader title
+        let appInfo = AppInfo(bundleID: app.bundleID, name: app.name, windowTitle: title ?? app.windowTitle)
+
         do {
-            let cap = try BrowserTabExtractor.extract(window: window, windowTitle: title)
-            guard !Denylist.isBlocked(cap.url) else { return }   // dropped, never stored (spec §5)
+            let parsed: ParsedCapture?
+
+            // Browsers: preserve exact behavior using BrowserTabExtractor
+            if let browser = Browser(rawValue: app.bundleID) {
+                let cap = try BrowserTabExtractor.extract(window: window, windowTitle: title)
+                guard !Denylist.isBlocked(cap.url) else { return }
+                parsed = ParsedCapture(sourceApp: "Web", sourceKey: cap.url, sourceTitle: cap.title, content: cap.content)
+            } else {
+                // Non-browsers: dispatch through CaptureDispatch
+                parsed = CaptureDispatch.parse(window: window, app: appInfo, registry: registry)
+            }
+
+            // Shared tail: guard parsed, check denylist + pause, commit
+            guard let parsed else {
+                if Browser(rawValue: app.bundleID) != nil {
+                    retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft)
+                }
+                return
+            }
+
+            guard !Denylist.isBlocked(parsed.sourceKey) else { return }
+            guard !((try? store.pausedThreads().contains(parsed.sourceKey)) ?? false) else { return }
+
             let result = try store.commitCapture(
-                CaptureInput(sourceApp: "Web", sourceKey: cap.url, sourceTitle: cap.title, content: cap.content),
+                CaptureInput(sourceApp: parsed.sourceApp, sourceKey: parsed.sourceKey,
+                            sourceTitle: parsed.sourceTitle, content: parsed.content),
                 nowMs: epochNowMs())
+
             if case .committed = result {
                 captureCount += 1
                 menuBar.captureCount = captureCount
+                lastSourceKey = parsed.sourceKey
+
+                // Track recent apps (last ~8 distinct)
+                let entry = (bundleID: app.bundleID, name: app.name)
+                if !recentApps.contains(where: { $0.bundleID == entry.bundleID }) {
+                    recentApps.insert(entry, at: 0)
+                    if recentApps.count > 8 { recentApps.removeLast() }
+                }
             }
         } catch ExtractionError.emptyContent, ExtractionError.noWebArea, ExtractionError.noURL {
-            retryOrGiveUp(browser: browser, pid: pid, attemptsLeft: attemptsLeft)
+            // Browser extraction errors: retry
+            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft)
         } catch {
             NSLog("MaxMi capture skipped: \(error)")             // logged, skipped, never crash (spec §10)
         }
     }
 
-    private func retryOrGiveUp(browser: Browser, pid: pid_t, attemptsLeft: Int) {
+    private func retryOrGiveUp(app: AppInfo, pid: pid_t, attemptsLeft: Int) {
         guard attemptsLeft > 1 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.attemptCapture(browser: browser, pid: pid, attemptsLeft: attemptsLeft - 1)
+            self?.attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft - 1)
         }
     }
 }
