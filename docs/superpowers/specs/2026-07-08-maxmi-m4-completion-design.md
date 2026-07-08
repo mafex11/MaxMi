@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-08
 **Status:** Approved design
-**Extends:** `2026-07-08-maxmi-native-app-parsers-design.md` (M4). This is a completion addendum, NOT a new milestone — it finishes M4 by refining the one shipped parser and adding the document-shape parsers, so M4 can be declared closed.
+**Extends:** `2026-07-08-maxmi-m4-native-app-parsers-design.md` (M4). This is a completion addendum, NOT a new milestone — it finishes M4 by refining the one shipped parser and adding the document-shape parsers, so M4 can be declared closed.
 **Depends on:** M4 framework (SourceParser, ParserRegistry, GenericAXParser, per-app pause) merged and live-verified.
 
 ## 1. What we're building
@@ -85,9 +85,19 @@ All inherited from M4, unchanged: no-silent-fallback (a doc parser returning nil
 6. Full fixture suite green; no live apps in CI; zero warnings.
 7. With 1-5 verified live, **M4 is declared complete.**
 
-## 10. Remaining deferred (post-M4 roadmap, unchanged)
+## 10. What comes after — two distinct categories (not one roadmap)
 
-- Mail dedicated parser (message-list shape).
-- WhatsApp dedicated parser (native helper).
-- Telegram/Discord/iMessage, ChatGPT/Claude conversation parsers.
-- M5 meetings (the next real capability).
+These are different kinds of work and must not be conflated:
+
+**(a) Cheap per-app parser follow-ups — use the M4 framework, NOT milestones, NOT "extended M4".**
+Each is a self-contained task: register a bundle id, write the AX key/body locators, add a fixture test. They do not extend M4 — they consume the framework it delivered. Every app below already captures *today* via the generic fallback; a dedicated parser only upgrades capture quality when a given app's fallback output isn't good enough and you use it enough to care. M4 does NOT wait on any of these.
+- Mail (message-list shape, like Slack).
+- WhatsApp (needs a native helper — its AX tree is too shallow, verified live).
+- Telegram, Discord, iMessage (chat shape).
+- ChatGPT (conversation shape; currently generic fallback).
+
+**(b) Future milestones — genuinely new capabilities (own spec → plan → build cycle):**
+- **M5 meetings** — system-audio capture + transcription; makes the `meeting_memory` MCP stub real.
+- **Terminal / CLI capture (open question, not scheduled):** a terminal is not a GUI AX tree like the apps above — capturing scrollback is a distinct problem needing its own design. Flagged as an open question, not a routine parser follow-up.
+
+**M4 is "complete" when the framework is proven across the content SHAPES that matter (chat = Slack, document = Notion/Obsidian/Notes, generic fallback = everything else) — not when every app has a dedicated parser.** Coverage is intentionally never "done"; that's the framework working as designed.
