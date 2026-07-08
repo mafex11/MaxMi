@@ -2,10 +2,18 @@ import Foundation
 
 public struct ParserRegistry: Sendable {
     public static let slackBundleID = "com.tinyspeck.slackmacgap"
+    public static let notionBundleID = "notion.id"
+    public static let obsidianBundleID = "md.obsidian"
+    public static let notesBundleID = "com.apple.Notes"
     private let parsers: [String: any SourceParser]
 
     public init() {
-        parsers = [Self.slackBundleID: SlackParser()]
+        parsers = [
+            Self.slackBundleID: SlackParser(),
+            Self.notionBundleID: NotionParser(),
+            Self.obsidianBundleID: ObsidianParser(),
+            Self.notesBundleID: NotesParser(),
+        ]
     }
 
     public func parser(for bundleID: String) -> (any SourceParser)? {
