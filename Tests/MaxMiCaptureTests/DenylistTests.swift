@@ -39,6 +39,14 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isBlocked("chrome://settings"))
         XCTAssertTrue(Denylist.isBlocked("about:blank"))
     }
+    func testAdultSearchQueryBlocked() {
+        // The gap found in live data: google.com/search?q=jaav+porn slipped through (host is google).
+        XCTAssertTrue(Denylist.isBlockedWebURL("https://www.google.com/search?q=jaav+porn&rlz=1C5"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("https://www.bing.com/search?q=hentai+videos"))
+        // innocent searches still pass
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://www.google.com/search?q=swift+regex"))
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://www.google.com/search?q=expensive+dinner"))
+    }
     func testAdultContentBlocked() {
         // Specific hosts seen in the wild + long-tail substring net; blocked on BOTH entry points.
         for u in ["https://www.pornhub.org/view_video.php?id=1", "https://jav.guru/992152/x",

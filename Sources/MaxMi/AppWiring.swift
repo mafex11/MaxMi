@@ -183,7 +183,10 @@ final class AppWiring {
             if Browser(rawValue: app.bundleID) != nil {
                 let cap = try BrowserTabExtractor.extract(window: window, windowTitle: title)
                 guard !Denylist.isBlockedWebURL(cap.url) else { return }
-                parsed = ParsedCapture(sourceApp: "Web", sourceKey: cap.url, sourceTitle: cap.title, content: cap.content)
+                // Normalize the URL into a stable thread key so volatile URL state (map coords,
+                // tracking params, doc tabs) doesn't fracture one page into many threads.
+                let key = URLKeyNormalizer.normalize(cap.url)
+                parsed = ParsedCapture(sourceApp: "Web", sourceKey: key, sourceTitle: cap.title, content: cap.content)
             } else {
                 // Non-browsers: dispatch through CaptureDispatch
                 parsed = CaptureDispatch.parse(window: window, app: appInfo, registry: registry)
