@@ -5,15 +5,20 @@ public struct ParserRegistry: Sendable {
     public static let notionBundleID = "notion.id"
     public static let obsidianBundleID = "md.obsidian"
     public static let notesBundleID = "com.apple.Notes"
+    // Terminal emulators — all share TerminalParser (single-AXTextArea scrollback shape).
+    public static let terminalBundleIDs = ["dev.warp.Warp-Stable", "dev.warp.Warp",
+                                           "com.apple.Terminal", "com.googlecode.iterm2"]
     private let parsers: [String: any SourceParser]
 
     public init() {
-        parsers = [
+        var p: [String: any SourceParser] = [
             Self.slackBundleID: SlackParser(),
             Self.notionBundleID: NotionParser(),
             Self.obsidianBundleID: ObsidianParser(),
             Self.notesBundleID: NotesParser(),
         ]
+        for bid in Self.terminalBundleIDs { p[bid] = TerminalParser() }
+        parsers = p
     }
 
     public func parser(for bundleID: String) -> (any SourceParser)? {
