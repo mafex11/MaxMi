@@ -5,7 +5,10 @@
     {"role": "AXGroup", "value": null, "title": "sidebar", "url": null,
      "frame": {"x":0,"y":0,"width":220,"height":800}, "focused": false, "children": [
        {"role": "AXStaticText", "value": "Home", "title": null, "url": null, "frame": {"x":10,"y":20,"width":100,"height":16}, "focused": false, "children": []},
-       {"role": "AXStaticText", "value": "general", "title": null, "url": null, "frame": {"x":10,"y":60,"width":100,"height":16}, "focused": false, "children": []}
+       {"role": "AXStaticText", "value": "general", "title": null, "url": null, "frame": {"x":10,"y":60,"width":100,"height":16}, "focused": false, "children": []},
+       {"role": "AXRow", "value": null, "title": null, "url": null, "frame": {"x":10,"y":90,"width":200,"height":24}, "focused": false, "children": [
+         {"role": "AXStaticText", "value": "random-channel", "title": null, "url": null, "frame": {"x":10,"y":90,"width":180,"height":16}, "focused": false, "children": []}
+       ]}
      ]},
     {"role": "AXGroup", "value": null, "title": "messages", "url": null,
      "frame": {"x":220,"y":0,"width":980,"height":800}, "focused": false, "children": [
