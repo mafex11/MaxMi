@@ -26,6 +26,11 @@ final class DocumentParsersTests: XCTestCase {
         let cap = try XCTUnwrap(try ObsidianParser().parse(window: win([n("AXStaticText", "x", 10)]), app: app))
         XCTAssertEqual(cap.sourceKey, "obsidian:obsidian")
     }
+    func testObsidianNoteTitleWithDashes() throws {
+        let app = AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Meeting - Q4 - Work Vault - Obsidian 1.7")
+        let cap = try XCTUnwrap(try ObsidianParser().parse(window: win([n("AXStaticText", "notes", 10)]), app: app))
+        XCTAssertEqual(cap.sourceKey, "obsidian:work-vault/meeting---q4")
+    }
     func testNotesKeyFromTitle() throws {
         let app = AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Groceries")
         let cap = try XCTUnwrap(try NotesParser().parse(window: win([n("AXStaticText", "milk eggs", 10)]), app: app))

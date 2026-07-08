@@ -12,9 +12,11 @@ public struct ObsidianParser: SourceParser {
     func key(fromTitle title: String?) -> String {
         guard let title, !title.isEmpty else { return "obsidian:unknown" }
         let parts = title.components(separatedBy: " - ")
-        // "<note> - <vault> - Obsidian <version>": note=parts[0], vault=parts[1]
+        // "<note> - <vault> - Obsidian <version>": parse from end since note may contain " - "
         if parts.count >= 3, parts.last?.hasPrefix("Obsidian") == true {
-            return "obsidian:\(docSlug(parts[1]))/\(docSlug(parts[0]))"
+            let vault = parts[parts.count - 2]
+            let note = parts.dropLast(2).joined(separator: " - ")
+            return "obsidian:\(docSlug(vault))/\(docSlug(note))"
         }
         return "obsidian:\(docSlug(title))"
     }
