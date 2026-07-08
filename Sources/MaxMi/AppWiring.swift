@@ -74,7 +74,10 @@ final class AppWiring {
             cipher = AESGCMFieldCipher(keyData: try KeychainKeyStore.getOrCreate())
         } catch {
             NSLog("MaxMi: encryption key unavailable: \(error)")
-            cipher = AESGCMFieldCipher.testCipher   // placeholder; never used for writes (capture paused)
+            // A cipher that throws on every operation: capture is paused below, but
+            // even a future write path that slips past the guard fails loudly and
+            // rolls back rather than writing plaintext-equivalent data (spec §9).
+            cipher = UnavailableCipher()
             encryptionAvailable = false
         }
         store = Store(db: db, cipher: cipher)

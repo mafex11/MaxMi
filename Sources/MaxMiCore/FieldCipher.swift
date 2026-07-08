@@ -4,6 +4,7 @@ import Foundation
 public enum CipherError: Error, Equatable {
     case integrityFailure       // authentication failed: tampered data or wrong key
     case malformedCiphertext    // prefixed but not decodable as nonce+ct+tag
+    case keyUnavailable         // no encryption key (Keychain locked/denied); refuse to read/write
 }
 
 /// Encrypts/decrypts individual TEXT column values. Minimi-parity wire format:
@@ -42,9 +43,24 @@ public struct AESGCMFieldCipher: FieldCipher {
     }
 }
 
-public typealias FixedKeyCipher = AESGCMFieldCipher
-
 public extension AESGCMFieldCipher {
     /// Deterministic key for tests. Never used outside test targets.
     static var testCipher: AESGCMFieldCipher { AESGCMFieldCipher(keyData: Data(repeating: 7, count: 32)) }
+}
+
+/// A cipher that refuses to operate. Used as the Store's cipher when the real
+/// encryption key is unavailable (Keychain locked/denied): every write throws
+/// and rolls back rather than silently producing recoverable-by-anyone
+/// ciphertext under a known key. This pushes the "no plaintext-equivalent
+/// writes without a key" invariant into the type system instead of relying on
+/// a control-flow guard staying ahead of every write path (spec §9).
+public struct UnavailableCipher: FieldCipher {
+    public init() {}
+    public func encrypt(_ plaintext: String) throws -> String { throw CipherError.keyUnavailable }
+    public func decrypt(_ stored: String) throws -> String {
+        // Passthrough for genuinely-unprefixed values (harmless), refuse to
+        // pretend we can read anything that claims to be encrypted.
+        guard stored.hasPrefix(AESGCMFieldCipher.prefix) else { return stored }
+        throw CipherError.keyUnavailable
+    }
 }
