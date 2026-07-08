@@ -13,6 +13,29 @@ public enum Denylist {
     static let blockedPathFragments: [String] = [
         "/reset-password", "/forgot-password", "/change-password", "/2fa", "/mfa", "/otp",
     ]
+    // Adult content: never captured, never sent to Gemini (which refuses to extract it anyway).
+    // Specific hosts seen in the wild plus a substring net for the long tail of adult domains.
+    static let blockedHostSuffixes_adult: [String] = [
+        "pornhub.com", "pornhub.org", "xvideos.com", "xnxx.com", "redtube.com",
+        "youporn.com", "xhamster.com", "spankbang.com", "jav.guru", "hanime.tv",
+        "onlyfans.com", "chaturbate.com", "stripchat.com",
+    ]
+    static let blockedHostSubstrings_adult: [String] = ["porn", "xvideos", "xhamster", "hentai", "javhd"]
+
+    /// True if the host is adult content (specific suffix OR a substring match on the long tail).
+    static func isAdultHost(_ host: String) -> Bool {
+        if blockedHostSuffixes_adult.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
+        return blockedHostSubstrings_adult.contains { host.contains($0) }
+    }
+
+    /// Shared host/path denylist (banking, auth, meetings, adult). Used by both entry points.
+    static func isBlockedHostOrPath(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        if blockedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
+        if isAdultHost(host) { return true }
+        let path = url.path.lowercased()
+        return blockedPathFragments.contains { path.contains($0) }
+    }
 
     /// Strict web-URL denylist for browsers: only http(s) schemes allowed, plus banking/meeting/auth hosts.
     /// Blocks data:, blob:, chrome-untrusted://, chrome-search://, resource://, moz-extension://, javascript:, etc.
@@ -21,11 +44,7 @@ public enum Denylist {
         let scheme = url.scheme?.lowercased() ?? ""
         // Only http/https pass for browsers; all other schemes blocked (M1 behavior restored).
         if scheme != "http" && scheme != "https" { return true }
-        // Apply banking/meeting/auth denylist.
-        guard let host = url.host?.lowercased() else { return false }
-        if blockedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
-        let path = url.path.lowercased()
-        return blockedPathFragments.contains { path.contains($0) }
+        return isBlockedHostOrPath(url)
     }
 
     public static func isBlocked(_ urlString: String) -> Bool {
@@ -33,9 +52,6 @@ public enum Denylist {
         // Block browser-internal pages, not native-app source keys (slack:, whatsapp:, bundleid:title).
         let browserInternalSchemes: Set<String> = ["chrome", "about", "edge", "arc", "brave", "vivaldi", "file", "view-source", "devtools", "chrome-extension"]
         if let scheme = url.scheme?.lowercased(), browserInternalSchemes.contains(scheme) { return true }
-        guard let host = url.host?.lowercased() else { return false }
-        if blockedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
-        let path = url.path.lowercased()
-        return blockedPathFragments.contains { path.contains($0) }
+        return isBlockedHostOrPath(url)
     }
 }
