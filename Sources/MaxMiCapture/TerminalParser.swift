@@ -55,28 +55,48 @@ public struct TerminalParser: SourceParser {
 
     /// Find the LAST (most recent) home-or-absolute path in the scrollback and return its
     /// final component — the project/dir you're currently in. Prompts render cwd as "~/foo/bar"
-    /// or "/Users/x/foo/bar"; we take "bar". Returns nil if no path is present.
+    /// or "/Users/x/foo/bar"; we take "bar". Returns nil if no prompt cwd is present.
+    /// Anchors to the PROMPT (path immediately followed by %/$/❯/#), not any path token in
+    /// the buffer — so file arguments (inspect2.mjs) and paths in output (MaxMi.app)) are
+    /// rejected; only the shell's current directory is used.
     func workingDirectory(fromContent content: String) -> String? {
-        // Scan lines newest-first; a shell prompt line usually contains the cwd.
         for line in content.split(separator: "\n").reversed() {
-            if let dir = lastPathComponent(in: String(line)) { return dir }
+            if let dir = promptCwd(in: String(line)) { return dir }
         }
         return nil
     }
 
     /// Warp/iTerm often put the cwd in the title (e.g. "MaxMi — -zsh" or "~/code/MaxMi").
+    /// Titles have no prompt terminator, so match a bare path here.
     func workingDirectory(fromTitle title: String?) -> String? {
         guard let title, !title.isEmpty else { return nil }
-        return lastPathComponent(in: title)
+        return lastPathComponent(in: title, requirePrompt: false)
     }
 
-    /// Extract the final component of a ~/... or /Users/... path token in a string, slugged.
-    private func lastPathComponent(in s: String) -> String? {
-        // Match a path starting with ~ or / containing at least one more segment.
-        guard let range = s.range(of: "(~|/Users/[^/ ]+)(/[^ \t\n:]+)+", options: .regularExpression) else { return nil }
-        let path = String(s[range])
+    /// A path that is immediately followed (after optional spaces) by a shell prompt
+    /// terminator — i.e. the cwd of a prompt line, not a path buried in output.
+    private func promptCwd(in s: String) -> String? {
+        lastPathComponent(in: s, requirePrompt: true)
+    }
+
+    /// Extract the final component of a ~/... or /Users/... path, slugged.
+    /// requirePrompt: the path must be followed by a prompt char (%, $, ❯, #, >) — used for
+    /// scrollback lines. false for titles (no prompt present).
+    private func lastPathComponent(in s: String, requirePrompt: Bool) -> String? {
+        let pathBody = "(~|/Users/[^/ ]+)(/[^ \t\n:%$#>❯]+)*"
+        let pattern = requirePrompt ? "\(pathBody)\\s*[%$#>❯]" : pathBody
+        guard let range = s.range(of: pattern, options: .regularExpression) else { return nil }
+        var path = String(s[range])
+        // Strip the trailing prompt char (and any spaces before it) we matched for anchoring.
+        if requirePrompt { path = path.trimmingCharacters(in: CharacterSet(charactersIn: " \t%$#>❯")) }
         guard let last = path.split(separator: "/").last, !last.isEmpty else { return nil }
-        return slug(String(last))
+        let component = String(last)
+        // Reject file-looking tokens (a real cwd rarely ends in a known file extension).
+        if let dot = component.lastIndex(of: "."), dot != component.startIndex {
+            let ext = component[component.index(after: dot)...]
+            if ext.count <= 5 && ext.allSatisfy({ $0.isLetter || $0.isNumber }) { return nil }
+        }
+        return slug(component)
     }
 
     private func slug(_ s: String) -> String {

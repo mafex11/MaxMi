@@ -53,4 +53,30 @@ final class TerminalParserTests: XCTestCase {
         XCTAssertEqual(p.terminalKey(app: app(nil), content: "x\n/Users/sudhanshu/code/Yuki $ npm test\n"),
                        "terminal:warp/yuki")
     }
+
+    // ── Regressions from LIVE data: paths in OUTPUT must not be mistaken for the cwd ──
+    func testFileArgumentInOutputNotUsedAsCwd() {
+        let p = TerminalParser()
+        // "inspect2.mjs" appeared as a key in the live DB — it's a file, not a cwd.
+        // The only prompt cwd here is ~/code/personal/MaxMi.
+        let content = "u ~/code/personal/MaxMi % node ~/code/personal/MaxMi/inspect2.mjs\n"
+        XCTAssertEqual(p.terminalKey(app: app(nil), content: content), "terminal:warp/maxmi")
+    }
+    func testPathInCommandOutputIgnored() {
+        let p = TerminalParser()
+        // "MaxMi.app)." leaked in live data — a path inside output, no prompt after it.
+        let content = "u ~/code/personal/MaxMi % ./build.sh\nwrote to /Users/x/build/MaxMi.app).\n"
+        XCTAssertEqual(p.terminalKey(app: app(nil), content: content), "terminal:warp/maxmi")
+    }
+    func testNoPromptCwdFallsBackToApp() {
+        let p = TerminalParser()
+        // only output paths, no prompt line with a cwd -> fall back, don't grab a file
+        XCTAssertEqual(p.terminalKey(app: app(nil), content: "error at /Users/x/foo/bar.swift:12\n"),
+                       "terminal:warp")
+    }
+    func testZshPromptWithFancyGlyph() {
+        let p = TerminalParser()
+        XCTAssertEqual(p.terminalKey(app: app(nil), content: "~/code/ShipCast ❯ git push\n"),
+                       "terminal:warp/shipcast")
+    }
 }
