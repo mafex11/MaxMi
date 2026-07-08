@@ -4,6 +4,10 @@ import AppKit
 public enum AXReader {
     public static func snapshotFrontmostWindow(pid: pid_t, maxNodes: Int = 20_000, maxDepth: Int = 40) -> (window: AXNode, title: String?)? {
         let app = AXUIElementCreateApplication(pid)
+        // Chromium/Electron apps (Warp, Slack, Notion) keep their AX tree dormant until an
+        // assistive client asks for it. Setting AXManualAccessibility wakes it; harmless for
+        // native apps. Without this, terminals expose an empty tree and capture silently no-ops.
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         guard let window = copyAttr(app, kAXFocusedWindowAttribute) as! AXUIElement?
                 ?? copyAttr(app, "AXMainWindow") as! AXUIElement?
                 ?? (copyAttr(app, kAXWindowsAttribute) as? [AXUIElement])?.first else { return nil }
