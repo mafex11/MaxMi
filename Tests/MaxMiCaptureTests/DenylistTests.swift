@@ -39,6 +39,24 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isBlocked("chrome://settings"))
         XCTAssertTrue(Denylist.isBlocked("about:blank"))
     }
+    func testAdultContentBlocked() {
+        // Specific hosts seen in the wild + long-tail substring net; blocked on BOTH entry points.
+        for u in ["https://www.pornhub.org/view_video.php?id=1", "https://jav.guru/992152/x",
+                  "https://hanime.tv/videos/hentai/x", "https://www.xvideos.com/v",
+                  "https://onlyfans.com/someone", "https://sub.somepornsite.net/x"] {
+            XCTAssertTrue(Denylist.isBlockedWebURL(u), "web denylist should block \(u)")
+            XCTAssertTrue(Denylist.isBlocked(u), "shared denylist should block \(u)")
+        }
+    }
+    func testNonAdultNotOverBlocked() {
+        // Innocent hosts pass; the substring net only matches the HOST, not the path.
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://news.ycombinator.com"))
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://github.com/someone/xhamster-mirror-tool"))  // "xhamster" in path, not host
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://en.wikipedia.org/wiki/Pornography"))         // "porn" in path, not host
+    }
+    // NOTE: the substring net intentionally over-blocks any HOST containing "porn"/"hentai"/etc.
+    // (e.g. a hypothetical pornfree-support.org). Accepted: over-blocking adult-adjacent hosts is
+    // the safe direction for this control; the specific-suffix list handles the common real sites.
     func testBlockedWebURL_rejectsNonHTTPSchemes() {
         // M1 strict rule restored: only http(s) pass for browsers
         XCTAssertTrue(Denylist.isBlockedWebURL("data:text/html,<h1>x</h1>"))
