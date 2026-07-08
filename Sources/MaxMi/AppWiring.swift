@@ -99,9 +99,12 @@ final class AppWiring {
         catch { NSLog("MaxMi: backfill failed, will retry next launch: \(error)") }
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
         guard self.observer == nil else { return }  // prevent double-start
-        let observer = FocusObserver { [weak self] browser, pid in
-            self?.captureFrontmost(browser: browser, pid: pid)
-        }
+        let observer = FocusObserver(
+            isCapturable: { bid in Browser(rawValue: bid) != nil },
+            onCapture: { [weak self] app, pid in
+                self?.captureFrontmost(app: app, pid: pid)
+            }
+        )
         observer.start()
         self.observer = observer
         // Pipeline sweep every 30s: picks up idle/frozen versions and due retries (spec §3a sweeper).
@@ -115,8 +118,10 @@ final class AppWiring {
         pipelineTimer = t
     }
 
-    func captureFrontmost(browser: Browser, pid: pid_t) {
+    func captureFrontmost(app: AppInfo, pid: pid_t) {
         guard !paused else { return }
+        // Temporary: only handle browsers until Task 6 adds full registry dispatch
+        guard let browser = Browser(rawValue: app.bundleID) else { return }
         // Chromium post-kick: empty tree is "retry shortly", NOT a failed capture (spec §10).
         attemptCapture(browser: browser, pid: pid, attemptsLeft: browser.isChromium ? 3 : 1)
     }

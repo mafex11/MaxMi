@@ -13,25 +13,29 @@ public enum Browser: String, CaseIterable, Sendable {
     }
 }
 
-/// Observes browser focus changes and triggers captures.
+/// Observes app focus changes and triggers captures for capturable apps.
 /// Callers MUST call stop() before releasing; deinit cannot tear down MainActor state under Swift 6.
 @MainActor
 public final class FocusObserver {
     let debounceMs: Int
     let recaptureIntervalSec: Double
-    let onCapture: @MainActor (Browser, pid_t) -> Void
+    let isCapturable: @Sendable (String) -> Bool
+    let onCapture: @MainActor (AppInfo, pid_t) -> Void
 
     var debounceTask: Task<Void, Never>?
     var recaptureTimer: Timer?
     var axObserver: AXObserver?
     var observedPid: pid_t?
     var workspaceObserver: NSObjectProtocol?
-    var current: (browser: Browser, pid: pid_t)?
+    var current: (bundleID: String, pid: pid_t)?
+    var appName: String = ""
 
     public init(debounceMs: Int = 1_000, recaptureIntervalSec: Double = 45,
-                onCapture: @escaping @MainActor (Browser, pid_t) -> Void) {
+                isCapturable: @escaping @Sendable (String) -> Bool,
+                onCapture: @escaping @MainActor (AppInfo, pid_t) -> Void) {
         self.debounceMs = debounceMs
         self.recaptureIntervalSec = recaptureIntervalSec
+        self.isCapturable = isCapturable
         self.onCapture = onCapture
     }
 
@@ -58,26 +62,27 @@ public final class FocusObserver {
     }
 
     func frontmostChanged(_ app: NSRunningApplication) {
-        guard let bid = app.bundleIdentifier, let browser = Browser(rawValue: bid) else {
+        guard let bid = app.bundleIdentifier, isCapturable(bid) else {
             detachAXObserver()
             recaptureTimer?.invalidate(); recaptureTimer = nil
-            current = nil; return   // non-browser frontmost -> ignore (spec §5)
+            current = nil; return
         }
         let newPid = app.processIdentifier
-        if let cur = current, cur.pid == newPid, cur.browser == browser {
-            // same browser, same pid -> skip detach/re-attach churn
-            scheduleCapture()
-            return
+        if let cur = current, cur.bundleID == bid, cur.pid == newPid {
+            scheduleCapture(); return   // same app/pid -> no observer churn
         }
         detachAXObserver()
-        recaptureTimer?.invalidate(); recaptureTimer = nil
-        current = (browser, newPid)
-        if browser.isChromium { ChromiumKick.apply(pid: newPid) }
+        current = (bundleID: bid, pid: newPid)
+        appName = app.localizedName ?? bid
+        if let browser = Browser(rawValue: bid), browser.isChromium {
+            ChromiumKick.apply(pid: newPid)
+        }
         attachAXObserver(pid: newPid)
-        scheduleCapture()
+        recaptureTimer?.invalidate()
         recaptureTimer = Timer.scheduledTimer(withTimeInterval: recaptureIntervalSec, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.scheduleCapture() }
         }
+        scheduleCapture()
     }
 
     func scheduleCapture() {
@@ -86,7 +91,8 @@ public final class FocusObserver {
         debounceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(ms))
             guard !Task.isCancelled, let self, let cur = self.current else { return }
-            self.onCapture(cur.browser, cur.pid)
+            let title: String? = nil
+            self.onCapture(AppInfo(bundleID: cur.bundleID, name: self.appName, windowTitle: title), cur.pid)
         }
     }
 
