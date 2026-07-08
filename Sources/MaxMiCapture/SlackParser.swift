@@ -9,7 +9,8 @@ public struct SlackParser: SourceParser {
     public init() {}
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        let lines = messageLines(in: window)
+        let winX = window.frame?.origin.x ?? 0
+        let lines = messageLines(in: window, windowX: winX)
         guard !lines.isEmpty else { return nil }
         var kept: [String] = []
         var total = 0
@@ -46,9 +47,9 @@ public struct SlackParser: SourceParser {
 
     /// Collect AXRow message text in visual order. Within a row, first static text
     /// is treated as sender, the rest as the message body.
-    private func messageLines(in root: AXNode) -> [String] {
+    private func messageLines(in root: AXNode, windowX: CGFloat) -> [String] {
         var rows: [(y: CGFloat, texts: [String])] = []
-        collectRows(root, into: &rows)
+        collectRows(root, into: &rows, windowX: windowX)
         return rows.sorted { $0.y < $1.y }.compactMap { row in
             let ts = row.texts.filter { !$0.isEmpty }
             guard !ts.isEmpty else { return nil }
@@ -57,19 +58,20 @@ public struct SlackParser: SourceParser {
         }
     }
 
-    private func collectRows(_ node: AXNode, into out: inout [(y: CGFloat, texts: [String])]) {
+    private func collectRows(_ node: AXNode, into out: inout [(y: CGFloat, texts: [String])], windowX: CGFloat) {
         if node.role == "AXRow" {
-            // Sidebar/nav rows sit in the narrow left column (x < sidebarMaxX); messages are
-            // in the main content area to their right. Exclude sidebar chrome (spec §4).
+            // Sidebar/nav rows sit in the narrow left column (window-relative x < sidebarMaxX);
+            // messages are in the main content area to their right. Exclude sidebar chrome (spec §4).
+            // AXFrame is in global screen coordinates, so subtract window origin to get window-relative x.
             let x = node.frame?.origin.x ?? .greatestFiniteMagnitude
-            if x < Self.sidebarMaxX { return }
+            if x != .greatestFiniteMagnitude && (x - windowX) < Self.sidebarMaxX { return }
             var texts: [(CGFloat, CGFloat, String)] = []
             collectStaticText(node, into: &texts)
             let ordered = texts.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }.map { $0.2 }
             out.append((node.frame?.origin.y ?? 0, ordered))
             return   // don't descend into nested rows twice
         }
-        for c in node.children { collectRows(c, into: &out) }
+        for c in node.children { collectRows(c, into: &out, windowX: windowX) }
     }
 
     private func collectStaticText(_ node: AXNode, into out: inout [(CGFloat, CGFloat, String)]) {

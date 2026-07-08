@@ -91,4 +91,17 @@ final class SlackParserTests: XCTestCase {
             XCTAssertTrue(allMessages.contains(line), "Each kept line should be a complete original message")
         }
     }
+    func testSidebarFilterIsWindowRelative() throws {
+        // Window floated at screen x=600. Sidebar row at x=610 (winX+10), message row at x=840 (winX+240).
+        func node(_ role: String, _ value: String?, _ x: CGFloat, _ y: CGFloat, _ kids: [AXNode] = []) -> AXNode {
+            AXNode(role: role, value: value, title: nil, url: nil, frame: CGRect(x: x, y: y, width: 10, height: 10), focused: false, children: kids)
+        }
+        let win = node("AXWindow", nil, 600, 0, [
+            node("AXRow", nil, 610, 90, [node("AXStaticText", "sidebar-channel", 610, 90)]),
+            node("AXRow", nil, 840, 100, [node("AXStaticText", "Zoe", 840, 100), node("AXStaticText", "hi team", 860, 100)]),
+        ])
+        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
+        XCTAssertTrue(cap.content.contains("Zoe: hi team"), "message row (winX+240) kept")
+        XCTAssertFalse(cap.content.contains("sidebar-channel"), "sidebar row (winX+10) excluded even when window is not flush-left")
+    }
 }
