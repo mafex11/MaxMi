@@ -10,10 +10,15 @@ public struct SlackParser: SourceParser {
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         let lines = messageLines(in: window)
         guard !lines.isEmpty else { return nil }
-        var content = lines.joined(separator: "\n")
-        if content.count > Self.contentCap {                       // newest-anchored: keep the tail
-            content = String(content.suffix(Self.contentCap))
+        var kept: [String] = []
+        var total = 0
+        for line in lines.reversed() {
+            let add = line.count + 1  // +1 for the joining newline
+            if total + add > Self.contentCap && !kept.isEmpty { break }
+            kept.insert(line, at: 0)
+            total += add
         }
+        let content = kept.joined(separator: "\n")
         return ParsedCapture(
             sourceApp: "Slack",
             sourceKey: key(fromTitle: app.windowTitle),

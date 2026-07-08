@@ -34,4 +34,40 @@ final class SlackParserTests: XCTestCase {
         let bare = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil, focused: false, children: [])
         XCTAssertNil(try SlackParser().parse(window: bare, app: app("x - y - Slack")))
     }
+    func testContentCapAtWholeMessageBoundaries() throws {
+        // Build 400 rows, each ~50 chars, totaling >8000 chars
+        var rows: [AXNode] = []
+        var allMessages: [String] = []
+        for i in 0..<400 {
+            let msg = "User\(i): message body number \(i) with some padding text"
+            allMessages.append(msg)
+            let textNode = AXNode(role: "AXStaticText", value: msg, title: nil, url: nil,
+                                  frame: CGRect(x: 10, y: CGFloat(i * 20), width: 400, height: 18),
+                                  focused: false, children: [])
+            let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                            frame: CGRect(x: 0, y: CGFloat(i * 20), width: 500, height: 20),
+                            focused: false, children: [textNode])
+            rows.append(row)
+        }
+        let window = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
+                           focused: false, children: rows)
+        let cap = try XCTUnwrap(try SlackParser().parse(window: window, app: app("test - ws - Slack")))
+
+        // 1. content.count <= 8000 (approximately — within one line)
+        XCTAssertLessThanOrEqual(cap.content.count, 8000 + 100, "Content should be capped near 8000")
+
+        // 2. The NEWEST message (last row by y) IS present
+        let newestMsg = allMessages.last!
+        XCTAssertTrue(cap.content.contains(newestMsg), "Newest message should be present")
+
+        // 3. The OLDEST message (first row) is NOT present (it was dropped)
+        let oldestMsg = allMessages.first!
+        XCTAssertFalse(cap.content.contains(oldestMsg), "Oldest message should be dropped")
+
+        // 4. Content does not start or end mid-word — all kept lines are complete
+        let keptLines = cap.content.components(separatedBy: "\n")
+        for line in keptLines {
+            XCTAssertTrue(allMessages.contains(line), "Each kept line should be a complete original message")
+        }
+    }
 }
