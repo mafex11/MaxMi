@@ -5,6 +5,7 @@ public struct ParserRegistry: Sendable {
     public static let notionBundleID = "notion.id"
     public static let obsidianBundleID = "md.obsidian"
     public static let notesBundleID = "com.apple.Notes"
+    public static let mailBundleID = "com.apple.mail"
     // Terminal emulators — all share TerminalParser (single-AXTextArea scrollback shape).
     public static let terminalBundleIDs = ["dev.warp.Warp-Stable", "dev.warp.Warp",
                                            "com.apple.Terminal", "com.googlecode.iterm2"]
@@ -16,6 +17,7 @@ public struct ParserRegistry: Sendable {
             Self.notionBundleID: NotionParser(),
             Self.obsidianBundleID: ObsidianParser(),
             Self.notesBundleID: NotesParser(),
+            Self.mailBundleID: MailParser(),
         ]
         for bid in Self.terminalBundleIDs { p[bid] = TerminalParser() }
         parsers = p

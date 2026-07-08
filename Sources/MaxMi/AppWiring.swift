@@ -41,13 +41,11 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
     func clearRetry(id: String) throws { try store.clearRetry(id: id) }
 }
 
-// Known-capturable apps that use generic fallback (spec §3).
+// Apps admitted to capture that DON'T have a dedicated parser yet (ride generic fallback).
+// Apps with a registered parser self-admit via registry.parser(for:) in the gate, so they
+// need not be listed here (Notes/Notion/Obsidian/Mail moved to dedicated parsers).
 private let KnownApps: Set<String> = [
-    "net.whatsapp.WhatsApp",
-    "com.apple.Notes",
-    "notion.id",
-    "md.obsidian",
-    "com.apple.mail"
+    "net.whatsapp.WhatsApp",   // shallow AX tree; needs a native helper before a dedicated parser
 ]
 
 @MainActor
