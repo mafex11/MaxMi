@@ -22,5 +22,7 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>MaxMi reads recent Mail messages to build your searchable memory.</string>
 </dict>
 </plist>
