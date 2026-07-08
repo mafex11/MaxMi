@@ -167,7 +167,20 @@ final class AppWiring {
 
     private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int) {
         guard !paused else { return }
-        guard let (window, title) = AXReader.snapshotFrontmostWindow(pid: pid) else {
+        // The AX tree read is synchronous cross-process IPC — for heavy trees (Mail ~3600 nodes)
+        // it must NOT run on the main thread, or it freezes the menu-bar UI. Read off-main, then
+        // resume on the main actor for the DB commit. AXNode is Sendable so the snapshot crosses
+        // the actor boundary safely.
+        Task.detached(priority: .utility) { [weak self] in
+            let snapshot = AXReader.snapshotFrontmostWindow(pid: pid)
+            await self?.finishCapture(app: app, pid: pid, attemptsLeft: attemptsLeft, snapshot: snapshot)
+        }
+    }
+
+    private func finishCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int,
+                               snapshot: (window: AXNode, title: String?)?) {
+        guard !paused else { return }
+        guard let (window, title) = snapshot else {
             retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft); return
         }
 
