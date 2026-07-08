@@ -15,9 +15,9 @@ final class SlackParserTests: XCTestCase {
         let huge = String(repeating: "x", count: 20_000)
         let win = AXNode(role: "AXWindow", value: nil, title: "c - w - Slack", url: nil, frame: nil, focused: false,
             children: [AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                              frame: CGRect(x: 0, y: 0, width: 10, height: 10), focused: false,
+                              frame: CGRect(x: 240, y: 0, width: 10, height: 10), focused: false,
                 children: [AXNode(role: "AXStaticText", value: huge, title: nil, url: nil,
-                                  frame: CGRect(x: 0, y: 0, width: 10, height: 10), focused: false, children: [])])])
+                                  frame: CGRect(x: 240, y: 0, width: 10, height: 10), focused: false, children: [])])])
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("c - w - Slack")))
         XCTAssertLessThanOrEqual(cap.content.count, 8000, "single oversize message must not bypass the cap")
     }
@@ -46,6 +46,15 @@ final class SlackParserTests: XCTestCase {
         let bare = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil, focused: false, children: [])
         XCTAssertNil(try SlackParser().parse(window: bare, app: app("x - y - Slack")))
     }
+    func testSidebarRowsExcludedFromContent() throws {
+        let win = try fixture("slack-window")
+        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
+        // message-area rows (x>=240) present
+        XCTAssertTrue(cap.content.contains("Alice: shipped the build"))
+        XCTAssertTrue(cap.content.contains("Bob: deploy looks green"))
+        // sidebar row (x<240) excluded
+        XCTAssertFalse(cap.content.contains("random-channel"), "sidebar chrome must not appear in message content")
+    }
     func testContentCapAtWholeMessageBoundaries() throws {
         // Build 400 rows, each ~50 chars, totaling >8000 chars
         var rows: [AXNode] = []
@@ -54,10 +63,10 @@ final class SlackParserTests: XCTestCase {
             let msg = "User\(i): message body number \(i) with some padding text"
             allMessages.append(msg)
             let textNode = AXNode(role: "AXStaticText", value: msg, title: nil, url: nil,
-                                  frame: CGRect(x: 10, y: CGFloat(i * 20), width: 400, height: 18),
+                                  frame: CGRect(x: 240, y: CGFloat(i * 20), width: 400, height: 18),
                                   focused: false, children: [])
             let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                            frame: CGRect(x: 0, y: CGFloat(i * 20), width: 500, height: 20),
+                            frame: CGRect(x: 240, y: CGFloat(i * 20), width: 500, height: 20),
                             focused: false, children: [textNode])
             rows.append(row)
         }

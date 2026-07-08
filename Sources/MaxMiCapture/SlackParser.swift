@@ -5,6 +5,7 @@ import Foundation
 /// in visual order, sender-attributed; key from the window title.
 public struct SlackParser: SourceParser {
     static let contentCap = 8000
+    static let sidebarMaxX: CGFloat = 240   // rows left of this are sidebar/nav chrome, not messages
     public init() {}
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
@@ -58,6 +59,10 @@ public struct SlackParser: SourceParser {
 
     private func collectRows(_ node: AXNode, into out: inout [(y: CGFloat, texts: [String])]) {
         if node.role == "AXRow" {
+            // Sidebar/nav rows sit in the narrow left column (x < sidebarMaxX); messages are
+            // in the main content area to their right. Exclude sidebar chrome (spec §4).
+            let x = node.frame?.origin.x ?? .greatestFiniteMagnitude
+            if x < Self.sidebarMaxX { return }
             var texts: [(CGFloat, CGFloat, String)] = []
             collectStaticText(node, into: &texts)
             let ordered = texts.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }.map { $0.2 }
