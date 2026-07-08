@@ -29,4 +29,32 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isBlocked("file:///Users/me/doc.pdf"))
         XCTAssertFalse(Denylist.isBlocked("https://example.com"))  // plain https stays allowed
     }
+    func testNativeSchemeKeysAreNotBlocked() {
+        // native-app source_keys must pass (they are not chrome://-style internal pages)
+        XCTAssertFalse(Denylist.isBlocked("slack:acme/general"))
+        XCTAssertFalse(Denylist.isBlocked("whatsapp:Mom"))
+        XCTAssertFalse(Denylist.isBlocked("com.apple.Notes:Groceries"))
+    }
+    func testBrowserInternalSchemesStillBlocked() {
+        XCTAssertTrue(Denylist.isBlocked("chrome://settings"))
+        XCTAssertTrue(Denylist.isBlocked("about:blank"))
+    }
+    func testBlockedWebURL_rejectsNonHTTPSchemes() {
+        // M1 strict rule restored: only http(s) pass for browsers
+        XCTAssertTrue(Denylist.isBlockedWebURL("data:text/html,<h1>x</h1>"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("blob:https://example.com/uuid"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("chrome-untrusted://new-tab-page"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("chrome-search://local-ntp"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("resource://gre/modules/foo.jsm"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("moz-extension://uuid/page.html"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("javascript:alert(1)"))
+    }
+    func testBlockedWebURL_allowsHTTPS() {
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://example.com"))
+        XCTAssertFalse(Denylist.isBlockedWebURL("http://example.com"))
+    }
+    func testIsBlocked_nativeKeysStillPass() {
+        // Native keys still use isBlocked (not isBlockedWebURL), so they remain allowed
+        XCTAssertFalse(Denylist.isBlocked("slack:acme/general"))
+    }
 }

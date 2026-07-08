@@ -14,11 +14,25 @@ public enum Denylist {
         "/reset-password", "/forgot-password", "/change-password", "/2fa", "/mfa", "/otp",
     ]
 
+    /// Strict web-URL denylist for browsers: only http(s) schemes allowed, plus banking/meeting/auth hosts.
+    /// Blocks data:, blob:, chrome-untrusted://, chrome-search://, resource://, moz-extension://, javascript:, etc.
+    public static func isBlockedWebURL(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString) else { return false }
+        let scheme = url.scheme?.lowercased() ?? ""
+        // Only http/https pass for browsers; all other schemes blocked (M1 behavior restored).
+        if scheme != "http" && scheme != "https" { return true }
+        // Apply banking/meeting/auth denylist.
+        guard let host = url.host?.lowercased() else { return false }
+        if blockedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
+        let path = url.path.lowercased()
+        return blockedPathFragments.contains { path.contains($0) }
+    }
+
     public static func isBlocked(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString) else { return false }
-        // Only regular web pages carry memory value; browser-internal schemes
-        // (chrome://, about:, edge://, arc://, file:// …) are never captured.
-        if let scheme = url.scheme?.lowercased(), scheme != "http", scheme != "https" { return true }
+        // Block browser-internal pages, not native-app source keys (slack:, whatsapp:, bundleid:title).
+        let browserInternalSchemes: Set<String> = ["chrome", "about", "edge", "arc", "brave", "vivaldi", "file", "view-source", "devtools", "chrome-extension"]
+        if let scheme = url.scheme?.lowercased(), browserInternalSchemes.contains(scheme) { return true }
         guard let host = url.host?.lowercased() else { return false }
         if blockedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
         let path = url.path.lowercased()

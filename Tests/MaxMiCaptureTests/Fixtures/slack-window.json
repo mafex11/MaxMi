@@ -1,0 +1,22 @@
+{
+  "role": "AXWindow", "value": null, "title": "general - Acme - Slack", "url": null,
+  "frame": {"x":0,"y":0,"width":1200,"height":800}, "focused": false,
+  "children": [
+    {"role": "AXGroup", "value": null, "title": "sidebar", "url": null,
+     "frame": {"x":0,"y":0,"width":220,"height":800}, "focused": false, "children": [
+       {"role": "AXStaticText", "value": "Home", "title": null, "url": null, "frame": {"x":10,"y":20,"width":100,"height":16}, "focused": false, "children": []},
+       {"role": "AXStaticText", "value": "general", "title": null, "url": null, "frame": {"x":10,"y":60,"width":100,"height":16}, "focused": false, "children": []}
+     ]},
+    {"role": "AXGroup", "value": null, "title": "messages", "url": null,
+     "frame": {"x":220,"y":0,"width":980,"height":800}, "focused": false, "children": [
+       {"role": "AXRow", "value": null, "title": null, "url": null, "frame": {"x":240,"y":100,"width":900,"height":40}, "focused": false, "children": [
+         {"role": "AXStaticText", "value": "Alice", "title": null, "url": null, "frame": {"x":240,"y":100,"width":80,"height":16}, "focused": false, "children": []},
+         {"role": "AXStaticText", "value": "shipped the build", "title": null, "url": null, "frame": {"x":240,"y":118,"width":300,"height":16}, "focused": false, "children": []}
+       ]},
+       {"role": "AXRow", "value": null, "title": null, "url": null, "frame": {"x":240,"y":160,"width":900,"height":40}, "focused": false, "children": [
+         {"role": "AXStaticText", "value": "Bob", "title": null, "url": null, "frame": {"x":240,"y":160,"width":80,"height":16}, "focused": false, "children": []},
+         {"role": "AXStaticText", "value": "deploy looks green", "title": null, "url": null, "frame": {"x":240,"y":178,"width":300,"height":16}, "focused": false, "children": []}
+       ]}
+     ]}
+  ]
+}
