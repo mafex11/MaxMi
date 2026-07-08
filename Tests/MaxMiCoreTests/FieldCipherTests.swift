@@ -4,6 +4,19 @@ import XCTest
 final class FieldCipherTests: XCTestCase {
     let cipher = AESGCMFieldCipher.testCipher
 
+    func testUnavailableCipherThrowsOnEncrypt() {
+        XCTAssertThrowsError(try UnavailableCipher().encrypt("secret")) {
+            XCTAssertEqual($0 as? CipherError, .keyUnavailable)
+        }
+    }
+    func testUnavailableCipherRefusesEncryptedButPassesPlaintext() throws {
+        let u = UnavailableCipher()
+        XCTAssertEqual(try u.decrypt("legacy plaintext"), "legacy plaintext")
+        XCTAssertThrowsError(try u.decrypt("enc:v1:AAAA")) {
+            XCTAssertEqual($0 as? CipherError, .keyUnavailable)
+        }
+    }
+
     func testRoundTrip() throws {
         let pt = "The user is watching episode 18 of Gin Tama."
         let ct = try cipher.encrypt(pt)
