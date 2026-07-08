@@ -1,83 +1,81 @@
 import Foundation
 
-/// Dedicated parser for Apple Mail. Live-probed shape: the message list is a set of AXRows
-/// in the content area (right of the sidebar), each row exposing a
-/// `sender | date | subject | preview` tuple of AXStaticText. The left sidebar (x < band)
-/// holds mailbox/account names and must be excluded — the same message-list-vs-sidebar
-/// split we solved for Slack.
+/// Dedicated parser for Apple Mail.
 ///
-/// Thread identity = the current mailbox (from the window title, e.g. "All Inboxes"), so a
-/// mailbox accumulates its message list over time rather than fracturing.
+/// IMPORTANT: Mail's accessibility tree is pathologically slow (~80ms per node — reaching the
+/// message list would take minutes), so AX-tree walking is NOT viable here. Instead we read
+/// Mail via its AppleScript interface (fast: recent messages across all accounts in ~1s).
+/// This is the only parser that ignores the AX `window` and sources its own data.
+///
+/// Requires Automation (AppleEvents) permission for MaxMi → Mail; the first run triggers the
+/// system prompt. If scripting is unavailable/denied, parse returns nil (→ skipped, per the
+/// no-silent-fallback rule) rather than crashing.
 public struct MailParser: SourceParser {
     static let contentCap = 8000
-    static let sidebarMaxX: CGFloat = 260   // rows left of this (window-relative) are mailbox chrome
+    static let perAccountLimit = 6      // most-recent N messages per account
     public init() {}
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        let winX = window.frame?.origin.x ?? 0
-        let lines = messageLines(in: window, windowX: winX)
+        guard let raw = Self.runAppleScript(Self.script) else { return nil }
+        return Self.makeCapture(fromScriptOutput: raw, windowTitle: app.windowTitle)
+    }
+
+    /// Pure transform from raw osascript output → ParsedCapture (nil if no usable lines).
+    /// Separated from the Process call so it's unit-testable without a live Mail app.
+    static func makeCapture(fromScriptOutput raw: String, windowTitle: String?) -> ParsedCapture? {
+        let lines = raw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
         guard !lines.isEmpty else { return nil }
-        var kept: [String] = []
-        var total = 0
-        for line in lines.reversed() {
-            let add = line.count + 1
-            if total + add > Self.contentCap && !kept.isEmpty { break }
-            kept.insert(line, at: 0)
-            total += add
-        }
-        let content = String(kept.joined(separator: "\n").suffix(Self.contentCap))
-        return ParsedCapture(
-            sourceApp: "Mail",
-            sourceKey: key(fromTitle: app.windowTitle),
-            sourceTitle: app.windowTitle,
-            content: content
-        )
+        let content = String(lines.joined(separator: "\n").suffix(contentCap))
+        return ParsedCapture(sourceApp: "Mail", sourceKey: "mail:inbox",
+                             sourceTitle: windowTitle, content: content)
     }
 
-    /// "All Inboxes – 218 messages" -> "mail:all-inboxes"; strips a trailing count clause.
-    func key(fromTitle title: String?) -> String {
-        guard let title, !title.isEmpty else { return "mail:inbox" }
-        // Drop a trailing "– N messages" / "— N messages" count (volatile) before slugging.
-        let mailbox = title.split(whereSeparator: { $0 == "–" || $0 == "—" }).first.map(String.init) ?? title
-        let slug = mailbox.lowercased().trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "-")
-        return "mail:\(slug.isEmpty ? "inbox" : slug)"
-    }
+    /// Per-account inbox read. Avoids the unified "inbox" (which errors -1741 on some setups)
+    /// by iterating accounts and their INBOX mailboxes. Emits "account » sender | subject".
+    static let script = """
+    tell application "Mail"
+        set out to ""
+        repeat with acct in accounts
+            set acctName to name of acct
+            try
+                repeat with mb in (mailboxes of acct)
+                    if (name of mb) is "INBOX" or (name of mb) is "Inbox" then
+                        set msgs to (messages of mb)
+                        set n to count of msgs
+                        if n > \(perAccountLimit) then set n to \(perAccountLimit)
+                        repeat with i from 1 to n
+                            set m to item i of msgs
+                            try
+                                set out to out & acctName & " » " & (sender of m) & " | " & (subject of m) & linefeed
+                            end try
+                        end repeat
+                    end if
+                end repeat
+            end try
+        end repeat
+        return out
+    end tell
+    """
 
-    /// Collect content-area message rows (excluding the sidebar) as
-    /// "sender — subject: preview" lines, in visual (top-to-bottom) order.
-    private func messageLines(in root: AXNode, windowX: CGFloat) -> [String] {
-        var rows: [(y: CGFloat, texts: [String])] = []
-        collectRows(root, into: &rows, windowX: windowX)
-        return rows.sorted { $0.y < $1.y }.compactMap { row in
-            let ts = row.texts.filter { !$0.isEmpty }
-            guard ts.count >= 2 else { return ts.first }
-            // Probed tuple order: sender | date | subject | preview. Compose a readable line;
-            // keep sender + subject + preview, fold the date in after the sender.
-            let sender = ts[0]
-            let rest = ts.dropFirst().joined(separator: " · ")
-            return "\(sender): \(rest)"
+    /// Run an AppleScript via /usr/bin/osascript. Returns stdout, or nil on failure/timeout.
+    /// Synchronous — safe because capture already runs off the main thread.
+    static func runAppleScript(_ source: String) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", source]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()   // swallow AppleScript errors (e.g. perms) — parse returns nil
+        do {
+            try proc.run()
+        } catch {
+            return nil
         }
-    }
-
-    private func collectRows(_ node: AXNode, into out: inout [(y: CGFloat, texts: [String])], windowX: CGFloat) {
-        if node.role == "AXRow" {
-            // Window-relative x: sidebar mailbox rows sit in the left band; message rows are
-            // to their right (probed at x≈568). AXFrame is global screen coords → subtract winX.
-            let x = node.frame?.origin.x ?? .greatestFiniteMagnitude
-            if x != .greatestFiniteMagnitude && (x - windowX) < Self.sidebarMaxX { return }
-            var texts: [(CGFloat, CGFloat, String)] = []
-            collectStaticText(node, into: &texts)
-            let ordered = texts.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }.map { $0.2 }
-            out.append((node.frame?.origin.y ?? 0, ordered))
-            return
-        }
-        for c in node.children { collectRows(c, into: &out, windowX: windowX) }
-    }
-
-    private func collectStaticText(_ node: AXNode, into out: inout [(CGFloat, CGFloat, String)]) {
-        if node.role == "AXStaticText", let v = node.value, !v.isEmpty {
-            out.append((node.frame?.origin.y ?? 0, node.frame?.origin.x ?? 0, v))
-        }
-        for c in node.children { collectStaticText(c, into: &out) }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else { return nil }
+        let out = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return out.isEmpty ? nil : out
     }
 }
