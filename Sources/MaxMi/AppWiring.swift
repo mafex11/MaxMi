@@ -154,6 +154,13 @@ final class AppWiring {
             return
         }
 
+        // Track recent apps on attempt (not just commit) so never-committing apps (e.g. WhatsApp shallow tree) can be paused.
+        let entry = (bundleID: app.bundleID, name: app.name)
+        if !recentApps.contains(where: { $0.bundleID == entry.bundleID }) {
+            recentApps.insert(entry, at: 0)
+            if recentApps.count > 8 { recentApps.removeLast() }
+        }
+
         // Chromium browsers and Slack need retry-shortly for post-kick empty trees (spec §10).
         let needsRetry = Browser(rawValue: app.bundleID)?.isChromium == true || app.bundleID == ParserRegistry.slackBundleID
         let attemptsLeft = needsRetry ? 3 : 1
@@ -188,14 +195,15 @@ final class AppWiring {
                 return
             }
 
-            guard !Denylist.isBlocked(parsed.sourceKey) else { return }
-            // Per-thread pause gate: fail closed on DB error.
+            // Decision gate: denylist + per-thread pause. Fail closed on DB error.
+            let pausedThreads: Set<String>
             do {
-                if try store.pausedThreads().contains(parsed.sourceKey) { return }
+                pausedThreads = try store.pausedThreads()
             } catch {
                 NSLog("MaxMi: pausedThreads read failed, skipping capture: \(error)")
                 return
             }
+            guard CaptureDispatch.shouldCommit(parsed: parsed, pausedThreads: pausedThreads) else { return }
 
             let result = try store.commitCapture(
                 CaptureInput(sourceApp: parsed.sourceApp, sourceKey: parsed.sourceKey,
@@ -207,12 +215,6 @@ final class AppWiring {
                 captureCount += 1
                 menuBar.captureCount = captureCount
                 lastSourceKey = parsed.sourceKey
-                // Track recent apps (last ~8 distinct)
-                let entry = (bundleID: app.bundleID, name: app.name)
-                if !recentApps.contains(where: { $0.bundleID == entry.bundleID }) {
-                    recentApps.insert(entry, at: 0)
-                    if recentApps.count > 8 { recentApps.removeLast() }
-                }
             case .deduplicated:
                 // Update lastSourceKey even on dedup so "Pause current thread" targets the right thread.
                 lastSourceKey = parsed.sourceKey

@@ -46,6 +46,11 @@ final class MenuBarController {
         let appPauseItem = NSMenuItem(title: "Pause capture for ▸", action: nil, keyEquivalent: "")
         let appPauseMenu = NSMenu()
         appPauseItem.submenu = appPauseMenu
+
+        // Pause current thread
+        let pauseThreadItem = NSMenuItem(title: "Pause capture for current thread", action: nil, keyEquivalent: "")
+        pauseThreadItem.setAction(onPauseCurrentThread)
+
         // Populate dynamically on menu open
         let delegate = MenuDelegate(
             updateAppPauseMenu: { [weak appPauseMenu] in
@@ -64,17 +69,14 @@ final class MenuBarController {
                     placeholder.isEnabled = false
                     appPauseMenu.addItem(placeholder)
                 }
+            },
+            updatePauseThreadItem: { [weak pauseThreadItem] in
+                pauseThreadItem?.isEnabled = lastSourceKey() != nil
             }
         )
         self.menuDelegate = delegate
         menu.delegate = delegate
         menu.addItem(appPauseItem)
-
-        // Pause current thread
-        let pauseThreadItem = NSMenuItem(title: "Pause capture for current thread", action: nil, keyEquivalent: "")
-        pauseThreadItem.setAction {
-            if lastSourceKey() != nil { onPauseCurrentThread() }
-        }
         menu.addItem(pauseThreadItem)
 
         menu.addItem(.separator())
@@ -110,10 +112,13 @@ extension NSApplication {
 
 private final class MenuDelegate: NSObject, NSMenuDelegate {
     let updateAppPauseMenu: () -> Void
-    init(updateAppPauseMenu: @escaping () -> Void) {
+    let updatePauseThreadItem: () -> Void
+    init(updateAppPauseMenu: @escaping () -> Void, updatePauseThreadItem: @escaping () -> Void) {
         self.updateAppPauseMenu = updateAppPauseMenu
+        self.updatePauseThreadItem = updatePauseThreadItem
     }
     func menuWillOpen(_ menu: NSMenu) {
         updateAppPauseMenu()
+        updatePauseThreadItem()
     }
 }

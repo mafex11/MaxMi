@@ -15,8 +15,12 @@ extension Store {
 
     private func readSet(_ key: String) throws -> Set<String> {
         try db.dbQueue.read { d in
-            guard let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: [key]),
-                  let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) else { return [] }
+            guard let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: [key]) else { return [] }
+            // Recoverable metadata: log decode failure and treat as empty.
+            guard let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) else {
+                NSLog("MaxMi: paused-set '\(key)' JSON decode failed, treating as empty: \(json)")
+                return []
+            }
             return Set(arr)
         }
     }
@@ -24,9 +28,13 @@ extension Store {
     private func mutateSet(_ key: String, element: String, insert: Bool, nowMs: EpochMs) throws {
         try db.dbQueue.write { d in
             var set: Set<String> = []
-            if let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: [key]),
-               let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) {
-                set = Set(arr)
+            if let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: [key]) {
+                // Recoverable metadata: log decode failure and treat as empty.
+                if let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) {
+                    set = Set(arr)
+                } else {
+                    NSLog("MaxMi: paused-set '\(key)' JSON decode failed, treating as empty: \(json)")
+                }
             }
             if insert { set.insert(element) } else { set.remove(element) }
             let json = String(decoding: try JSONEncoder().encode(set.sorted()), as: UTF8.self)

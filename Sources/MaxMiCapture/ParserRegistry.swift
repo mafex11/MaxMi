@@ -33,4 +33,12 @@ public enum CaptureDispatch {
         }
         return (try? GenericAXParser().parse(window: window, app: app)) ?? nil
     }
+
+    /// Pure decision: should this parsed capture commit or be skipped?
+    /// Checks native denylist and per-thread pause set.
+    public static func shouldCommit(parsed: ParsedCapture, pausedThreads: Set<String>) -> Bool {
+        if Denylist.isBlocked(parsed.sourceKey) { return false }
+        if pausedThreads.contains(parsed.sourceKey) { return false }
+        return true
+    }
 }
