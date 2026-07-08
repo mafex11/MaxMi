@@ -146,7 +146,13 @@ final class AppWiring {
 
     func captureFrontmost(app: AppInfo, pid: pid_t) {
         guard !paused else { return }
-        guard !((try? store.pausedApps().contains(app.bundleID)) ?? false) else { return }
+        // Pause gate: fail closed on DB error (privacy-safe).
+        do {
+            if try store.pausedApps().contains(app.bundleID) { return }
+        } catch {
+            NSLog("MaxMi: pausedApps read failed, skipping capture: \(error)")
+            return
+        }
 
         // Chromium browsers and Slack need retry-shortly for post-kick empty trees (spec §10).
         let needsRetry = Browser(rawValue: app.bundleID)?.isChromium == true || app.bundleID == ParserRegistry.slackBundleID
@@ -167,9 +173,9 @@ final class AppWiring {
             let parsed: ParsedCapture?
 
             // Browsers: preserve exact behavior using BrowserTabExtractor
-            if let browser = Browser(rawValue: app.bundleID) {
+            if Browser(rawValue: app.bundleID) != nil {
                 let cap = try BrowserTabExtractor.extract(window: window, windowTitle: title)
-                guard !Denylist.isBlocked(cap.url) else { return }
+                guard !Denylist.isBlockedWebURL(cap.url) else { return }
                 parsed = ParsedCapture(sourceApp: "Web", sourceKey: cap.url, sourceTitle: cap.title, content: cap.content)
             } else {
                 // Non-browsers: dispatch through CaptureDispatch
@@ -178,31 +184,38 @@ final class AppWiring {
 
             // Shared tail: guard parsed, check denylist + pause, commit
             guard let parsed else {
-                if Browser(rawValue: app.bundleID) != nil {
-                    retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft)
-                }
+                retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft)
                 return
             }
 
             guard !Denylist.isBlocked(parsed.sourceKey) else { return }
-            guard !((try? store.pausedThreads().contains(parsed.sourceKey)) ?? false) else { return }
+            // Per-thread pause gate: fail closed on DB error.
+            do {
+                if try store.pausedThreads().contains(parsed.sourceKey) { return }
+            } catch {
+                NSLog("MaxMi: pausedThreads read failed, skipping capture: \(error)")
+                return
+            }
 
             let result = try store.commitCapture(
                 CaptureInput(sourceApp: parsed.sourceApp, sourceKey: parsed.sourceKey,
                             sourceTitle: parsed.sourceTitle, content: parsed.content),
                 nowMs: epochNowMs())
 
-            if case .committed = result {
+            switch result {
+            case .committed:
                 captureCount += 1
                 menuBar.captureCount = captureCount
                 lastSourceKey = parsed.sourceKey
-
                 // Track recent apps (last ~8 distinct)
                 let entry = (bundleID: app.bundleID, name: app.name)
                 if !recentApps.contains(where: { $0.bundleID == entry.bundleID }) {
                     recentApps.insert(entry, at: 0)
                     if recentApps.count > 8 { recentApps.removeLast() }
                 }
+            case .deduplicated:
+                // Update lastSourceKey even on dedup so "Pause current thread" targets the right thread.
+                lastSourceKey = parsed.sourceKey
             }
         } catch ExtractionError.emptyContent, ExtractionError.noWebArea, ExtractionError.noURL {
             // Browser extraction errors: retry

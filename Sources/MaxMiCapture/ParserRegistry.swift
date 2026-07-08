@@ -20,8 +20,16 @@ public enum CaptureDispatch {
     public static func parse(window: AXNode, app: AppInfo, registry: ParserRegistry) -> ParsedCapture? {
         if let parser = registry.parser(for: app.bundleID) {
             // No-silent-fallback: registered parser owns this app. nil/throw -> skip, never generic.
-            let result = try? parser.parse(window: window, app: app)
-            return result ?? nil
+            do {
+                guard let result = try parser.parse(window: window, app: app) else {
+                    FileHandle.standardError.write(Data("maxmi: parser for \(app.bundleID) returned nil (skipped)\n".utf8))
+                    return nil
+                }
+                return result
+            } catch {
+                FileHandle.standardError.write(Data("maxmi: parser for \(app.bundleID) threw: \(error)\n".utf8))
+                return nil
+            }
         }
         return (try? GenericAXParser().parse(window: window, app: app)) ?? nil
     }
