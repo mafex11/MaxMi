@@ -41,13 +41,11 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
     func clearRetry(id: String) throws { try store.clearRetry(id: id) }
 }
 
-// Known-capturable apps that use generic fallback (spec §3).
+// Apps admitted to capture that DON'T have a dedicated parser yet (ride generic fallback).
+// Apps with a registered parser self-admit via registry.parser(for:) in the gate, so they
+// need not be listed here (Notes/Notion/Obsidian/Mail moved to dedicated parsers).
 private let KnownApps: Set<String> = [
-    "net.whatsapp.WhatsApp",
-    "com.apple.Notes",
-    "notion.id",
-    "md.obsidian",
-    "com.apple.mail"
+    "net.whatsapp.WhatsApp",   // shallow AX tree; needs a native helper before a dedicated parser
 ]
 
 @MainActor
@@ -183,7 +181,10 @@ final class AppWiring {
             if Browser(rawValue: app.bundleID) != nil {
                 let cap = try BrowserTabExtractor.extract(window: window, windowTitle: title)
                 guard !Denylist.isBlockedWebURL(cap.url) else { return }
-                parsed = ParsedCapture(sourceApp: "Web", sourceKey: cap.url, sourceTitle: cap.title, content: cap.content)
+                // Normalize the URL into a stable thread key so volatile URL state (map coords,
+                // tracking params, doc tabs) doesn't fracture one page into many threads.
+                let key = URLKeyNormalizer.normalize(cap.url)
+                parsed = ParsedCapture(sourceApp: "Web", sourceKey: key, sourceTitle: cap.title, content: cap.content)
             } else {
                 // Non-browsers: dispatch through CaptureDispatch
                 parsed = CaptureDispatch.parse(window: window, app: appInfo, registry: registry)

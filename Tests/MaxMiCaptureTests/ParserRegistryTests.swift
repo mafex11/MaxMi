@@ -15,4 +15,10 @@ final class ParserRegistryTests: XCTestCase {
         XCTAssertTrue(r.parser(for: "md.obsidian") is ObsidianParser)
         XCTAssertTrue(r.parser(for: "com.apple.Notes") is NotesParser)
     }
+    func testMailAndTerminalRegistered() {
+        let r = ParserRegistry()
+        XCTAssertTrue(r.parser(for: "com.apple.mail") is MailParser)
+        XCTAssertTrue(r.parser(for: "dev.warp.Warp-Stable") is TerminalParser)
+        XCTAssertTrue(r.parser(for: "com.googlecode.iterm2") is TerminalParser)
+    }
 }

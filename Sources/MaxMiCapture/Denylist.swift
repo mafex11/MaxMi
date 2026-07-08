@@ -28,13 +28,23 @@ public enum Denylist {
         return blockedHostSubstrings_adult.contains { host.contains($0) }
     }
 
+    /// Adult terms that, when present in a SEARCH QUERY, block the capture. The host denylist
+    /// can't catch these (host is google.com); a search for adult content should not be stored.
+    static let blockedQueryTerms: [String] = ["porn", "hentai", "xxx", "nsfw", "jav ", "sex video"]
+
     /// Shared host/path denylist (banking, auth, meetings, adult). Used by both entry points.
     static func isBlockedHostOrPath(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
         if blockedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
         if isAdultHost(host) { return true }
         let path = url.path.lowercased()
-        return blockedPathFragments.contains { path.contains($0) }
+        if blockedPathFragments.contains(where: { path.contains($0) }) { return true }
+        // Adult search queries (e.g. google.com/search?q=...porn...) — host won't match, query will.
+        if let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "q" })?.value?.lowercased() {
+            if blockedQueryTerms.contains(where: { q.contains($0) }) { return true }
+        }
+        return false
     }
 
     /// Strict web-URL denylist for browsers: only http(s) schemes allowed, plus banking/meeting/auth hosts.
