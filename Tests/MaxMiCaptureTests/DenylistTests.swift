@@ -29,4 +29,14 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isBlocked("file:///Users/me/doc.pdf"))
         XCTAssertFalse(Denylist.isBlocked("https://example.com"))  // plain https stays allowed
     }
+    func testNativeSchemeKeysAreNotBlocked() {
+        // native-app source_keys must pass (they are not chrome://-style internal pages)
+        XCTAssertFalse(Denylist.isBlocked("slack:acme/general"))
+        XCTAssertFalse(Denylist.isBlocked("whatsapp:Mom"))
+        XCTAssertFalse(Denylist.isBlocked("com.apple.Notes:Groceries"))
+    }
+    func testBrowserInternalSchemesStillBlocked() {
+        XCTAssertTrue(Denylist.isBlocked("chrome://settings"))
+        XCTAssertTrue(Denylist.isBlocked("about:blank"))
+    }
 }

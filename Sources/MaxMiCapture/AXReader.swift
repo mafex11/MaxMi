@@ -5,6 +5,7 @@ public enum AXReader {
     public static func snapshotFrontmostWindow(pid: pid_t, maxNodes: Int = 20_000, maxDepth: Int = 40) -> (window: AXNode, title: String?)? {
         let app = AXUIElementCreateApplication(pid)
         guard let window = copyAttr(app, kAXFocusedWindowAttribute) as! AXUIElement?
+                ?? copyAttr(app, "AXMainWindow") as! AXUIElement?
                 ?? (copyAttr(app, kAXWindowsAttribute) as? [AXUIElement])?.first else { return nil }
         var budget = maxNodes
         let node = convert(window, depth: 0, maxDepth: maxDepth, budget: &budget)

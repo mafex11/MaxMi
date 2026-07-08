@@ -16,9 +16,9 @@ public enum Denylist {
 
     public static func isBlocked(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString) else { return false }
-        // Only regular web pages carry memory value; browser-internal schemes
-        // (chrome://, about:, edge://, arc://, file:// …) are never captured.
-        if let scheme = url.scheme?.lowercased(), scheme != "http", scheme != "https" { return true }
+        // Block browser-internal pages, not native-app source keys (slack:, whatsapp:, bundleid:title).
+        let browserInternalSchemes: Set<String> = ["chrome", "about", "edge", "arc", "brave", "vivaldi", "file", "view-source", "devtools", "chrome-extension"]
+        if let scheme = url.scheme?.lowercased(), browserInternalSchemes.contains(scheme) { return true }
         guard let host = url.host?.lowercased() else { return false }
         if blockedHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
         let path = url.path.lowercased()
