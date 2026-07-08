@@ -18,7 +18,9 @@ public struct SlackParser: SourceParser {
             kept.insert(line, at: 0)
             total += add
         }
-        let content = kept.joined(separator: "\n")
+        // Hard cap: a single newest message longer than the cap is kept but bounded
+        // (its tail), so one pathological line can't bloat a version unboundedly.
+        let content = String(kept.joined(separator: "\n").suffix(Self.contentCap))
         return ParsedCapture(
             sourceApp: "Slack",
             sourceKey: key(fromTitle: app.windowTitle),

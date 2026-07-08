@@ -10,6 +10,18 @@ final class SlackParserTests: XCTestCase {
         AppInfo(bundleID: "com.tinyspeck.slackmacgap", name: "Slack", windowTitle: title)
     }
 
+    func testSingleOversizeMessageStillHardCapped() throws {
+        // One message far larger than the cap must still be bounded (resource-bound guard).
+        let huge = String(repeating: "x", count: 20_000)
+        let win = AXNode(role: "AXWindow", value: nil, title: "c - w - Slack", url: nil, frame: nil, focused: false,
+            children: [AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                              frame: CGRect(x: 0, y: 0, width: 10, height: 10), focused: false,
+                children: [AXNode(role: "AXStaticText", value: huge, title: nil, url: nil,
+                                  frame: CGRect(x: 0, y: 0, width: 10, height: 10), focused: false, children: [])])])
+        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("c - w - Slack")))
+        XCTAssertLessThanOrEqual(cap.content.count, 8000, "single oversize message must not bypass the cap")
+    }
+
     func testKeyFromTitleAndSenderAttributedMessages() throws {
         let win = try fixture("slack-window")
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
