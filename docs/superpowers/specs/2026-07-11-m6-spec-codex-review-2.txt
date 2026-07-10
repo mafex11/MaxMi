@@ -1,3 +1,39 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4e1a-ef66-7851-87f6-cfd079f15197
+--------
+user
+Revised the M6 spec (docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md) addressing all 5 criticals + should-fixes — re-read the changed sections (§2 agent, §3 adaptation, §8 schema, §9 privacy/cost, §6 UI). Summary:
+- CRITICAL session model: replaced activity_conversations with activity_sessions (id, started/ended/last_activity_at, summary_ciphertext, summary_status CHECK, source_hash, model_id, prompt_version) + activity_session_versions membership table (provenance -> "expand to detail"). Sessions keyed by own UUID (revisit = new session), NOT app+url (removes overwrite bug + cleartext url leak). source_hash guards against summarizing still-mutating current-hour versions.
+- CRITICAL segmentation: deterministic SessionSegmenter (app-change + inactivity gap from activity_app_visits) — NOT a Gemini detect-conversation pass (store is hour-bucketed/mutable, not an event stream). Gemini only writes the display summary for a closed/idle session.
+- CRITICAL FocusObserver: added onFocusChanged callback; close open visits on app-switch/sleep/lock/terminate/startup-crash-repair; sensitive-denylist apps produce NO visit.
+- CRITICAL Gemini consent: explicit disclosure (not "unchanged trust model"); pinned model gemini-2.5-flash-lite + real cost ($0.72-3.75/mo) + shared throttle/backoff for 429.
+- CRITICAL agent: durable cursor (agent_runs.input_from/to = source of truth, not a Timer); NSBackgroundActivityScheduler + launch/foreground-when-overdue idle-gated trigger; serialized via actor/lease; ID-based create/update/resolve ops (structured output, validated) NOT title matching; NEVER resolve on absence; dismissal terminal; bounded input + backfill batches; source_refs + agent_action_item_events audit.
+- Encrypt resolution_evidence; CHECK constraints on states; always-dark branded Theme (not auto light/dark); NSStatusBarButton left-open/right-menu; 60fps = target not gate; stable IDs, no decrypt/format in body; privacy controls (global + per-app exclusion) moved INTO M6a.
+
+Is the spec now ready for the M6a implementation plan? Only flag remaining must-fixes.
+
+2026-07-10T22:22:07.703407Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll re-read the revised spec in full and check whether the new invariants are now implementable against MaxMi’s existing AppKit, SQLite, and relay boundaries. I’ll limit the result to true M6a blockers.
+exec
+/bin/zsh -lc "wc -l docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md && sed -n '1,320p' docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+     205 docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md
 # MaxMi — M6: Activity Timeline + Hourly Agent + Minimi-style UI (+ Dog Logo)
 
 **Date:** 2026-07-11
@@ -59,10 +95,8 @@ This spec covers all three at design level; each gets its own implementation pla
 
 ```
 Sources/MaxMiStore/Migrations.swift        MODIFY: v4 — activity_app_visits, activity_sessions,
-                                                        activity_session_evidence, agent_runs,
+                                                        activity_session_versions, agent_runs,
                                                         agent_action_items, agent_action_item_events
-Sources/MaxMiStore/MaxMiDatabase.swift      MODIFY: enable PRAGMA foreign_keys = ON (Codex)
-Sources/MaxMi/ActivityPrivacySheet.swift    NEW (M6a): SwiftUI consent + global/per-app exclusion sheet
 Sources/MaxMiStore/ActivityStore.swift      NEW: open/close visits, create sessions + member versions,
                                                   set summary (source_hash guard), query timeline
 Sources/MaxMiStore/AgentStore.swift          NEW: agent_runs cursor + action_items ID-op transitions
@@ -86,7 +120,7 @@ packaging/assets/                              NEW: dog app icon (icon.icns) + t
 packaging/make-app.sh                          MODIFY: install icon.icns + tray assets
 ```
 
-Data flow (▲REV2 — consistent with the revised model): FocusObserver `onFocusChanged` → `ActivityStore` opens/closes `activity_app_visits` (skipping sensitive + user-excluded apps) and snapshots attributed content into `activity_session_evidence`. On session close/idle → `SessionSegmenter` (deterministic: app-change + gap) finalizes `activity_sessions` + evidence → `DisplaySummarizer` (Gemini) writes the encrypted `summary_ciphertext` for closed sessions (guarded by `source_hash`). Idle-gated/overdue trigger (`NSBackgroundActivityScheduler` + launch/foreground catch-up, durable cursor) → `HourlyAgent` (actor) reviews new evidence since `agent_runs.input_to` → Gemini structured-output ID-ops → `AgentStore` applies create/update/resolve transactionally + events audit. Menu-bar dog left-click → `ActivityWindow` (SwiftUI) loads `ActivityViewModel` → renders timeline + action items.
+Data flow: FocusObserver app-switch → `ActivityStore.recordVisit` (timeline). Idle/periodic → `ConversationDetector` groups new versions into sessions → `DisplaySummarizer` (Gemini) writes each session `summary` → `activity_conversations`. Hourly timer → `HourlyAgent` reviews the window's new versions → Gemini hourly-review → action-item deltas → `AgentStore`. Menu-bar dog click → `ActivityWindow` (SwiftUI) loads `ActivityViewModel` → renders timeline + action items.
 
 ## 6. UI/UX spec (SwiftUI, Minimi-style — clean/animated/smooth)
 
@@ -128,18 +162,11 @@ CREATE TABLE activity_sessions (
 CREATE INDEX idx_sessions_day ON activity_sessions(day_bucket DESC, started_at DESC);
 CREATE INDEX idx_sessions_summ ON activity_sessions(summary_status) WHERE summary_status='pending';
 
--- Immutable per-session EVIDENCE snapshot (▲REV2 — Codex critical): a `versions` row is
--- overwritten throughout its hour, so pointing at version_id alone can lose/misattribute the
--- earlier session's content when an app is revisited within the hour. So we snapshot the
--- attributed content at capture time into an immutable, encrypted row PER SESSION.
-CREATE TABLE activity_session_evidence (
-  id TEXT PRIMARY KEY,
+-- Immutable provenance: which versions belong to a session (enables "expand to detail").
+CREATE TABLE activity_session_versions (
   session_id TEXT NOT NULL REFERENCES activity_sessions(id),
-  version_id TEXT REFERENCES versions(id),     -- soft provenance link (may later mutate)
-  captured_at INTEGER NOT NULL,
-  content_hash TEXT NOT NULL,                   -- hash of the snapshot at capture time
-  content_ciphertext TEXT NOT NULL);            -- immutable encrypted snapshot (enc:v1:)
-CREATE INDEX idx_evidence_session ON activity_session_evidence(session_id, captured_at);
+  version_id TEXT NOT NULL REFERENCES versions(id),
+  PRIMARY KEY(session_id, version_id));
 
 -- One row per agent review, with a DURABLE CURSOR (source of truth, survives restart/sleep).
 CREATE TABLE agent_runs (
@@ -171,14 +198,12 @@ CREATE TABLE agent_action_item_events (
 
 **Encryption:** all derived text — `summary_ciphertext`, item `title/details/resolution_evidence` — is **encrypted at rest** (`enc:v1:`). Cleartext-for-indexing: `app_bundle`, `app_label`, timestamps, buckets, status. NOTE (▲REV, honest): unlike the original draft there is NO `sub_key`/url/title column — that removes a cleartext leak *and* the overwrite-on-revisit bug. `app_label` is the only human-ish cleartext (an app name, low-sensitivity), documented.
 
-**Session identity & staleness (▲REV):** sessions are identified by their own UUID (never by app+url), so revisiting a page next week creates a NEW session. `source_hash` = hash over the session's `activity_session_evidence` snapshots; a session is (re)summarized only when it's closed/idle AND its `source_hash` changed — never while a current-hour version is still mutating. Summaries + "expand to detail" read the **immutable evidence snapshots**, not the mutable `versions` rows (▲REV2), so a same-hour revisit can't corrupt an earlier session's content.
-
-**FK enforcement (▲REV2 — Codex):** `MaxMiDatabase` must enable `PRAGMA foreign_keys = ON` in its GRDB connection setup for the `REFERENCES` constraints above to actually enforce; the v4 migration/task adds this (it's currently off).
+**Session identity & staleness (▲REV):** sessions are identified by their own UUID (never by app+url), so revisiting a page next week creates a NEW session. `source_hash` = hash of the member `version_id`+`content_hash` set; a session is (re)summarized only when it's closed/idle AND its `source_hash` changed — never while a current-hour version is still mutating. This prevents stale/duplicate summaries over the mutable store.
 
 ## 9. Privacy / consent / cost (▲REV)
 - All summaries/action-items encrypted at rest (`enc:v1:`), including `resolution_evidence`.
 - **Explicit Gemini consent** (Codex critical): activity synthesis sends summaries + open-item history to Google's Gemini API. A first-run/Settings disclosure states this clearly; if declined, capture still works but no activity synthesis runs. Not "unchanged trust model."
-- **Activity privacy controls in M6a** (▲REV2 — with a concrete surface + semantics): a lightweight **M6a privacy sheet** (a menu command "Activity Privacy…" opening a small SwiftUI sheet — NOT the full M6c Settings window) shown before synthesis first runs. It offers a **global activity-synthesis toggle** + **per-app exclusion** (`activity.disabled_app_bundle_ids`). Semantics: an excluded/globally-disabled app produces **NO visits, NO sessions, NO evidence snapshots** (not merely "no Gemini summary") — so the cleartext SQLite timeline never reveals excluded app use. Toggling an app to excluded **deletes that app's existing activity rows** (visits/sessions/evidence). Sensitive-denylist apps are always excluded regardless.
+- **Activity privacy controls in M6a** (not M6c): global activity-synthesis toggle + per-app exclusion (`activity.disabled_app_bundle_ids` in settings) applied BEFORE any session is written. Sensitive-denylist apps never produce visits or sessions.
 - **Cost (real numbers, Codex):** pin an explicit model ID (e.g. `gemini-2.5-flash-lite`, $0.10/M in, $0.40/M out — NOT the moving `-latest` alias). ~24 reviews/day @ 8k in + 500 out ≈ **$0.72/mo**; @ 50k in ≈ **$3.75/mo** before display summaries. Settings shows an estimated-usage note.
 - **Rate limits (Codex):** Gemini is limited per project across RPM/TPM/RPD; a 429 on any dimension. M6 shares one throttle with extraction/embedding + exponential backoff with jitter.
 - **Timezone:** store epoch-ms UTC; derive `day_bucket` from one documented local-timezone policy (avoids DST/travel grouping surprises).
@@ -207,10 +232,120 @@ CREATE TABLE agent_action_item_events (
 1. App-visit timeline recorded; sessions grouped with Gemini summaries ("what you did in <app>").
 2. Menu-bar **dog** icon; clicking opens the SwiftUI Activity window showing the timeline, grouped by day/app, animated + smooth.
 3. Hourly agent runs on schedule, surfaces action items; Action Items inbox lists them; resolve/dismiss works + persists.
-4. Derived text (summaries, action items, evidence, resolution_evidence) encrypted at rest; **per-app exclusion + global toggle work in M6a** (excluded apps produce no visits/sessions/evidence; toggling deletes existing rows); Gemini-consent disclosure shown before first synthesis.
-5. Full Settings window (Launch at Login, pause, per-app disable UI, Check for Updates, model/key status) — M6c.
-6. UI is clean/animated/smooth (spring insert/resolve, measured-60fps target, vibrancy, **intentional always-dark branded palette via Theme tokens** — not auto light/dark) — the ship-readiness bar.
+4. Derived text encrypted at rest; per-app disable works (M6c).
+5. Settings window (Launch at Login, pause, per-app disable, Check for Updates, status) — M6c.
+6. UI is clean/animated/smooth (spring insert/resolve, 60fps, vibrancy, light/dark) — the ship-readiness bar.
 7. Full fixture suite green; no regressions; synthesis logic isolated in MaxMiActivity, views in MaxMiUI.
 
 ## 14. Rollout
 Per user goal: **spec → Codex gpt-5.6-terra review → revise → implementation plan → Codex review (same chat) → revise → implement subagent-driven → Codex review of the IMPLEMENTATION (same chat) → revise.** Order: M6a (activity + summaries + window + dog logo + privacy controls), then M6b (hourly agent + action items), then M6c (settings + final ship polish: clean/animated/smooth pass, Launch-at-Login, Check-for-Updates, per-app disable UI). Dog logo lands in M6a. End state: MaxMi ~99% ship-ready.
+
+exec
+/bin/zsh -lc "rg -n \"struct MaxMiDatabase|class MaxMiDatabase|foreignKeys|foreign\" Sources/MaxMiStore && sed -n '1,180p' Sources/MaxMiStore/Database.swift 2>/dev/null || true && find Sources/MaxMiStore -maxdepth 1 -type f -print | sort" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+Sources/MaxMiStore/Database.swift:5:public final class MaxMiDatabase {
+import Foundation
+import GRDB
+import CSQLiteVec
+
+public final class MaxMiDatabase {
+    public let dbQueue: DatabaseQueue
+
+    public init(path: String, readOnly: Bool = false) throws {
+        var config = Configuration()
+        config.readonly = readOnly
+        config.prepareDatabase { db in
+            var err: UnsafeMutablePointer<CChar>? = nil
+            let rc = sqlite3_vec_init(db.sqliteConnection, &err, nil)
+            if rc != SQLITE_OK {
+                let msg = err.map { String(cString: $0) } ?? "sqlite3_vec_init failed"
+                sqlite3_free(err)
+                throw DatabaseError(resultCode: ResultCode(rawValue: rc), message: msg)
+            }
+        }
+        let isFile = path != ":memory:"
+        if isFile && !readOnly {
+            try FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+        }
+        dbQueue = try DatabaseQueue(path: path, configuration: config)
+        if isFile && !readOnly {
+            // Must be outside transaction (GRDB starts a deferred transaction in .write).
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "PRAGMA journal_mode = WAL")
+            }
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600], ofItemAtPath: path + suffix)
+            }
+        }
+        if !readOnly {
+            try Migrations.migrator.migrate(dbQueue)
+        }
+    }
+
+    public static func inMemory() throws -> MaxMiDatabase {
+        try MaxMiDatabase(path: ":memory:")
+    }
+}
+Sources/MaxMiStore/Backfill.swift
+Sources/MaxMiStore/Database.swift
+Sources/MaxMiStore/MaxMiStore.swift
+Sources/MaxMiStore/MeetingStore.swift
+Sources/MaxMiStore/Migrations.swift
+Sources/MaxMiStore/PauseSettings.swift
+Sources/MaxMiStore/QueryAPI.swift
+Sources/MaxMiStore/Records.swift
+Sources/MaxMiStore/StoreAPI.swift
+Sources/MaxMiStore/VectorIndex.swift
+
+codex
+**Almost, but not yet ready for the M6a plan.** Three must-fixes remain.
+
+1. **Session provenance is still not immutable enough.**  
+   `activity_session_versions(session_id, version_id)` does not preserve the session’s actual source content: a `versions` row is overwritten throughout its hour. If the user returns to the same app/thread twice in one hour, both sessions can point at the same mutable row, whose final content may describe only the later session. `source_hash` detects change; it does not recover the lost earlier input.
+
+   Specify one of these before planning:
+
+   - persist session-scoped immutable encrypted evidence/snapshots when capture is attributed to a session; or
+   - alter versioning to retain immutable revisions suitable for session membership.
+
+   The membership needs at least a captured-at timestamp and immutable content/content-hash reference. This is fundamental to truthful per-session summaries and “expand to detail.”
+
+2. **Privacy controls need concrete semantics and an M6a surface.**  
+   M6a says the privacy controls are required, but the only Settings window remains M6c. Define an M6a onboarding/privacy sheet or menu command that appears before synthesis starts.
+
+   Also state that global disable and per-app exclusion prevent **visits as well as sessions/evidence**, not merely Gemini summary generation. Otherwise the SQLite timeline still reveals excluded app use in cleartext metadata. Specify whether disabling/excluding also deletes existing activity-derived rows.
+
+3. **Repair the remaining internal contradictions.**  
+   Section 5’s data-flow paragraph still names `ConversationDetector`, `activity_conversations`, and an hourly timer; it conflicts with the revised `SessionSegmenter`, `activity_sessions`, and durable idle-gated agent design. Exit criteria still says per-app disable is M6c and mentions light/dark despite the always-dark decision. These are implementation-plan hazards, so update them before planning.
+
+One small schema implementation requirement: enable SQLite foreign-key enforcement (`PRAGMA foreign_keys = ON` in GRDB connection setup) or remove reliance on the declared `REFERENCES` constraints; the current `MaxMiDatabase` does not enable it.
+
+After those fixes, **yes: M6a is ready for an implementation plan.**
+tokens used
+1,17,105
+**Almost, but not yet ready for the M6a plan.** Three must-fixes remain.
+
+1. **Session provenance is still not immutable enough.**  
+   `activity_session_versions(session_id, version_id)` does not preserve the session’s actual source content: a `versions` row is overwritten throughout its hour. If the user returns to the same app/thread twice in one hour, both sessions can point at the same mutable row, whose final content may describe only the later session. `source_hash` detects change; it does not recover the lost earlier input.
+
+   Specify one of these before planning:
+
+   - persist session-scoped immutable encrypted evidence/snapshots when capture is attributed to a session; or
+   - alter versioning to retain immutable revisions suitable for session membership.
+
+   The membership needs at least a captured-at timestamp and immutable content/content-hash reference. This is fundamental to truthful per-session summaries and “expand to detail.”
+
+2. **Privacy controls need concrete semantics and an M6a surface.**  
+   M6a says the privacy controls are required, but the only Settings window remains M6c. Define an M6a onboarding/privacy sheet or menu command that appears before synthesis starts.
+
+   Also state that global disable and per-app exclusion prevent **visits as well as sessions/evidence**, not merely Gemini summary generation. Otherwise the SQLite timeline still reveals excluded app use in cleartext metadata. Specify whether disabling/excluding also deletes existing activity-derived rows.
+
+3. **Repair the remaining internal contradictions.**  
+   Section 5’s data-flow paragraph still names `ConversationDetector`, `activity_conversations`, and an hourly timer; it conflicts with the revised `SessionSegmenter`, `activity_sessions`, and durable idle-gated agent design. Exit criteria still says per-app disable is M6c and mentions light/dark despite the always-dark decision. These are implementation-plan hazards, so update them before planning.
+
+One small schema implementation requirement: enable SQLite foreign-key enforcement (`PRAGMA foreign_keys = ON` in GRDB connection setup) or remove reliance on the declared `REFERENCES` constraints; the current `MaxMiDatabase` does not enable it.
+
+After those fixes, **yes: M6a is ready for an implementation plan.**
