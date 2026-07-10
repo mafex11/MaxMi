@@ -1,36 +1,32 @@
-# MaxMi — M5: Meeting Capture (Detection + Right-Lane Recorder + Transcription)
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4db5-ce21-7df0-9196-bd4f9f9826ef
+--------
+user
+Applied all six consistency fixes to docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md — re-read the changed sections (§3,4,7,9,10,12): §4 now aligned (whisper.cpp default, public CoreAudio detection, meetings table in scope, no auto-end on backgrounding); §9 Speech permission is explicitly SFSpeech-fallback-only (whisper.cpp needs none); §10 no raw-PCM retry — persist partial transcript + set state=failed/transcription_status=partial; versions.metadata purpose defined as the version→meeting reverse link only (meetings table is source of truth); default local engine chosen concretely = whisper.cpp with ggml-base.en downloaded on-demand; SCContentFilter policy specified (app-scoped when known, browser-app-wide fallback, never display-wide by default); test plan updated to assert the meetings row/link not metadata.kind LIKE.
 
-**Date:** 2026-07-11
-**Status:** Revised after Codex gpt-5.6-terra review #1 (see `2026-07-11-m5-codex-review-1.txt`). Six critical issues addressed inline below (marked ▲REV).
-**Milestone:** M5 — the first genuinely new *capability* since M1 (audio, not AX-tree). Everything prior captured on-screen text; M5 adds system-audio meeting capture + transcription + a meeting memory surface.
-**North star:** match Minimi's behaviour and UI/UX, reverse-engineered from the installed app (`/Applications/Minimi.app` — native helpers + `main.jsc` + `rightLane` React bundle). See [[project_minimi_reverse_engineering]], [[project_maxmi]], [[project_maxmi_ax_capture]].
+Final go/no-go for proceeding to the implementation plan? Only flag remaining must-fixes.
 
-## 1. What we're building
-
-When the user joins a meeting, MaxMi (a) **detects** it automatically, (b) shows a **small rounded rectangle popup docked to the right edge of the screen** offering to record, (c) on accept, **captures system + mic audio and transcribes it**, (d) stores the transcript as a **meeting-kind memory**, extracted and searchable, and (e) serves it through the now-real **`meeting_memory` MCP tool**. Behaviour and UX mirror Minimi.
-
-**Success test:** join a Zoom/Meet/Teams call → within a few seconds a right-edge recorder popup appears → click Record → speak → end the call → a meeting thread exists with a transcript, encrypted at rest, extracted to facts, and `meeting_memory` (action `list`/`search`/`get_context`) returns it; clicking "Don't record" dismisses and captures nothing.
-
-## 2. How Minimi does it (reverse-engineered evidence — the reference to match)
-
-**Detection** — `Resources/exec/meetings-coreaudio` (native helper). Uses a private CoreAudio "responsibility SPI" (`responsibility_get_pid_responsible_for_pid`, `runningApplicationWithProcessIdentifier:`) to determine *which app owns the active microphone*. When a known meeting app starts using the mic it emits `meetingAppChanged` JSON on stdout. Known apps observed in the binary: `us.zoom.xos`, `com.microsoft.teams2`, `com.cisco.webexmeetingsapp`, plus browsers (`com.google.Chrome`, `com.apple.Safari`, Edge, Brave, Opera, Vivaldi, Arc/Atlas) and `com.tinyspeck.slackmacgap`, Discord. Fallbacks: `google-meet-monitor` (browser tab monitor) and a macOS unified-log-stream detector (`[MeetingDetector] falling back to log-stream detector`). Primary is core-audio (`[MeetingDetector] core-audio detector started (primary)`).
-
-**UI/UX** — a `rightLane.html` Electron `BrowserWindow`: frameless, transparent, `alwaysOnTop`, `setIgnoreMouseEvents` when idle, positioned against the right edge via `getPrimaryDisplay().workArea` + `setBounds`, repositioned on `display-metrics-changed`. Shows a "meeting-nudge" card with **Record** and **"DontRecord"** (skip) actions and a live audio-level meter (`onAudioLevel`, `right-lane-window-update`, `resize-right-lane-window`, `hide-right-lane-window`). On skip → `[MeetingCapture] user skipped`.
-
-**Audio → transcription** — `Resources/exec/captureAudio` streams audio to Deepgram over a WebSocket (`/transcribe?token=`, `[AudioCapture] Deepgram ready`, `deepgram_ready`). Transcript is committed as a `memory_versions` row with `metadata {"kind":"meeting"}`; extraction via backend `/api/memory/extract-meeting` + `/api/activity/summarize-meeting`. `meeting_memory` MCP tool queries `WHERE v.metadata LIKE '%"kind":"meeting"%'`.
-
-**Storage** — meetings are ordinary threads/versions tagged by `metadata.kind="meeting"` (not a separate table), so they reuse encryption, extraction, and search.
-
-## 3. MaxMi adaptation (what differs, and why)
-
-MaxMi is **all-Swift, in-process, local-first** (no Electron, no always-on cloud relay beyond the existing Gemini extraction). So:
-
-- **Detection (▲REV — public CoreAudio process objects, NOT frontmost-app):** a Swift `MeetingDetector` using the **public** CoreAudio audio-process API: enumerate `kAudioHardwarePropertyProcessObjectList`, read per-process `kAudioProcessPropertyPID` / `kAudioProcessPropertyBundleID` / `kAudioProcessPropertyIsRunningInput`, and subscribe to changes via `AudioObjectAddPropertyListenerBlock`. A candidate = a process with `IsRunningInput == 1` whose bundle id is on the meeting-app allowlist. This is the primary signal (the review confirmed the private `responsibility_get_pid_responsible_for_pid` SPI is NOT needed — the process-object list is public). Corroborate with the meeting-app allowlist + optional AX window-title evidence; per-app debounce/cooldown; **browser/Meet detection is explicitly best-effort** (a browser helper with input I/O is ambiguous; a muted join may be missed — the popup + manual "Record meeting" command are the safety valves).
-- **Popup (▲REV — clickable + correct screen):** a native **AppKit `NSPanel`** (`.nonactivatingPanel`, borderless, `isFloatingPanel = true`, `level = .statusBar`, `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`). **`ignoresMouseEvents` stays FALSE** (setting it true would kill the Record/Skip buttons — review catch); idle click-through, if wanted, is done via per-view hit-testing, not the whole panel. Docked to the right edge of **the meeting window's screen** (or the active/cursor screen), NOT hardcoded `NSScreen.main` (wrong on a secondary fullscreen display). Reposition on `NSApplication.didChangeScreenParametersNotification`. Swift equivalent of Minimi's right-lane BrowserWindow.
-- **Audio (▲REV — explicit mixing pipeline):** `ScreenCaptureKit` (`SCStream`, `SCStreamConfiguration.capturesAudio = true`, `excludesCurrentProcessAudio = true`, an `SCContentFilter`) for **system/app output audio** + `AVAudioEngine` for **mic input**. These are TWO unsynchronized streams (different sample rate/channels/clock), so `AudioMixer` must: retain source timestamps, normalize with `AVAudioConverter`, align on one timeline, handle Bluetooth/AirPods + device-change mid-call, and decide mic-vs-system overlap (default: capture system output for remote voices + mic for the user, mixed, with echo/duplicate guarding). Audio granularity is per-**application**, not per-tab. **`SCContentFilter` policy (▲REV2 — correct API):** use `SCContentFilter(display:includingApplications:exceptingWindows:)` scoped to the detected meeting app's `SCRunningApplication` on its display (app-scoped audio) — NOT `SCContentFilter(desktopIndependentWindow:)`, which is window-only. For a browser meeting, include the browser application (browser-wide audio; can't isolate the tab). **If no matching shareable `SCRunningApplication`/display exists → fall back to mic-only** (`capture_mode='mic-only'`), never an implicit display-wide capture. Bound memory + backpressure; do NOT retain raw PCM for "retry" (≈23 MB/min/source) — on failure, keep only the transcript received so far.
-- **Transcription (▲REV — SFSpeech can't do long-form; streaming engine required):** pluggable `Transcriber` protocol. **`SFSpeechRecognizer` has a documented ~1-minute per-task ceiling** and CANNOT be the primary engine for 30+ min meetings (review's #1 showstopper). **v1 default engine = whisper.cpp** (chosen concretely — review asked to pick one): MIT-licensed, fully offline, streamed by feeding fixed windows of mixed PCM to a persistent context. **Model = multilingual `ggml-base`** (~140 MB) — NOT the English-only `ggml-base.en` (▲REV2: a general meeting-capture promise needs multilingual; the user's own captures include non-English). **Model readiness (▲REV2 — download BEFORE recording, not during):** the model is downloaded/verified when meeting features are first enabled (or on first detection, before the Record button arms). Until the model is present, the popup shows "Preparing transcription…" and Record is disabled (we do NOT start recording while downloading, since we don't buffer raw PCM). Download is: checksummed + signature-verified, atomic install (temp→rename) into Application Support, offline/error-handled (retry, clear failure state), and disk-space-checked before starting. **Deepgram streaming** = opt-in alternative behind the same protocol if the user supplies a key. **SFSpeech** = degraded experimental fallback only (rolling ~50s tasks with overlap+stitch), never the promised path; only it needs `NSSpeechRecognitionUsageDescription` + `SFSpeechRecognizer.requestAuthorization`.
-- **Storage/MCP (▲REV — first-class session identity, no fingerprint dedup):** each meeting gets a **unique immutable session id** (UUIDv7 from start time) — meetings must NOT be keyed `meeting:<app>/<title>` through the normal fingerprint-dedup path (would merge recurring meetings / overwrite two same-title meetings in one hour / dedup repeated discussion — review's #6). A first-class **`meetings` table** (`id`, `thread_id`, `version_id`, `app`, `started_at`, `ended_at`, `state`, `capture_mode`, `transcription_status`) holds lifecycle/typed columns; the encrypted transcript stays in `versions` (reusing extraction/search) with a typed link, NOT queried via `metadata LIKE '%meeting%'` substring matching. `meeting_memory` MCP queries the `meetings` table (indexed), joining to versions/derivatives.
-
+2026-07-10T20:33:21.958143Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll verify the revised sections for any remaining implementation-blocking contradiction, then give a final go/no-go.
+exec
+/bin/zsh -lc "sed -n '34,190p' docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
 ## 4. Non-goals (M5 v1) — ▲REV, aligned with §3
 
 - **No cloud transcription by default.** Default = **on-device whisper.cpp** (see §3); Deepgram is an opt-in pluggable impl (user-supplied key). SFSpeech is a degraded fallback only, never default.
@@ -163,3 +159,70 @@ Returns markdown (matches existing MCP style). Decrypts transcript via the field
 ## 14. Rollout
 
 Spec → **Codex gpt-5.6-terra review** → revise → implementation plan → **Codex review (same chat)** → revise → subagent-driven build → live verify. Meetings is the last big capability to reach Minimi parity.
+
+exec
+/bin/zsh -lc "sed -n '20,58p' docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+**Audio → transcription** — `Resources/exec/captureAudio` streams audio to Deepgram over a WebSocket (`/transcribe?token=`, `[AudioCapture] Deepgram ready`, `deepgram_ready`). Transcript is committed as a `memory_versions` row with `metadata {"kind":"meeting"}`; extraction via backend `/api/memory/extract-meeting` + `/api/activity/summarize-meeting`. `meeting_memory` MCP tool queries `WHERE v.metadata LIKE '%"kind":"meeting"%'`.
+
+**Storage** — meetings are ordinary threads/versions tagged by `metadata.kind="meeting"` (not a separate table), so they reuse encryption, extraction, and search.
+
+## 3. MaxMi adaptation (what differs, and why)
+
+MaxMi is **all-Swift, in-process, local-first** (no Electron, no always-on cloud relay beyond the existing Gemini extraction). So:
+
+- **Detection (▲REV — public CoreAudio process objects, NOT frontmost-app):** a Swift `MeetingDetector` using the **public** CoreAudio audio-process API: enumerate `kAudioHardwarePropertyProcessObjectList`, read per-process `kAudioProcessPropertyPID` / `kAudioProcessPropertyBundleID` / `kAudioProcessPropertyIsRunningInput`, and subscribe to changes via `AudioObjectAddPropertyListenerBlock`. A candidate = a process with `IsRunningInput == 1` whose bundle id is on the meeting-app allowlist. This is the primary signal (the review confirmed the private `responsibility_get_pid_responsible_for_pid` SPI is NOT needed — the process-object list is public). Corroborate with the meeting-app allowlist + optional AX window-title evidence; per-app debounce/cooldown; **browser/Meet detection is explicitly best-effort** (a browser helper with input I/O is ambiguous; a muted join may be missed — the popup + manual "Record meeting" command are the safety valves).
+- **Popup (▲REV — clickable + correct screen):** a native **AppKit `NSPanel`** (`.nonactivatingPanel`, borderless, `isFloatingPanel = true`, `level = .statusBar`, `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`). **`ignoresMouseEvents` stays FALSE** (setting it true would kill the Record/Skip buttons — review catch); idle click-through, if wanted, is done via per-view hit-testing, not the whole panel. Docked to the right edge of **the meeting window's screen** (or the active/cursor screen), NOT hardcoded `NSScreen.main` (wrong on a secondary fullscreen display). Reposition on `NSApplication.didChangeScreenParametersNotification`. Swift equivalent of Minimi's right-lane BrowserWindow.
+- **Audio (▲REV — explicit mixing pipeline):** `ScreenCaptureKit` (`SCStream`, `SCStreamConfiguration.capturesAudio = true`, `excludesCurrentProcessAudio = true`, an `SCContentFilter`) for **system/app output audio** + `AVAudioEngine` for **mic input**. These are TWO unsynchronized streams (different sample rate/channels/clock), so `AudioMixer` must: retain source timestamps, normalize with `AVAudioConverter`, align on one timeline, handle Bluetooth/AirPods + device-change mid-call, and decide mic-vs-system overlap (default: capture system output for remote voices + mic for the user, mixed, with echo/duplicate guarding). Audio granularity is per-**application**, not per-tab. **`SCContentFilter` policy (▲REV):** target the *detected meeting app* specifically (`SCContentFilter(desktopIndependentWindow:)`/application scope) when known; for a browser-based meeting, fall back to *browser-application-wide* audio (documented: can't isolate the tab); **never default to a display-wide filter** (would catch unrelated music/notifications/another call). Bound memory + backpressure; do NOT retain raw PCM for "retry" (≈23 MB/min/source) — on failure, keep only the transcript received so far.
+- **Transcription (▲REV — SFSpeech can't do long-form; streaming engine required):** pluggable `Transcriber` protocol. **`SFSpeechRecognizer` has a documented ~1-minute per-task ceiling** and CANNOT be the primary engine for 30+ min meetings (review's #1 showstopper). **v1 default engine = whisper.cpp** (chosen concretely — review asked to pick one): MIT-licensed, fully offline, streamed by feeding fixed windows of mixed PCM to a persistent context. Ship the `ggml-base.en` model (~140 MB) via **on-demand download on first meeting** (not bundled in the app, to keep the app small), cached in Application Support; show a one-time "preparing transcription…" state. **Deepgram streaming** = opt-in alternative behind the same protocol if the user supplies a key. **SFSpeech** = degraded experimental fallback only (rolling ~50s tasks with overlap+stitch), never the promised path; only it needs `NSSpeechRecognitionUsageDescription` + `SFSpeechRecognizer.requestAuthorization`.
+- **Storage/MCP (▲REV — first-class session identity, no fingerprint dedup):** each meeting gets a **unique immutable session id** (UUIDv7 from start time) — meetings must NOT be keyed `meeting:<app>/<title>` through the normal fingerprint-dedup path (would merge recurring meetings / overwrite two same-title meetings in one hour / dedup repeated discussion — review's #6). A first-class **`meetings` table** (`id`, `thread_id`, `version_id`, `app`, `started_at`, `ended_at`, `state`, `capture_mode`, `transcription_status`) holds lifecycle/typed columns; the encrypted transcript stays in `versions` (reusing extraction/search) with a typed link, NOT queried via `metadata LIKE '%meeting%'` substring matching. `meeting_memory` MCP queries the `meetings` table (indexed), joining to versions/derivatives.
+
+## 4. Non-goals (M5 v1) — ▲REV, aligned with §3
+
+- **No cloud transcription by default.** Default = **on-device whisper.cpp** (see §3); Deepgram is an opt-in pluggable impl (user-supplied key). SFSpeech is a degraded fallback only, never default.
+- **No speaker diarization / per-speaker labels** (transcript is one stream; diarization is a follow-up).
+- **No private CoreAudio responsibility SPI** — detection uses the **public process-object API** + meeting-app allowlist (§3), not the frontmost-app heuristic.
+- **No meeting video/screen recording** — audio + transcript only.
+- **No auto-record** — always the popup prompt first (recording a meeting is consent-sensitive; never silent).
+- **No auto-end on app backgrounding** — manual Stop is authoritative (§3, §10).
+- **First-class `meetings` table IS in scope** (below the Store boundary): the additive v3 migration adds the table + a `versions.metadata` column (§7).
+- **No calendar integration** (title comes from the meeting app's window title — follow-up).
+
+## 5. Architecture / components
+
+```
+Sources/MaxMiMeetings/                         NEW module (audio is heavy; isolate; NON-UI)
+  MeetingDetector.swift      public CoreAudio process-object API -> candidate meeting-app w/ active input
+  MeetingAppList.swift       bundle ids: us.zoom.xos, com.microsoft.teams2, webex, + browsers/Meet
+  AudioCapture.swift         SCStream (app output) + AVAudioEngine (mic) -> AudioMixer
+  AudioMixer.swift           AVAudioConverter normalize + timestamp-align two streams -> single PCM + level
+  Transcriber.swift          protocol { start/feed/finish -> transcript }; WhisperTranscriber (default),
+                             DeepgramTranscriber (opt-in key), SFSpeechFallback (degraded only)
+  MeetingSession.swift       ACTOR state machine: detect->prompt->capture->transcribe->commit
+Sources/MaxMi/RightLanePanel.swift             NEW: NSPanel right-edge recorder (Record/Stop/Skip + level)
+Sources/MaxMi/AppWiring.swift                  MODIFY: own MeetingSession; wire detector->panel->store
+Sources/MaxMiStore/Migrations.swift            MODIFY: v3 adds versions.metadata TEXT + meetings table
+
+web search: 
+web search: site:developer.apple.com/documentation/screencapturekit/sccontentfilter "includingApplications" ...
+codex
+**No-go until three final must-fixes are written into the spec.** The earlier critical architecture issues are resolved.
+
+1. **Correct the `SCContentFilter` API/policy.** `SCContentFilter(desktopIndependentWindow:)` is a window-only filter, not application scope. For app-scoped capture, specify `SCContentFilter(display:includingApplications:exceptingWindows:)` using the detected `SCRunningApplication` and its display. Define the behavior when no matching shareable app/display exists: mic-only or an explicit fallback—not an implicit broad capture. [Apple’s filter API](https://developer.apple.com/documentation/screencapturekit/sccontentfilter)
+
+2. **Define first-use model readiness.** A 140 MB on-demand model cannot be downloading while recording unless you retain the opening audio—which the spec intentionally does not. Require/download/verify the model before Record becomes available, or clearly warn that transcription cannot begin until it is ready. Include checksum/signature, atomic install, offline/error handling, and disk-space behavior.
+
+3. **Resolve language scope.** `ggml-base.en` is English-only. Either explicitly make M5 v1 English-only (with UI copy), or use/select the multilingual `base` model. The current general meeting-capture promise conflicts with an English-only default.
+
+After those are addressed, **go ahead with the implementation plan**.
+tokens used
+1,10,235
+**No-go until three final must-fixes are written into the spec.** The earlier critical architecture issues are resolved.
+
+1. **Correct the `SCContentFilter` API/policy.** `SCContentFilter(desktopIndependentWindow:)` is a window-only filter, not application scope. For app-scoped capture, specify `SCContentFilter(display:includingApplications:exceptingWindows:)` using the detected `SCRunningApplication` and its display. Define the behavior when no matching shareable app/display exists: mic-only or an explicit fallback—not an implicit broad capture. [Apple’s filter API](https://developer.apple.com/documentation/screencapturekit/sccontentfilter)
+
+2. **Define first-use model readiness.** A 140 MB on-demand model cannot be downloading while recording unless you retain the opening audio—which the spec intentionally does not. Require/download/verify the model before Record becomes available, or clearly warn that transcription cannot begin until it is ready. Include checksum/signature, atomic install, offline/error handling, and disk-space behavior.
+
+3. **Resolve language scope.** `ggml-base.en` is English-only. Either explicitly make M5 v1 English-only (with UI copy), or use/select the multilingual `base` model. The current general meeting-capture promise conflicts with an English-only default.
+
+After those are addressed, **go ahead with the implementation plan**.
