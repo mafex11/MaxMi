@@ -148,6 +148,16 @@ enum Migrations {
               event TEXT NOT NULL, run_id TEXT, at INTEGER NOT NULL);
             """)
         }
+        m.registerMigration("v5") { db in
+            try db.execute(sql: """
+            ALTER TABLE agent_runs ADD COLUMN input_to_at INTEGER;
+            ALTER TABLE agent_runs ADD COLUMN input_to_session_id TEXT;
+            ALTER TABLE agent_runs ADD COLUMN lease_expires_at INTEGER;
+            ALTER TABLE agent_action_items ADD COLUMN idem_key TEXT;
+            CREATE UNIQUE INDEX idx_items_idem ON agent_action_items(idem_key) WHERE idem_key IS NOT NULL;
+            CREATE UNIQUE INDEX idx_one_running ON agent_runs(status) WHERE status='running';
+            """)
+        }
         return m
     }
 }
