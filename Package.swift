@@ -25,8 +25,9 @@ let package = Package(
         ]),
         .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),
         .target(name: "MaxMiRelay", dependencies: ["MaxMiCore"]),
+        .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore"]),
         .executableTarget(name: "MaxMi", dependencies: [
-            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay",
+            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay", "MaxMiMeetings",
         ]),
         .executableTarget(name: "MaxMiMCP", dependencies: [
             "MaxMiCore", "MaxMiStore", "MaxMiRelay",
@@ -37,5 +38,6 @@ let package = Package(
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "MaxMiRelayTests", dependencies: ["MaxMiRelay"]),
         .testTarget(name: "MaxMiMCPTests", dependencies: ["MaxMiMCP"]),
+        .testTarget(name: "MaxMiMeetingsTests", dependencies: ["MaxMiMeetings"]),
     ]
 )
