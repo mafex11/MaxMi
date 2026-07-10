@@ -1,0 +1,243 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4e1a-ef66-7851-87f6-cfd079f15197
+--------
+user
+Applied all 4 blockers:
+#1 SessionSegmenter moved to MaxMiCore and reordered to build FIRST (before ActivityStore); MaxMiStore stays free of MaxMiActivity. MaxMiActivity target now added in Task 4 (for the summarizer) not Task 2.
+#2 Correctness core: there is ONE globally-active eligible session (not per-app). AppWiring holds a monotonic focusGeneration bumped on every transition; a capture carries its start generation and its activity evidence is DISCARDED at completion if generation != current (normal memory capture still commits). On app transition AppWiring calls store.closeActiveSession immediately; first valid capture of the new span opens the new session. recordActivityCapture operates on the single active session, closing a defensively-found different-app open session.
+#3 Fixed stale test/impl APIs — tests now call recordActivityCapture + setSessionSummary(expectedSourceHash:) + closeActiveSession; added a stale-hash no-op assertion; summary_attempts/summary_next_attempt_at are in the v4 DDL (plan is authoritative).
+#4 Tri-state ActivityConsent (unset/granted/declined) persisted separately from activityEnabled; all visits/sessions/evidence gated on consent==.granted && enabled; unset -> show privacy window before synthesis; declined -> stay off, no auto re-prompt.
+
+GO for M6a subagent implementation, or remaining blockers?
+
+2026-07-10T22:37:54.576405Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll check the final plan changes around ordering, focus-generation attribution, schema/tests, and consent state.
+exec
+/bin/zsh -lc 'rg -n -C 3 "focusGeneration|closeActiveSession|recordActivityCapture|ActivityConsent|summary_attempts|SessionSegmenter|Task order|Task 1:|Task 2:|Task 4:" docs/superpowers/plans/2026-07-11-maxmi-m6a-activity.md' in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+4-
+5-**Goal:** Ship M6a — the deterministic activity-session layer (immutable evidence + Gemini display summaries), the SwiftUI Activity window opened from a dog menu-bar icon, and the activity-privacy sheet — per `docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md` (Codex gpt-5.6-terra: GO after 4 spec rounds).
+6-
+7:**Architecture:** FocusObserver gains `onFocusChanged`; `ActivityStore` opens a provisional session on first eligible capture, appends immutable encrypted evidence snapshots per commit, `SessionSegmenter` finalizes (closes) on app-change/idle, `DisplaySummarizer` (Gemini via `ActivityGenerationRelay`) summarizes closed sessions. A SwiftUI Activity window (always-dark Theme, `@MainActor @Observable` view model) renders the timeline, opened by left-click on the dog `NSStatusItem`. Privacy sheet gates synthesis (global + per-app exclusion). Dog app/tray icons ship.
+8-
+9-**Tech Stack:** Swift 6, GRDB (v4 migration + PRAGMA foreign_keys), MaxMiCore (FieldCipher/ContentHash/Ident/HourBucket), Gemini relay, SwiftUI + NSHostingController, iconutil.
+10-
+--
+13-- Build/test: `DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" swift test`; zero new warnings in our code.
+14-- Derived text (session `summary_ciphertext`, evidence `content_ciphertext`) encrypted via existing `FieldCipher.encrypt` (`enc:v1:`). Cleartext-for-index: app_bundle, app_label, timestamps, buckets, status.
+15-- **PRAGMA foreign_keys = ON** in `MaxMiDatabase` config.prepareDatabase (currently off); v4 tables use `REFERENCES` + `ON DELETE CASCADE`.
+16:- Session lifecycle: provisional open on first eligible capture → append immutable evidence per non-dedup commit (coalesce by `(session_id, content_hash)`) → `SessionSegmenter` closes on app-change/inactivity-gap. Summaries read evidence snapshots, NOT mutable `versions`.
+17-- Sensitive-denylist apps AND user-excluded apps (`activity.disabled_app_bundle_ids` setting) + global-disable produce NO visits/sessions/evidence. Excluding an app deletes its existing activity rows.
+18-- Gemini: pinned model `gemini-2.5-flash-lite`; shared throttle + backoff with the existing extraction path; summaries only for closed/idle sessions guarded by `source_hash`; explicit consent before first synthesis.
+19-- UI: always-dark branded Theme tokens (NOT auto light/dark); stable session IDs; no decrypt/date-format in SwiftUI `body` (precompute in view model); left-click opens window via `NSStatusBarButton` action, right-click `popUpMenu`.
+--
+26-Sources/MaxMiStore/Database.swift            MODIFY: PRAGMA foreign_keys = ON
+27-Sources/MaxMiStore/Migrations.swift          MODIFY: v4 — 6 activity/agent tables (M6a uses the activity ones)
+28-Sources/MaxMiStore/ActivityStore.swift        NEW: visits, provisional sessions, evidence, timeline queries
+29:Sources/MaxMiActivity/SessionSegmenter.swift  NEW module: deterministic close policy (pure)
+30-Sources/MaxMiActivity/DisplaySummarizer.swift  NEW: Gemini summary of a closed session (via relay proto)
+31-Sources/MaxMiActivity/ActivityGenerationRelay.swift NEW: protocol { summarizeSession(...) }
+32-Sources/MaxMiCapture/FocusObserver.swift       MODIFY: add onFocusChanged(app,isCapturable,pid)
+--
+47-Tests/MaxMiStoreTests/MigrationTests.swift       MODIFY: assert v4 tables + FK on
+48-```
+49-
+50:Task order (▲REV2 — Codex #1: segmenter FIRST, in MaxMiCore, so Store can use it): **1 SessionSegmenter (in MaxMiCore, pure)** → 2 migration+FK+ActivityStore → 3 FocusObserver hook + wiring (focus-generation token) → 4 DisplaySummarizer + Gemini generation/throttle → 5 dog logo → 6 SwiftUI Theme+ViewModel+ActivityView → 7 ActivityWindow + menu-bar dog + privacy sheet + wire → 8 live verify.
+51-
+52:**▲REV2 — global active session + focus-generation token (Codex #2, the correctness core):** there is at most ONE globally-active eligible activity session at a time (not per-app). AppWiring holds a monotonic `focusGeneration: Int`, bumped on every focus transition; the active app+generation is the "current focus span". A capture carries the generation it was started under; when it completes (post-`Task.detached`), if its generation ≠ the current generation, its activity evidence is **discarded** (the normal memory capture still commits — only activity evidence is span-gated). On an app transition, AppWiring **closes** the prior active session immediately (via `closeActiveSession`); the first valid capture of the new span **opens** the new one. So `recordActivityCapture` operates on the single active span, not a per-app lookup.
+53-
+54-**Consent (▲REV2 — Codex #4):** persisted `activityConsent` is a tri-state (`unset` | `granted` | `declined`), separate from `activityEnabled` (the on/off once granted). Gate all visits/sessions/evidence on `consent == .granted && activityEnabled`. `unset` → show the privacy window before any synthesis; `declined` → stay off, never re-prompt automatically.
+55-
+56----
+57-
+58:### Task 1: v4 migration + FK enforcement + ActivityStore
+59-
+60-**Files:** Modify `Sources/MaxMiStore/Database.swift`, `Sources/MaxMiStore/Migrations.swift`; Create `Sources/MaxMiStore/ActivityStore.swift`; Create `Tests/MaxMiStoreTests/ActivityStoreTests.swift`; Modify `Tests/MaxMiStoreTests/MigrationTests.swift`.
+61-
+--
+73-    public func closeOpenVisits(nowMs: EpochMs) throws                         // crash-repair + on-transition
+74-    // ▲REV2 (Codex #1,#2): append evidence to the SINGLE globally-active session, opening it if none
+75-    // is open for THIS app (the caller has already closed a prior different-app session via
+76:    // closeActiveSession on transition, and has already discarded stale-generation captures). One
+77-    // write txn: ensure an open session for appBundle exists (open if not), append evidence snapshot,
+78:    // bump last_activity_at (even on coalesced dup). Returns the session id. No SessionSegmenter call
+79-    // here — segmentation is the AppWiring focus-generation policy (Task 3); Store just persists.
+80:    public func recordActivityCapture(appBundle: String, appLabel: String, versionID: String?,
+81-                                      content: String, nowMs: EpochMs) throws -> String
+82:    public func closeActiveSession(nowMs: EpochMs) throws        // close the one open session on app transition
+83-    public func closeSession(_ id: String, nowMs: EpochMs) throws
+84-    public func closeIdleSessions(idleGapMs: EpochMs, nowMs: EpochMs) throws -> [String]  // ▲REV #2: idle finalize; returns closed ids
+85-    public func closeOpenSessions(nowMs: EpochMs) throws                       // ▲REV #2: startup crash-repair for sessions too
+--
+93-    public func recentSessions(limit: Int) throws -> [ActivitySession]
+94-    public func sessionEvidence(_ id: String) throws -> [String]              // decrypted snapshots (expand-to-detail)
+95-    // Settings + Privacy (▲REV2: tri-state consent separate from enable)
+96:    public func activityConsent() throws -> ActivityConsent    // .unset | .granted | .declined
+97:    public func setActivityConsent(_ c: ActivityConsent) throws
+98-    public func activityEnabled() throws -> Bool; public func setActivityEnabled(_ on: Bool) throws
+99-    public func activityExcludedApps() throws -> Set<String>; public func setActivityExcluded(_ bundle: String, _ excluded: Bool) throws
+100-    public func deleteActivityForApp(_ appBundle: String) throws              // cascade visits/sessions/evidence
+101-    public static func dayBucket(forMs ms: EpochMs, timeZone: TimeZone) -> Int64  // shared local-day helper
+102-}
+103:public enum ActivityConsent: String, Sendable { case unset, granted, declined }
+104-```
+105:`activity_sessions` also gets `summary_attempts INTEGER DEFAULT 0` + `summary_next_attempt_at INTEGER` (add to the v4 DDL — for summary retry/backoff).
+106-
+107-- [ ] **Step 1: Enable FK.** In `Sources/MaxMiStore/Database.swift`, inside `config.prepareDatabase { db in ... }` add `try db.execute(sql: "PRAGMA foreign_keys = ON")`.
+108-- [ ] **Step 2: Failing migration test** — add to `MigrationTests.swift`:
+--
+128-    override func setUpWithError() throws { db = try .inMemory(); store = Store(db: db, cipher: AESGCMFieldCipher.testCipher) }
+129-    let t0 = EpochMs(496_000) * 3_600_000
+130-    func testEvidenceEncryptedAndCoalesced() throws {
+131:        let s = try store.recordActivityCapture(appBundle: "com.x", appLabel: "X", versionID: nil, content: "did a thing", nowMs: t0)
+132:        let s2 = try store.recordActivityCapture(appBundle: "com.x", appLabel: "X", versionID: nil, content: "did a thing", nowMs: t0+1000) // dup -> coalesced, same session
+133-        XCTAssertEqual(s, s2)
+134-        try db.dbQueue.read { d in
+135-            let rows = try Row.fetchAll(d, sql: "SELECT content_ciphertext FROM activity_session_evidence WHERE session_id=?", arguments: [s])
+--
+139-        XCTAssertEqual(try store.sessionEvidence(s), ["did a thing"])
+140-    }
+141-    func testCloseAndSummarizeWithStaleGuard() throws {
+142:        let s = try store.recordActivityCapture(appBundle: "com.x", appLabel: "X", versionID: nil, content: "wrote the parser", nowMs: t0)
+143-        try store.closeSession(s, nowMs: t0+60_000)
+144-        let h = try store.sessionSourceHash(s)
+145-        XCTAssertTrue(try store.setSessionSummary(s, summary: "Worked on the parser", expectedSourceHash: h, modelID: "gemini-2.5-flash-lite", promptVersion: "v1", nowMs: t0+61_000))
+--
+149-        XCTAssertEqual(recent.first?.summaryStatus, "summarized")
+150-    }
+151-    func testDeleteActivityForAppCascades() throws {
+152:        let s = try store.recordActivityCapture(appBundle: "com.secret", appLabel: "S", versionID: nil, content: "x", nowMs: t0)
+153:        try store.closeActiveSession(nowMs: t0+1)
+154-        try store.deleteActivityForApp("com.secret")
+155-        try db.dbQueue.read { d in
+156-            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM activity_sessions WHERE app_bundle='com.secret'"), 0)
+--
+167-}
+168-```
+169-- [ ] **Step 7: Run — FAIL.**
+170:- [ ] **Step 8: Implement ActivityStore.swift.** `recordActivityCapture` (one `db.dbQueue.write`): find THE single open session (`ended_at IS NULL`); if it exists and is this app → reuse; if it exists and is a DIFFERENT app → (shouldn't happen — AppWiring calls `closeActiveSession` on transition — but defensively close it) then open new; if none → insert provisional (uuidv7, `dayBucket`, status 'pending'). Then `INSERT OR IGNORE` evidence (`ContentHash.sha256Hex(content)`, encrypted via `cipher.encrypt`) and **bump `last_activity_at` even when coalesced** (same txn). Return session id. `closeActiveSession`: set ended_at on the one open session. `closeIdleSessions`: close open sessions with `last_activity_at < now - idleGapMs` → return closed ids. `closeOpenSessions`/`closeOpenVisits`: startup crash-repair. `setSessionSummary`: recompute source hash in-txn, **return false (no-op) if != expectedSourceHash**, else encrypt+store 'summarized'. `markSessionSummaryFailed`: 'failed', `summary_attempts+1`, `summary_next_attempt_at = now + backoff`. `sessionsNeedingSummary`: `ended_at IS NOT NULL AND (summary_status='pending' OR (summary_status='failed' AND summary_next_attempt_at<=now))`. `sessionSourceHash`: hash sorted evidence content_hashes. Consent/enabled/excluded via `settings`. `dayBucket`: local-calendar day from a documented TimeZone. `deleteActivityForApp`: delete sessions+visits (evidence cascades). Uses `SessionSegmenter` from MaxMiCore only if needed (segmentation policy lives in AppWiring, Task 3).
+171-- [ ] **Step 9: Run — PASS.** Full suite green.
+172-- [ ] **Step 10: Commit** `feat(store): v4 activity tables + FK enforcement + ActivityStore (sessions + immutable evidence)`
+173-
+174----
+175-
+176:### Task 2: SessionSegmenter (deterministic finalization policy) — ▲REV2: BUILD THIS FIRST (before Task 1), IN MaxMiCore
+177-
+178:**▲REV2 (Codex #1): execution order is 2→1** — SessionSegmenter is a pure function that ActivityStore (Task 1) and AppWiring (Task 3) both use, and `MaxMiStore` must not depend on `MaxMiActivity`. So put `SessionSegmenter` in **MaxMiCore** and implement it before Task 1.
+179-
+180:**Files:** Create `Sources/MaxMiCore/SessionSegmenter.swift` (in MaxMiCore — no new module needed for it); Create `Tests/MaxMiCoreTests/SessionSegmenterTests.swift`. (The `MaxMiActivity` module is still added later in Task 4 for the summarizer.)
+181-
+182-**Interfaces:**
+183-```swift
+184-public struct SegmentDecision: Sendable, Equatable { public let closePrevious: Bool; public let openNew: Bool }
+185:public enum SessionSegmenter {
+186-    // Pure: given the current open session's app + last-activity time, and the new event's app + time,
+187-    // decide whether to close the old session and/or open a new one. gapMs = inactivity threshold.
+188-    public static func decide(openApp: String?, lastActivityMs: EpochMs?, eventApp: String,
+189-                              eventMs: EpochMs, gapMs: EpochMs = 5*60_000) -> SegmentDecision
+190-}
+191-```
+192:- [ ] **Step 1: (No new module — SessionSegmenter goes in the existing MaxMiCore target.)**
+193:- [ ] **Step 2: Failing tests** (in `Tests/MaxMiCoreTests/SessionSegmenterTests.swift`, `@testable import MaxMiCore`) — same app within gap → no close/open (continue); different app → close+open; same app after gap → close+open (new session); no open session → open only. 
+194-```swift
+195-import XCTest; @testable import MaxMiCore
+196:final class SessionSegmenterTests: XCTestCase {
+197-    func testContinueSameAppWithinGap() {
+198:        XCTAssertEqual(SessionSegmenter.decide(openApp: "a", lastActivityMs: 1000, eventApp: "a", eventMs: 2000),
+199-                       SegmentDecision(closePrevious: false, openNew: false))
+200-    }
+201-    func testAppChangeClosesAndOpens() {
+202:        XCTAssertEqual(SessionSegmenter.decide(openApp: "a", lastActivityMs: 1000, eventApp: "b", eventMs: 2000),
+203-                       SegmentDecision(closePrevious: true, openNew: true))
+204-    }
+205-    func testSameAppAfterGapIsNewSession() {
+206:        XCTAssertEqual(SessionSegmenter.decide(openApp: "a", lastActivityMs: 1000, eventApp: "a", eventMs: 1000 + 6*60_000),
+207-                       SegmentDecision(closePrevious: true, openNew: true))
+208-    }
+209-    func testNoOpenSessionOpens() {
+210:        XCTAssertEqual(SessionSegmenter.decide(openApp: nil, lastActivityMs: nil, eventApp: "a", eventMs: 1000),
+211-                       SegmentDecision(closePrevious: false, openNew: true))
+212-    }
+213-}
+214-```
+215-- [ ] **Step 3: Run — FAIL. Step 4: Implement** the pure decision. **Step 5: Run — PASS.**
+216:- [ ] **Step 6: Commit** `feat(activity): SessionSegmenter deterministic finalization policy`
+217-
+218----
+219-
+--
+221-
+222-**Files:** Modify `Sources/MaxMiCapture/FocusObserver.swift`, `Sources/MaxMi/AppWiring.swift`.
+223-
+224:**Interfaces:** FocusObserver gains `var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?` fired on every frontmost change (before the capturable gate). AppWiring uses it + the existing commit path to drive ActivityStore + SessionSegmenter.
+225-
+226-- [ ] **Step 1: Add the callback** to FocusObserver: in `frontmostChanged`, after computing the app, call `onFocusChanged?(appInfo, isCapturable(bid), pid)` regardless of capturability (so visits are tracked; the existing onCapture still gates content capture).
+227-- [ ] **Step 2: Wire in AppWiring** (▲REV — Codex must-fix #1, correct async attribution):
+228-  - On `onFocusChanged`: only manage **visits** (open new visit, close prior) — do NOT open a session here. Sessions open on first eligible capture (below). Skip visits for sensitive/excluded/global-disabled apps.
+229:  - **Carry the capturing app through the async capture.** The capture path completes via `Task.detached`/`finishCapture` after focus may have moved. So the `AppInfo` (bundle+label) of the capture is passed into the completion; on a `.committed` (non-dedup) result AND activity-enabled AND app not sensitive/excluded, call `store.recordActivityCapture(appBundle:appLabel: <that capture's app, NOT frontmost>, versionID: vid, content: parsed.content, gapMs:, nowMs:)`. The store opens/continues that app's session + appends evidence atomically. Normal memory capture is unaffected; only activity evidence uses this stricter attribution.
+230-  - **Idle finalize + summary** on the existing 30s pipeline sweep: `store.closeIdleSessions(idleGapMs:5min, nowMs:)` then (Task 4) summarize.
+231-  - **Startup crash-repair:** `store.closeOpenVisits` AND `store.closeOpenSessions`.
+232-  - **Sleep/lock** (`NSWorkspace.willSleepNotification`, screen-lock): close open visits + sessions.
+--
+235-
+236----
+237-
+238:### Task 4: DisplaySummarizer (Gemini summary of closed sessions)
+239-
+240-**Files:** Create `Sources/MaxMiActivity/ActivityGenerationRelay.swift`, `Sources/MaxMiActivity/DisplaySummarizer.swift`, `Sources/MaxMiActivity/AgentPrompts.swift`; Create `Tests/MaxMiActivityTests/DisplaySummarizerTests.swift`; wire the run loop in AppWiring.
+241-
+--
+345-## Self-Review (at plan-writing time)
+346-**Spec coverage:** §8 schema+FK+cascade → T1; deterministic lifecycle (provisional open/evidence/close) → T1+T2+T3; FocusObserver onFocusChanged + sensitive/excluded skip + crash-repair → T3; Gemini summary of closed sessions only, pinned model, consent-gated → T4; dog logo → T5; SwiftUI always-dark timeline, stable IDs, no-decrypt-in-body → T6; window left-open/right-menu + privacy sheet (M6a) → T7; exit criteria → T8. Privacy controls in M6a (not deferred) → T7. Encrypted evidence/summary → T1.
+347-**Placeholders:** T5 flags the icon-render tool as environment-dependent (rsvg vs sips) — genuine, documented. Everything else concrete.
+348:**Type consistency:** `ActivitySession`/`SessionRow` fields consistent T1↔T6; `ActivityGenerationRelay.summarizeSession` used T4; `SessionSegmenter.decide` T2↔T3; store methods (recordActivityCapture/closeActiveSession/closeIdleSessions/closeOpenSessions/setSessionSummary(expectedSourceHash:)/markSessionSummaryFailed/sessionsNeedingSummary/recentSessions/sessionEvidence/consent+enabled+excluded/deleteActivityForApp) consistent across T2(store)/T3/T4/T7; SessionSegmenter in MaxMiCore used by store+AppWiring; MaxMiActivity over repo/relay protocols; MaxMiUI over TimelineSessionDTO.
+
+codex
+**One remaining blocker: Task 3 has not actually incorporated the focus-generation design.**
+
+The global “correctness core” at lines 52–54 is good, but Task 3 still contains the old instruction: carry only `AppInfo` through async capture and call `recordActivityCapture` when it completes. It never instructs the implementer to:
+
+1. increment `focusGeneration` on **every** focus transition;
+2. immediately `closeActiveSession` and close the prior visit before gating the incoming app;
+3. capture the generation in `captureFrontmost`/`attemptCapture` and pass it through `Task.detached` to `finishCapture`;
+4. after the normal `.committed` write, require `captureGeneration == currentFocusGeneration` before writing activity evidence;
+5. discard only activity evidence on mismatch.
+
+Without that explicit Task 3 work, a late app-A capture can still create/extend A activity after focus moved to B—the exact race the revision was meant to eliminate.
+
+Make the focus-switch attribution test mandatory, not “if feasible”: start capture under generation N, advance to N+1 before completion, assert normal capture commits but no activity session/evidence is written.
+
+After that Task 3 correction, **GO for M6a subagent implementation.**
+tokens used
+1,87,556
+**One remaining blocker: Task 3 has not actually incorporated the focus-generation design.**
+
+The global “correctness core” at lines 52–54 is good, but Task 3 still contains the old instruction: carry only `AppInfo` through async capture and call `recordActivityCapture` when it completes. It never instructs the implementer to:
+
+1. increment `focusGeneration` on **every** focus transition;
+2. immediately `closeActiveSession` and close the prior visit before gating the incoming app;
+3. capture the generation in `captureFrontmost`/`attemptCapture` and pass it through `Task.detached` to `finishCapture`;
+4. after the normal `.committed` write, require `captureGeneration == currentFocusGeneration` before writing activity evidence;
+5. discard only activity evidence on mismatch.
+
+Without that explicit Task 3 work, a late app-A capture can still create/extend A activity after focus moved to B—the exact race the revision was meant to eliminate.
+
+Make the focus-switch attribution test mandatory, not “if feasible”: start capture under generation N, advance to N+1 before completion, assert normal capture commits but no activity session/evidence is written.
+
+After that Task 3 correction, **GO for M6a subagent implementation.**
