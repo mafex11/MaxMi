@@ -18,6 +18,26 @@ let package = Package(
                 .unsafeFlags(["-Wno-everything"]) // vendored amalgamation, not our lint problem
             ]
         ),
+        .target(
+            name: "CWhisper",
+            path: "Sources/CWhisper",
+            exclude: ["ggml-metal.m", "ggml-metal.metal", "coreml"],
+            sources: [
+                "ggml.c",
+                "ggml-alloc.c",
+                "ggml-backend.c",
+                "ggml-quants.c",
+                "whisper.cpp",
+            ],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("GGML_USE_ACCELERATE"),
+                .unsafeFlags(["-Wno-shorten-64-to-32", "-Wno-deprecated-declarations"])
+            ],
+            linkerSettings: [
+                .linkedFramework("Accelerate")
+            ]
+        ),
         .target(name: "MaxMiCore"),
         .target(name: "MaxMiStore", dependencies: [
             "MaxMiCore", "CSQLiteVec",
@@ -25,7 +45,7 @@ let package = Package(
         ]),
         .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),
         .target(name: "MaxMiRelay", dependencies: ["MaxMiCore"]),
-        .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore"]),
+        .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore", "CWhisper"]),
         .executableTarget(name: "MaxMi", dependencies: [
             "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay", "MaxMiMeetings",
         ]),
