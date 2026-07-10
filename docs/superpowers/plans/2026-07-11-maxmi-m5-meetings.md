@@ -92,6 +92,8 @@ public protocol AudioCaptureControlling: Sendable {
     func stop() async
     func setFrameHandler(_ cb: @escaping @Sendable (PCMFrame) -> Void) async
     func level() async -> Float
+    func resolvedWindowFrame() async -> CGRect?    // ▲REV3 (Codex#2): meeting window frame post-start,
+                                                   // so the session can reposition the panel to its screen
 }
 
 /// Transcriber is an ACTOR (not just Sendable — Codex plan#3) — receives only normalized PCMFrames.
@@ -493,17 +495,16 @@ public struct WhisperModelStore {
     public func ensureModel(download: (URL) async throws -> URL) async throws  // atomic install
     public var modelURL: URL { get }
     public static let modelName = "ggml-base.bin"   // multilingual base
-    // ▲REV3: immutable pinned artifact. Pin the HF resolve URL to a specific COMMIT (not main).
-    // The ggml-base LFS oid (from the pointer file) begins 60ed5bc3dd14eea856493d334349b405782ddcaf0028d4...
-    // IMPLEMENTER — before Task 4: `curl -L <resolve/<commit>/ggml-base.bin> -o /tmp/m.bin && shasum -a 256 /tmp/m.bin`
-    // then paste the FULL 64-hex digest here and the pinned commit into modelURL. Fail the build if it's still a placeholder.
-    public static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/<PINNED_COMMIT>/ggml-base.bin")!
-    public static let sha256 = "<FULL_64_HEX — verified via shasum before first commit of Task 4>"
+    // ▲REV3 — PINNED (real immutable values, verified):
+    public static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/f049fff95a089aa9969deb009cdd4892b3e74916/ggml-base.bin")!
+    public static let sha256 = "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe"
+    // (whisper.cpp pinned to tag v1.9.1 = commit f049fff95a089aa9969deb009cdd4892b3e74916)
 }
 ```
+Implementer sanity-check before Task 4's first commit: `curl -L <modelURL> -o /tmp/m.bin && shasum -a 256 /tmp/m.bin` must equal the sha256 above (fail build otherwise).
 - Model download itself is live (network); tests cover **isReady** (file present + checksum), **atomic install** (temp→rename), and **checksum rejection** using a fixture file — NOT a real download.
 
-- [ ] **Step 1: Package.swift — add whisper (▲REV2, pinned — Codex #4).** Vendor whisper.cpp as a C/C++ target `CWhisper` (NOT a `systemLibrary` — nothing is preinstalled): pin **whisper.cpp tag `v1.7.2`** (fetch `ggml.c`, `whisper.cpp`, headers into `Sources/CWhisper/`), expose a C shim `cwhisper_shim.h` that does REAL transcription (Codex plan#2 — feed/result alone can't decode): `cw_ctx* cw_init(const char* modelPath); char* cw_transcribe(cw_ctx*, const float* pcm16k, int n);  // runs whisper_full with default params, returns malloc'd UTF-8 caller-frees; void cw_free_str(char*); void cw_free(cw_ctx*);`. Vendor the COMPLETE upstream build set whisper.cpp needs (ggml.c, ggml-*.c/metal, whisper.cpp + all headers), not just two files. Pin whisper.cpp to a specific COMMIT hash (not a tag that moves); document it in the commit. Add `.target(name: "CWhisper")` (a real C/C++ target, NOT `systemLibrary`), `MaxMiMeetings` depends on it. **Streaming window policy (▲REV3 — Codex#3, avoid O(n²)):** do NOT re-transcribe a growing buffer. Use FIXED bounded windows: accumulate `PCMFrame`s into a **30s window with 2s overlap**; every 30s (or on `finish`) call `cw_transcribe` on that window ONLY, then drop it (keep the 2s tail for overlap); `RollingStitch.stitch` dedupes the overlap across windows into the running transcript. So cost is O(n) total, each `cw_transcribe` is bounded to ~32s of audio. `onPartial` emits the stitched running text. Ownership: caller frees each returned string via `cw_free_str`.
+- [ ] **Step 1: Package.swift — add whisper (▲REV2, pinned — Codex #4).** Vendor whisper.cpp as a C/C++ target `CWhisper` (NOT a `systemLibrary` — nothing is preinstalled): pin **whisper.cpp tag `v1.9.1` = commit `f049fff95a089aa9969deb009cdd4892b3e74916`** (fetch the complete upstream build set into `Sources/CWhisper/`), expose a C shim `cwhisper_shim.h` that does REAL transcription (Codex plan#2 — feed/result alone can't decode): `cw_ctx* cw_init(const char* modelPath); char* cw_transcribe(cw_ctx*, const float* pcm16k, int n);  // runs whisper_full with default params, returns malloc'd UTF-8 caller-frees; void cw_free_str(char*); void cw_free(cw_ctx*);`. Vendor the COMPLETE upstream build set whisper.cpp needs (ggml.c, ggml-*.c/metal, whisper.cpp + all headers), not just two files. Pin whisper.cpp to a specific COMMIT hash (not a tag that moves); document it in the commit. Add `.target(name: "CWhisper")` (a real C/C++ target, NOT `systemLibrary`), `MaxMiMeetings` depends on it. **Streaming window policy (▲REV3 — Codex#3, avoid O(n²)):** do NOT re-transcribe a growing buffer. Use FIXED bounded windows: accumulate `PCMFrame`s into a **30s window with 2s overlap**; every 30s (or on `finish`) call `cw_transcribe` on that window ONLY, then drop it (keep the 2s tail for overlap); `RollingStitch.stitch` dedupes the overlap across windows into the running transcript. So cost is O(n) total, each `cw_transcribe` is bounded to ~32s of audio. `onPartial` emits the stitched running text. Ownership: caller frees each returned string via `cw_free_str`.
 - [ ] **Step 2: Failing tests** — `WhisperModelStoreTests`: write a fake model file + its real sha256 → `isReady == true`; wrong checksum → `isReady == false`; `ensureModel` with a stub download that returns a temp file → installs atomically and becomes ready. (All local, no network.)
 - [ ] **Step 3: Run — FAIL.**
 - [ ] **Step 4: Implement WhisperModelStore** — `isReady` = file exists at `modelURL` AND its sha256 matches; `ensureModel` = if ready return; else call the injected `download` closure to fetch to a temp URL, verify checksum, `FileManager.moveItem` (atomic) into place, else throw; disk-space precheck.
@@ -550,12 +551,11 @@ public final class AudioMixer {                    // serial-queue guarded (SC +
 }
 public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked Sendable {
     public init(mixer: AudioMixer)
-    // Conforms to Task 0 AudioCaptureControlling EXACTLY (▲REV3 — async, no sync onFrame/level):
-    public func start(_ request: CaptureRequest) async throws -> String    // returns captureMode
+    // Conforms to Task 0 AudioCaptureControlling EXACTLY (async, incl. resolvedWindowFrame()).
+    public func start(_ request: CaptureRequest) async throws -> String
     public func stop() async
-    public func setFrameHandler(_ cb: @escaping @Sendable (PCMFrame) -> Void) async  // wires mixer.onFrame
+    public func setFrameHandler(_ cb: @escaping @Sendable (PCMFrame) -> Void) async
     public func level() async -> Float
-    // Reports the resolved meeting-window frame (for panel screen choice) via this async getter:
     public func resolvedWindowFrame() async -> CGRect?
 }
 ```
@@ -595,7 +595,15 @@ All capture/transcriber objects are created inside the actor via the `@Sendable`
 
 - [ ] **Step 1: Failing tests** — with a mock `MeetingPanelPresenting` (@MainActor), mock `MeetingPersisting`, mock `AudioCaptureControlling`, mock `Transcribing` (all actors/Sendable), and a fake `MeetingClock`, drive: detect→prompt (state prompting, showPrompt called); accept→recording (capture.start called with the right `CaptureRequest`, showRecording); stop→finishing→persist (transcript from transcriber.finish, persist called with it); skip path (no persist); **inputStopped does NOT persist/stop** (stays recording pending user confirm — assert state still `.recording`); error path (capture.start throws → failed, hidePanel, no persist). Use `await` throughout (actor).
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement** the actor state machine; `userAcceptedRecord`: `authorizer.requestMicrophone()` (deny → `panel.showError` + hidePanel, no capture); then screen-rec: if `!screenRecordingAuthorized()` call `requestScreenRecordingAccess()` and only degrade to `captureSystem:false` (mic-only) if STILL denied (▲REV3 Codex#1 — actually request, don't silently mic-only); build `CaptureRequest(bundleID:pid:title:captureSystem:)` → `capture.start(request)`; `userStopped` awaits `transcriber.finish()` then `persister.persist(...)`; `inputStopped` → `clock` debounce → `panel.showEndSuggestion()` (never auto-finalizes); `userKeptRecording` → `.recording`. Panel calls hop to `@MainActor`.
+- [ ] **Step 3: Implement** the actor state machine; `userAcceptedRecord`: `authorizer.requestMicrophone()` (deny → `panel.showError` + hidePanel, no capture); then screen-rec: if `!screenRecordingAuthorized()` call `requestScreenRecordingAccess()` and only degrade to `captureSystem:false` (mic-only) if STILL denied (▲REV3 Codex#1 — actually request, don't silently mic-only); build `CaptureRequest(bundleID:pid:title:captureSystem:)`. **Wire audio→text (▲REV3 — Codex#1, the core path, was missing):**
+```swift
+try await transcriber.start()
+await transcriber.setOnPartial { text in Task { @MainActor in panel.updateLevel(await capture.level()) } } // + live text
+await capture.setFrameHandler { frame in Task { await transcriber.feed(frame) } }   // audio -> transcriber
+let mode = try await capture.start(request)
+if let frame = await capture.resolvedWindowFrame() { /* @MainActor: panel reposition to that screen */ }
+```
+`userStopped` → `await capture.stop()`, `let transcript = await transcriber.finish()`, then `persister.persist(...)`; `inputStopped` → `clock` debounce → `panel.showEndSuggestion()` (never auto-finalizes); `userKeptRecording` → `.recording`. Panel calls hop to `@MainActor`.
 - **Panel placement contract (▲REV3 — Codex#5):** the nudge fires at `candidateDetected` (before capture), when the meeting-window frame isn't resolved yet → the nudge uses **cursor-screen** placement (explicitly accepted). Once recording starts, `AudioCapture.resolvedWindowFrame()` is available → the recording panel repositions to the **meeting window's screen**. This is the defined path (not "callback TBD").
 - [ ] **Step 4: Run — PASS.**
 - [ ] **Step 5: Commit** `feat(meetings): MeetingSession actor state machine (consent-first, manual-stop authoritative)`
@@ -633,8 +641,8 @@ public enum RightLanePlacement {
 **Interfaces:** Consumes everything above. Produces no new public API; AppWiring owns a `MeetingDetector`, a `MeetingSession` (whose delegate bridges to `RightLanePanel` + `Store.commitMeeting`), and the `WhisperModelStore`.
 
 - [ ] **Step 1: Info.plist** — add `NSMicrophoneUsageDescription`, `NSScreenCaptureUsageDescription`, `NSSpeechRecognitionUsageDescription` with honest strings (e.g. "MaxMi records and transcribes meetings you choose to capture.").
-- [ ] **Step 2: Permission seam (▲REV2 — Codex #6).** Add a `MeetingPermissions` helper (in the app target): `requestMicrophone() async -> Bool` (`AVCaptureDevice.requestAccess(for: .audio)`), `screenRecordingAuthorized() -> Bool` (`CGPreflightScreenCaptureAccess()`) + `requestScreenRecording()` (`CGRequestScreenCaptureAccess()`). Called from `MeetingSession.userAcceptedRecord` BEFORE `AudioCapture.start`: mic denied → abort with panel error; screen-recording not authorized → set `captureSystem=false` (mic-only) rather than block. Info.plist keys alone are NOT the permission handling.
-- [ ] **Step 3: Wire AppWiring** — on start (after capture wiring), if meeting features enabled: create `WhisperModelStore`, `MeetingDetector`, and a `MeetingSession` wired to (a) a `RightLanePanel` adapter conforming to `@MainActor MeetingPanelPresenting`, (b) a `MeetingPersisting` adapter → `store.commitMeeting(...)`, (c) `@Sendable` factories for `AudioCapture`/`WhisperTranscriber`, (d) `SystemMeetingClock`. Detector `onCandidate` → `Task { await session.candidateDetected(...) }`; panel buttons → `session.userAccepted/Skipped/Stopped`. Ensure the whisper model (WhisperModelStore.ensureModel) before arming Record — panel shows "Preparing…" until ready. Guard meeting features behind the same encryption/permission availability as capture.
+- [ ] **Step 2: Permission adapter (▲REV3 — conforms to Task 0 `MeetingAuthorizing` EXACTLY).** Add a `MeetingPermissions` (app target) conforming to `MeetingAuthorizing`: `requestMicrophone()` (`AVCaptureDevice.requestAccess(for:.audio)`), `screenRecordingAuthorized()` (`CGPreflightScreenCaptureAccess()`), `requestScreenRecordingAccess()` (`CGRequestScreenCaptureAccess()`). The session (Task 7) already calls these in the right order; Step 3 just injects this adapter as `authorizer:`. Info.plist keys alone are NOT permission handling.
+- [ ] **Step 3: Wire AppWiring** — on start (after capture wiring), if meeting features enabled: create `WhisperModelStore`, `MeetingDetector`, and a `MeetingSession(panel:persister:authorizer:makeCapture:makeTranscriber:clock:)` wired to: (a) a `RightLanePanel` adapter conforming to `@MainActor MeetingPanelPresenting` (all 8 methods incl. showPreparing/showEndSuggestion/showError/updateLevel), (b) a `MeetingPersisting` adapter (actor or audited `@unchecked Sendable` over `Store`) → `store.commitMeeting(...)`, (c) `authorizer:` = the `MeetingPermissions` from Step 2, (d) `@Sendable` factories `{ AudioCapture(mixer: AudioMixer()) }` / `{ WhisperTranscriber(modelURL: modelStore.modelURL) }`, (e) `SystemMeetingClock`. Detector `onCandidate = { bid, pid in Task { await session.candidateDetected(bundleID: bid, pid: pid, title: nil) } }`; panel buttons → `Task { await session.userAcceptedRecord() / userSkipped() / userStopped() / userKeptRecording() }`. Before arming Record, `await modelStore.ensureModel(...)` (panel `showPreparing()` until ready). Guard meeting features behind the same encryption/permission availability as capture.
 - [ ] **Step 3: Build** — `swift build` clean.
 - [ ] **Step 4: Full suite** — all green, zero warnings.
 - [ ] **Step 5: Commit** `feat(meetings): wire detector -> session -> right-lane panel -> MeetingStore + Info.plist perms`
