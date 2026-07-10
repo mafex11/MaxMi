@@ -121,7 +121,9 @@ public protocol MeetingPersisting: Sendable {   // adapter over Store; actor or 
 /// Permission gate injected into the session (Codex plan#4 — session can't reach the app target).
 public protocol MeetingAuthorizing: Sendable {
     func requestMicrophone() async -> Bool
-    func screenRecordingAuthorized() async -> Bool   // preflight; false => mic-only
+    func screenRecordingAuthorized() async -> Bool         // CGPreflightScreenCaptureAccess
+    func requestScreenRecordingAccess() async -> Bool       // ▲REV3 (Codex#1): CGRequestScreenCaptureAccess;
+                                                            // only if preflight false, before degrading to mic-only
 }
 /// Injected clock so debounce is testable (Codex #3).
 public protocol MeetingClock: Sendable { func nowMs() -> Int64; func sleep(ms: Int) async }
@@ -330,16 +332,18 @@ extension Store {
             return MeetingContext(record: rec, transcript: transcript, facts: facts)
         }
     }
-    // ▲REV3 (Codex plan#1): takes a query VECTOR (MCP computed it via relay.embed) — Store can't embed.
+    // ▲REV3 (Codex plan#1,#4): takes a query VECTOR (MCP computed it via relay.embed). Concrete KNN
+    // SQL mirrors QueryAPI.factHits (vec0 `embedding MATCH ? AND k = ?`), joined to meetings.
     public func meetingFactHits(near vector: [Float], limit: Int) throws -> [MeetingRecord] {
-        // Vec search over derivative_embeddings joined to meetings' threads; newest-relevant first.
-        // (Implementer: reuse the existing vec0 KNN query used by search_memory, add
-        //  `AND d.thread_id IN (SELECT thread_id FROM meetings)`, map surviving thread_ids -> meeting rows.)
-        try db.dbQueue.read { d in
-            let tids = try vecSearchMeetingThreadIDs(d, vector: vector, limit: limit)   // existing-KNN-based helper
-            return try tids.compactMap { tid in
-                try Row.fetchOne(d, sql: "SELECT * FROM meetings WHERE thread_id=?", arguments: [tid]).map(Self.rec)
-            }
+        let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+        return try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: """
+                SELECT m.* FROM (SELECT derivative_id, distance FROM derivative_embeddings
+                                 WHERE embedding MATCH ? AND k = ?) e
+                JOIN derivatives dv ON dv.id = e.derivative_id
+                JOIN meetings m ON m.thread_id = dv.thread_id
+                ORDER BY e.distance
+                """, arguments: [blob, limit]).map(Self.rec)
         }
     }
     private static func rec(_ r: Row) -> MeetingRecord {
@@ -489,14 +493,17 @@ public struct WhisperModelStore {
     public func ensureModel(download: (URL) async throws -> URL) async throws  // atomic install
     public var modelURL: URL { get }
     public static let modelName = "ggml-base.bin"   // multilingual base
-    // ▲REV2: exact pinned artifact. ggml-base (multilingual) from the official HF mirror.
-    public static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin")!
-    public static let sha256 = "60ed5bc3dd14eea856493d334349b405782 ... "  // IMPLEMENTER: curl the file, sha256sum it, paste the full 64-hex digest. Do NOT ship a partial.
+    // ▲REV3: immutable pinned artifact. Pin the HF resolve URL to a specific COMMIT (not main).
+    // The ggml-base LFS oid (from the pointer file) begins 60ed5bc3dd14eea856493d334349b405782ddcaf0028d4...
+    // IMPLEMENTER — before Task 4: `curl -L <resolve/<commit>/ggml-base.bin> -o /tmp/m.bin && shasum -a 256 /tmp/m.bin`
+    // then paste the FULL 64-hex digest here and the pinned commit into modelURL. Fail the build if it's still a placeholder.
+    public static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/<PINNED_COMMIT>/ggml-base.bin")!
+    public static let sha256 = "<FULL_64_HEX — verified via shasum before first commit of Task 4>"
 }
 ```
 - Model download itself is live (network); tests cover **isReady** (file present + checksum), **atomic install** (temp→rename), and **checksum rejection** using a fixture file — NOT a real download.
 
-- [ ] **Step 1: Package.swift — add whisper (▲REV2, pinned — Codex #4).** Vendor whisper.cpp as a C/C++ target `CWhisper` (NOT a `systemLibrary` — nothing is preinstalled): pin **whisper.cpp tag `v1.7.2`** (fetch `ggml.c`, `whisper.cpp`, headers into `Sources/CWhisper/`), expose a C shim `cwhisper_shim.h` that does REAL transcription (Codex plan#2 — feed/result alone can't decode): `cw_ctx* cw_init(const char* modelPath); char* cw_transcribe(cw_ctx*, const float* pcm16k, int n);  // runs whisper_full with default params, returns malloc'd UTF-8 caller-frees; void cw_free_str(char*); void cw_free(cw_ctx*);`. Vendor the COMPLETE upstream build set whisper.cpp needs (ggml.c, ggml-*.c/metal, whisper.cpp + all headers), not just two files. Pin whisper.cpp to a specific COMMIT hash (not a tag that moves); document it in the commit. Add `.target(name: "CWhisper")` (a real C/C++ target, NOT `systemLibrary`), `MaxMiMeetings` depends on it. Streaming = call `cw_transcribe` on a growing/rolling window from the actor; ownership: caller frees the returned string via `cw_free_str`.
+- [ ] **Step 1: Package.swift — add whisper (▲REV2, pinned — Codex #4).** Vendor whisper.cpp as a C/C++ target `CWhisper` (NOT a `systemLibrary` — nothing is preinstalled): pin **whisper.cpp tag `v1.7.2`** (fetch `ggml.c`, `whisper.cpp`, headers into `Sources/CWhisper/`), expose a C shim `cwhisper_shim.h` that does REAL transcription (Codex plan#2 — feed/result alone can't decode): `cw_ctx* cw_init(const char* modelPath); char* cw_transcribe(cw_ctx*, const float* pcm16k, int n);  // runs whisper_full with default params, returns malloc'd UTF-8 caller-frees; void cw_free_str(char*); void cw_free(cw_ctx*);`. Vendor the COMPLETE upstream build set whisper.cpp needs (ggml.c, ggml-*.c/metal, whisper.cpp + all headers), not just two files. Pin whisper.cpp to a specific COMMIT hash (not a tag that moves); document it in the commit. Add `.target(name: "CWhisper")` (a real C/C++ target, NOT `systemLibrary`), `MaxMiMeetings` depends on it. **Streaming window policy (▲REV3 — Codex#3, avoid O(n²)):** do NOT re-transcribe a growing buffer. Use FIXED bounded windows: accumulate `PCMFrame`s into a **30s window with 2s overlap**; every 30s (or on `finish`) call `cw_transcribe` on that window ONLY, then drop it (keep the 2s tail for overlap); `RollingStitch.stitch` dedupes the overlap across windows into the running transcript. So cost is O(n) total, each `cw_transcribe` is bounded to ~32s of audio. `onPartial` emits the stitched running text. Ownership: caller frees each returned string via `cw_free_str`.
 - [ ] **Step 2: Failing tests** — `WhisperModelStoreTests`: write a fake model file + its real sha256 → `isReady == true`; wrong checksum → `isReady == false`; `ensureModel` with a stub download that returns a temp file → installs atomically and becomes ready. (All local, no network.)
 - [ ] **Step 3: Run — FAIL.**
 - [ ] **Step 4: Implement WhisperModelStore** — `isReady` = file exists at `modelURL` AND its sha256 matches; `ensureModel` = if ready return; else call the injected `download` closure to fetch to a temp URL, verify checksum, `FileManager.moveItem` (atomic) into place, else throw; disk-space precheck.
@@ -543,12 +550,13 @@ public final class AudioMixer {                    // serial-queue guarded (SC +
 }
 public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked Sendable {
     public init(mixer: AudioMixer)
-    // Resolves SCShareableContent -> the CaptureRequest.bundleID's SCRunningApplication + its SCDisplay,
-    // builds SCContentFilter(display:includingApplications:exceptingWindows:). Codex #2: needs display too.
-    public func start(_ request: CaptureRequest) async throws -> String   // returns captureMode
+    // Conforms to Task 0 AudioCaptureControlling EXACTLY (▲REV3 — async, no sync onFrame/level):
+    public func start(_ request: CaptureRequest) async throws -> String    // returns captureMode
     public func stop() async
-    public var onFrame: (@Sendable (PCMFrame) -> Void)? { get set }        // forwards mixer.onFrame
-    public var level: Float { get }
+    public func setFrameHandler(_ cb: @escaping @Sendable (PCMFrame) -> Void) async  // wires mixer.onFrame
+    public func level() async -> Float
+    // Reports the resolved meeting-window frame (for panel screen choice) via this async getter:
+    public func resolvedWindowFrame() async -> CGRect?
 }
 ```
 
@@ -587,7 +595,8 @@ All capture/transcriber objects are created inside the actor via the `@Sendable`
 
 - [ ] **Step 1: Failing tests** — with a mock `MeetingPanelPresenting` (@MainActor), mock `MeetingPersisting`, mock `AudioCaptureControlling`, mock `Transcribing` (all actors/Sendable), and a fake `MeetingClock`, drive: detect→prompt (state prompting, showPrompt called); accept→recording (capture.start called with the right `CaptureRequest`, showRecording); stop→finishing→persist (transcript from transcriber.finish, persist called with it); skip path (no persist); **inputStopped does NOT persist/stop** (stays recording pending user confirm — assert state still `.recording`); error path (capture.start throws → failed, hidePanel, no persist). Use `await` throughout (actor).
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement** the actor state machine per the transitions; `userAcceptedRecord` calls `authorizer.requestMicrophone()` (deny → `panel.showError` + hidePanel, no capture) then `authorizer.screenRecordingAuthorized()` (false → build `CaptureRequest(captureSystem:false)` = mic-only) → `capture.start(request)`; `userStopped` awaits `transcriber.finish()` then `persister.persist(...)`; `inputStopped` starts a `clock`-based debounce then `panel.showEndSuggestion()` (never auto-finalizes); `userKeptRecording` returns to `.recording`. Panel calls hop to `@MainActor`.
+- [ ] **Step 3: Implement** the actor state machine; `userAcceptedRecord`: `authorizer.requestMicrophone()` (deny → `panel.showError` + hidePanel, no capture); then screen-rec: if `!screenRecordingAuthorized()` call `requestScreenRecordingAccess()` and only degrade to `captureSystem:false` (mic-only) if STILL denied (▲REV3 Codex#1 — actually request, don't silently mic-only); build `CaptureRequest(bundleID:pid:title:captureSystem:)` → `capture.start(request)`; `userStopped` awaits `transcriber.finish()` then `persister.persist(...)`; `inputStopped` → `clock` debounce → `panel.showEndSuggestion()` (never auto-finalizes); `userKeptRecording` → `.recording`. Panel calls hop to `@MainActor`.
+- **Panel placement contract (▲REV3 — Codex#5):** the nudge fires at `candidateDetected` (before capture), when the meeting-window frame isn't resolved yet → the nudge uses **cursor-screen** placement (explicitly accepted). Once recording starts, `AudioCapture.resolvedWindowFrame()` is available → the recording panel repositions to the **meeting window's screen**. This is the defined path (not "callback TBD").
 - [ ] **Step 4: Run — PASS.**
 - [ ] **Step 5: Commit** `feat(meetings): MeetingSession actor state machine (consent-first, manual-stop authoritative)`
 
