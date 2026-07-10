@@ -24,4 +24,7 @@ final class ParserRegistryTests: XCTestCase {
     func testDiscordRegistered() {
         XCTAssertTrue(ParserRegistry().parser(for: "com.hnc.Discord") is DiscordParser)
     }
+    func testMessagesRegistered() {
+        XCTAssertTrue(ParserRegistry().parser(for: "com.apple.MobileSMS") is MessagesParser)
+    }
 }
