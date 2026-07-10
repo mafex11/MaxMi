@@ -13,6 +13,34 @@ public enum Denylist {
     static let blockedPathFragments: [String] = [
         "/reset-password", "/forgot-password", "/change-password", "/2fa", "/mfa", "/otp",
     ]
+
+    // Sensitive NATIVE apps never captured by the generic fallback (capture-by-default gate).
+    // These expose passwords, keys, financial data, or system secrets in their windows.
+    // Matched by exact bundle id OR a bundle-id prefix/substring for families.
+    static let sensitiveAppBundleIDs: Set<String> = [
+        "com.apple.systempreferences",          // System Settings (passwords, wifi keys, accounts)
+        "com.apple.SecurityAgent",              // auth prompts
+        "com.apple.keychainaccess",             // Keychain Access
+        "com.apple.Passwords",                  // Passwords app (macOS 15+)
+        "com.agilebits.onepassword7", "com.1password.1password",   // 1Password
+        "com.bitwarden.desktop",                // Bitwarden
+        "com.lastpass.LastPass", "com.dashlane.dashlanephonefinal", // LastPass, Dashlane
+        "org.keepassxc.keepassxc",              // KeePassXC
+        "com.apple.Terminal.SecureKeyboardEntry",
+    ]
+    // Substring matches for sensitive-app families (banking, VPN auth, wallets).
+    static let sensitiveAppSubstrings: [String] = [
+        "1password", "bitwarden", "lastpass", "dashlane", "keepass",
+        "bank", "wallet", "authenticator", "vpn.auth",
+    ]
+
+    /// True if a native app should NEVER be captured (even by the generic fallback).
+    /// The capture-by-default gate admits everything EXCEPT these.
+    public static func isSensitiveApp(_ bundleID: String) -> Bool {
+        if sensitiveAppBundleIDs.contains(bundleID) { return true }
+        let lower = bundleID.lowercased()
+        return sensitiveAppSubstrings.contains { lower.contains($0) }
+    }
     // Adult content: never captured, never sent to Gemini (which refuses to extract it anyway).
     // Specific hosts seen in the wild plus a substring net for the long tail of adult domains.
     static let blockedHostSuffixes_adult: [String] = [

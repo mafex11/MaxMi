@@ -39,6 +39,24 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isBlocked("chrome://settings"))
         XCTAssertTrue(Denylist.isBlocked("about:blank"))
     }
+    func testSensitiveAppsBlockedFromCapture() {
+        // System secrets / credentials — never captured, even by generic fallback.
+        XCTAssertTrue(Denylist.isSensitiveApp("com.apple.systempreferences"))
+        XCTAssertTrue(Denylist.isSensitiveApp("com.apple.keychainaccess"))
+        XCTAssertTrue(Denylist.isSensitiveApp("com.agilebits.onepassword7"))
+        XCTAssertTrue(Denylist.isSensitiveApp("com.bitwarden.desktop"))
+        // substring families
+        XCTAssertTrue(Denylist.isSensitiveApp("com.example.MyBankApp"))
+        XCTAssertTrue(Denylist.isSensitiveApp("io.LastPass.helper"))
+    }
+    func testNormalAppsAreCapturable() {
+        // The apps the user named + common ones must NOT be sensitive (capture-by-default).
+        XCTAssertFalse(Denylist.isSensitiveApp("com.todesktop.230313mzl4w4u92"))  // Cursor
+        XCTAssertFalse(Denylist.isSensitiveApp("com.spotify.client"))
+        XCTAssertFalse(Denylist.isSensitiveApp("com.apple.finder"))
+        XCTAssertFalse(Denylist.isSensitiveApp("com.microsoft.VSCode"))
+        XCTAssertFalse(Denylist.isSensitiveApp("com.hnc.Discord"))
+    }
     func testAdultSearchQueryBlocked() {
         // The gap found in live data: google.com/search?q=jaav+porn slipped through (host is google).
         XCTAssertTrue(Denylist.isBlockedWebURL("https://www.google.com/search?q=jaav+porn&rlz=1C5"))
