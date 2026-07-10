@@ -41,13 +41,6 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
     func clearRetry(id: String) throws { try store.clearRetry(id: id) }
 }
 
-// Apps admitted to capture that DON'T have a dedicated parser yet (ride generic fallback).
-// Apps with a registered parser self-admit via registry.parser(for:) in the gate, so they
-// need not be listed here (Notes/Notion/Obsidian/Mail moved to dedicated parsers).
-private let KnownApps: Set<String> = [
-    "net.whatsapp.WhatsApp",   // shallow AX tree; needs a native helper before a dedicated parser
-]
-
 @MainActor
 final class AppWiring {
     let store: Store
@@ -123,7 +116,12 @@ final class AppWiring {
         guard self.observer == nil else { return }  // prevent double-start
         let observer = FocusObserver(
             isCapturable: { [registry] bid in
-                Browser(rawValue: bid) != nil || registry.parser(for: bid) != nil || KnownApps.contains(bid)
+                // Capture-by-default: every app is capturable EXCEPT sensitive ones (System
+                // Settings, password managers, keychain, banking). Browsers and registered
+                // parsers always pass; everything else rides the generic fallback unless it's
+                // on the sensitive-app denylist. (Was an allowlist — too narrow, missed Cursor/etc.)
+                if Browser(rawValue: bid) != nil || registry.parser(for: bid) != nil { return true }
+                return !Denylist.isSensitiveApp(bid)
             },
             onCapture: { [weak self] app, pid in
                 self?.captureFrontmost(app: app, pid: pid)
