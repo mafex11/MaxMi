@@ -1,0 +1,1483 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4db5-ce21-7df0-9196-bd4f9f9826ef
+--------
+user
+You are a senior macOS/Swift architect reviewing a design spec for a meeting-capture feature (M5) in a local-first Mac memory app called MaxMi. The spec is at docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md — read it fully.
+
+Context: MaxMi is all-Swift, in-process, local-first. It captures on-screen text via macOS Accessibility, stores versioned content in encrypted SQLite (GRDB + sqlite-vec), extracts facts via Gemini, and serves memory over MCP. M5 adds the FIRST audio capability: detect meetings, show a right-edge recorder popup, capture+transcribe audio, store as meeting memories. The design is modeled on a competitor (Minimi) which uses a CoreAudio "responsibility SPI" mic-ownership detector, an Electron right-lane BrowserWindow popup, and Deepgram WS transcription. MaxMi adapts this to Swift: CoreAudio mic-active detection, an AppKit NSPanel popup, ScreenCaptureKit+AVAudioEngine audio, on-device SFSpeechRecognizer (Deepgram pluggable).
+
+Review the spec critically and concretely. Focus on:
+1. TECHNICAL FEASIBILITY on modern macOS (14/15): Is ScreenCaptureKit the right way to capture system audio? Does it really require Screen Recording permission? Can SFSpeechRecognizer handle long-form (30+ min) live transcription, or does it have a ~1min limit that breaks this design? Is CoreAudio mic-active detection (which app owns the mic) actually achievable in Swift WITHOUT the private responsibility SPI Minimi uses — if not, what's the real approach?
+2. THE DETECTION APPROACH: is "mic-active + frontmost meeting-app" robust enough, or will it constantly false-trigger / miss? Better signals?
+3. THE NSPanel POPUP: correct window level/collectionBehavior to float over a FULLSCREEN Zoom without stealing focus? Any gotchas.
+4. ARCHITECTURE: is isolating audio in a MaxMiMeetings module right? Is the meeting-as-version-with-metadata storage model sound, or should meetings be a first-class table?
+5. GAPS / RISKS the spec misses. Concrete failure modes.
+6. Anything OVER-engineered or under-specified.
+
+Be specific and technical — cite real API names, real limits, real macOS behaviors. If something in the design won't work, say so plainly and give the correct approach. Structure: Feasibility verdict → Critical issues → Should-fix → Nice-to-have → Overall recommendation.
+
+2026-07-10T20:26:29.687331Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll read the full spec, then validate the macOS-specific claims against current Apple documentation before giving a blunt architecture review.
+exec
+/bin/zsh -lc "wc -l docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md && sed -n '1,260p' docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+     131 docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md
+# MaxMi — M5: Meeting Capture (Detection + Right-Lane Recorder + Transcription)
+
+**Date:** 2026-07-11
+**Status:** Draft for review (Codex gpt-5.6-terra)
+**Milestone:** M5 — the first genuinely new *capability* since M1 (audio, not AX-tree). Everything prior captured on-screen text; M5 adds system-audio meeting capture + transcription + a meeting memory surface.
+**North star:** match Minimi's behaviour and UI/UX, reverse-engineered from the installed app (`/Applications/Minimi.app` — native helpers + `main.jsc` + `rightLane` React bundle). See [[project_minimi_reverse_engineering]], [[project_maxmi]], [[project_maxmi_ax_capture]].
+
+## 1. What we're building
+
+When the user joins a meeting, MaxMi (a) **detects** it automatically, (b) shows a **small rounded rectangle popup docked to the right edge of the screen** offering to record, (c) on accept, **captures system + mic audio and transcribes it**, (d) stores the transcript as a **meeting-kind memory**, extracted and searchable, and (e) serves it through the now-real **`meeting_memory` MCP tool**. Behaviour and UX mirror Minimi.
+
+**Success test:** join a Zoom/Meet/Teams call → within a few seconds a right-edge recorder popup appears → click Record → speak → end the call → a meeting thread exists with a transcript, encrypted at rest, extracted to facts, and `meeting_memory` (action `list`/`search`/`get_context`) returns it; clicking "Don't record" dismisses and captures nothing.
+
+## 2. How Minimi does it (reverse-engineered evidence — the reference to match)
+
+**Detection** — `Resources/exec/meetings-coreaudio` (native helper). Uses a private CoreAudio "responsibility SPI" (`responsibility_get_pid_responsible_for_pid`, `runningApplicationWithProcessIdentifier:`) to determine *which app owns the active microphone*. When a known meeting app starts using the mic it emits `meetingAppChanged` JSON on stdout. Known apps observed in the binary: `us.zoom.xos`, `com.microsoft.teams2`, `com.cisco.webexmeetingsapp`, plus browsers (`com.google.Chrome`, `com.apple.Safari`, Edge, Brave, Opera, Vivaldi, Arc/Atlas) and `com.tinyspeck.slackmacgap`, Discord. Fallbacks: `google-meet-monitor` (browser tab monitor) and a macOS unified-log-stream detector (`[MeetingDetector] falling back to log-stream detector`). Primary is core-audio (`[MeetingDetector] core-audio detector started (primary)`).
+
+**UI/UX** — a `rightLane.html` Electron `BrowserWindow`: frameless, transparent, `alwaysOnTop`, `setIgnoreMouseEvents` when idle, positioned against the right edge via `getPrimaryDisplay().workArea` + `setBounds`, repositioned on `display-metrics-changed`. Shows a "meeting-nudge" card with **Record** and **"DontRecord"** (skip) actions and a live audio-level meter (`onAudioLevel`, `right-lane-window-update`, `resize-right-lane-window`, `hide-right-lane-window`). On skip → `[MeetingCapture] user skipped`.
+
+**Audio → transcription** — `Resources/exec/captureAudio` streams audio to Deepgram over a WebSocket (`/transcribe?token=`, `[AudioCapture] Deepgram ready`, `deepgram_ready`). Transcript is committed as a `memory_versions` row with `metadata {"kind":"meeting"}`; extraction via backend `/api/memory/extract-meeting` + `/api/activity/summarize-meeting`. `meeting_memory` MCP tool queries `WHERE v.metadata LIKE '%"kind":"meeting"%'`.
+
+**Storage** — meetings are ordinary threads/versions tagged by `metadata.kind="meeting"` (not a separate table), so they reuse encryption, extraction, and search.
+
+## 3. MaxMi adaptation (what differs, and why)
+
+MaxMi is **all-Swift, in-process, local-first** (no Electron, no always-on cloud relay beyond the existing Gemini extraction). So:
+
+- **Detection:** a Swift `MeetingDetector` using CoreAudio to detect mic-active + the frontmost/responsible app's bundle id against a meeting-app allowlist (Zoom/Teams/Webex/Meet-in-browser/etc.). We do NOT need the private responsibility SPI for v1 — mic-active + frontmost-app heuristic is enough (documented limitation §11). Reuses AXReader's app-identity plumbing.
+- **Popup:** a native **AppKit `NSPanel`** (`.nonactivatingPanel`, `.hud`/borderless, `isFloatingPanel`, `level = .statusBar`, `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`), docked to the right edge using `NSScreen.main.visibleFrame`. This is the Swift equivalent of Minimi's right-lane BrowserWindow — same placement and behaviour, no web layer.
+- **Audio:** `ScreenCaptureKit` (`SCStream` audio) for **system audio** + `AVAudioEngine` for **mic**, mixed to a single stream. (ScreenCaptureKit audio is the modern, permission-scoped way to capture other apps' audio on macOS 13+.)
+- **Transcription:** pluggable `Transcriber` protocol. v1 default = **on-device `SFSpeechRecognizer`** (no new cloud dependency, matches MaxMi's local-first stance and avoids shipping a Deepgram key). A `DeepgramTranscriber` implementation is allowed behind the same protocol if the user provides a key (parity option), but on-device is the default.
+- **Storage/MCP:** meetings are versions with `metadata.kind="meeting"` (new `metadata` column, M5 migration), keyed `meeting:<app>/<title-or-time>`; the existing `meeting_memory` stub becomes a real query over that metadata. Reuses ThreadKeyDeriver + fingerprint dedup + encryption.
+
+## 4. Non-goals (M5 v1)
+
+- **No Deepgram/cloud transcription by default** (on-device SFSpeech; Deepgram is an optional pluggable impl, not shipped-on).
+- **No speaker diarization / per-speaker labels** (transcript is one stream; diarization is a follow-up).
+- **No private CoreAudio responsibility SPI** (mic-active + frontmost-app heuristic for v1).
+- **No meeting video/screen recording** — audio + transcript only.
+- **No auto-record** — always the popup prompt first (privacy: recording a meeting is consent-sensitive; never silent).
+- **No editing below the Store boundary beyond the additive `metadata` column.**
+- **No calendar integration** (title comes from the meeting app's window title, not calendar events — follow-up).
+
+## 5. Architecture / components
+
+```
+Sources/MaxMiMeetings/                         NEW module (audio is heavy; isolate it)
+  MeetingDetector.swift      CoreAudio mic-active + meeting-app allowlist -> onMeetingStart/End
+  MeetingAppList.swift       bundle ids: us.zoom.xos, com.microsoft.teams2, webex, + browsers/Meet
+  AudioCapture.swift         SCStream (system) + AVAudioEngine (mic) -> PCM buffers + level meter
+  Transcriber.swift          protocol { start/feed/finish -> transcript }; SFSpeechTranscriber (default)
+  MeetingSession.swift       orchestrates detect->prompt->capture->transcribe->commit; state machine
+Sources/MaxMi/RightLanePanel.swift             NEW: NSPanel right-edge recorder popup (Record/Skip + level)
+Sources/MaxMi/AppWiring.swift                  MODIFY: own MeetingSession; wire detector->panel->store
+Sources/MaxMiStore/Migrations.swift            MODIFY: v3 adds versions.metadata TEXT
+Sources/MaxMiStore/StoreAPI.swift              MODIFY: commitMeeting(transcript, app, title, metadata)
+Sources/MaxMiMCP/MemoryQueries.swift           MODIFY: real meeting_memory over metadata.kind=meeting
+Sources/MaxMiMCP/Tools.swift                   MODIFY: update meeting_memory description
+packaging/Info.plist                           MODIFY: NSMicrophoneUsageDescription, ScreenCapture usage
+```
+
+Data flow: `MeetingDetector` (mic goes active in a meeting app) → `MeetingSession` shows `RightLanePanel` → user clicks **Record** → `AudioCapture` starts (SCStream+mic), streams buffers to `Transcriber`, panel shows live level → meeting ends (mic inactive / call app backgrounded / user Stop) → transcript finalized → `Store.commitMeeting` writes a version with `metadata.kind="meeting"` → normal extraction/embedding → `meeting_memory` MCP serves it.
+
+## 6. UI/UX spec (the right-lane recorder — match Minimi)
+
+- **Placement:** docked to the right edge of `NSScreen.main.visibleFrame`, vertically centered-ish (upper-right). Small rounded rectangle (~ 300×90 pt idle nudge; ~300×120 while recording). Reposition on screen-change (`NSApplication.didChangeScreenParametersNotification`).
+- **States:**
+  1. **Nudge** (meeting detected): "Meeting detected — record it?" with **Record** (primary) and **Don't record** (dismiss). Auto-dismiss after ~20s if ignored → treated as skip.
+  2. **Recording:** red ● + "Recording…" + elapsed timer + live audio-level bar (from AudioCapture) + **Stop**.
+  3. **Finishing:** "Saving meeting…" spinner, then auto-hide.
+- **Behaviour:** frameless, translucent (vibrancy), always-on-top, joins all Spaces + fullscreen-aux (so it shows over a fullscreen Zoom), non-activating (doesn't steal focus), ignore-mouse when idle-nudge except on the buttons.
+- **Consent/privacy:** never records without an explicit Record click. "Don't record" fully suppresses for that meeting. A per-app "never ask for this app" option (stored in settings) is a nice-to-have.
+
+## 7. Storage & schema
+
+- **Migration v3 (additive):** `ALTER TABLE versions ADD COLUMN metadata TEXT;` (nullable; existing rows null). No other schema change.
+- **commitMeeting:** creates/【upserts】a thread keyed `meeting:<app-slug>/<title-slug>` (via ThreadKeyDeriver — meetings get a `meeting:` scheme), commits a version whose `content` = transcript (encrypted like all content) and `metadata` = JSON `{"kind":"meeting","app":"Zoom","startedAt":<ms>,"durationSec":N}`. Reuses fingerprint dedup (transcript chunks) + freeze-then-create.
+- Extraction: meeting versions flow through the SAME extraction pipeline; a `kind=meeting` hint can bias the extraction prompt toward action-items/summary (optional).
+
+## 8. MCP `meeting_memory` (make the stub real)
+
+Replace the stub. Actions:
+- `list` — recent meeting threads (query versions `WHERE metadata LIKE '%"kind":"meeting"%'`, newest first, cap 20), markdown.
+- `search <query>` — semantic search restricted to meeting-kind derivatives (reuse the vec search, filter by kind).
+- `get_context <thread>` — full transcript + facts for one meeting.
+Returns markdown (matches existing MCP style). Decrypts via the field cipher like `search_memory`.
+
+## 9. Permissions
+
+- **Microphone** (`NSMicrophoneUsageDescription`) — for mic capture.
+- **Screen Recording / ScreenCaptureKit** — required for system-audio capture (macOS gates SCStream audio behind Screen Recording permission). First use triggers the system prompt; if denied, fall back to **mic-only** capture (documented degradation, still useful).
+- Both requested lazily on first Record, not at launch. Signed with the existing stable identity so grants persist (see [[project_maxmi_ax_capture]]).
+
+## 10. Error handling
+
+- Detector unavailable (non-macOS / CoreAudio error) → log, no meeting features, rest of app unaffected.
+- Audio start failure → panel shows "Couldn't start recording", auto-dismiss; no partial thread.
+- Transcriber failure mid-meeting → keep audio buffer, retry finalize; if unrecoverable, store whatever transcript exists + mark version `extract_status` normally (never crash, never lose the whole meeting).
+- Screen Recording denied → mic-only fallback, panel notes "system audio unavailable".
+- All meeting content encrypted at rest; consent-gated; fail-closed (no record → no capture).
+
+## 11. Known limitations (v1, honest)
+
+- Mic-active + frontmost-app heuristic can miss a meeting where the call app is backgrounded, or false-positive on non-meeting mic use (e.g. voice memo) — the popup is the safety valve (user just clicks Don't record). Minimi's private responsibility SPI is more precise; deferred.
+- On-device SFSpeech is lower-accuracy than Deepgram for multi-speaker calls; Deepgram is available as a pluggable upgrade.
+- No diarization; transcript is a single stream.
+- Title from window title may be generic ("Zoom Meeting"); calendar integration deferred.
+
+## 12. Testing
+
+- **MeetingDetectorTests:** app-allowlist matching; mic-active state transitions → onStart/onEnd (fixture/mocked CoreAudio callback).
+- **MeetingSessionTests:** state machine (detected→prompt→record→finish; skip path; error paths) with a mock AudioCapture + mock Transcriber.
+- **Transcriber:** SFSpeech wrapper tested with a short fixture audio clip → non-empty transcript (or skipped in CI if unavailable).
+- **commitMeeting / migration v3:** version has metadata.kind=meeting; thread keyed meeting:...; MigrationTests asserts metadata column exists.
+- **meeting_memory MCP:** list/search/get_context over seeded meeting versions.
+- **RightLanePanel:** placement math (right-edge of a mocked screen frame); state rendering is manual/live (AppKit UI not unit-tested, per M4 precedent for glue).
+- Audio/detector live paths verified manually in §13; fixture-driven logic in CI.
+
+## 13. Exit criteria
+
+1. Joining a Zoom/Meet/Teams meeting shows the right-edge recorder popup within a few seconds.
+2. Record → speak → stop produces a `meeting:` thread with a transcript, encrypted at rest.
+3. Transcript is extracted to facts and returned by `meeting_memory` (list + search + get_context) and `search_memory`.
+4. "Don't record" captures nothing; auto-dismiss after timeout = skip.
+5. Mic + (Screen-Recording-gated) system audio both captured; denied Screen Recording → mic-only fallback works.
+6. Popup matches Minimi's placement/behaviour (right edge, floating, over fullscreen, non-activating).
+7. Full fixture suite green; no regressions; audio libs isolated in MaxMiMeetings.
+
+## 14. Rollout
+
+Spec → **Codex gpt-5.6-terra review** → revise → implementation plan → **Codex review (same chat)** → revise → subagent-driven build → live verify. Meetings is the last big capability to reach Minimi parity.
+
+web search: 
+web search: site:developer.apple.com ScreenCaptureKit system audio screen recording permission SCStream ...
+exec
+/bin/zsh -lc 'SDK=$(xcrun --show-sdk-path 2>/dev/null) && printf '"'%s\\n' \""'$SDK" && rg -n "kAudio(Device|Hardware)Property.*(Running|Process|PID)|ProcessObject|ProcessPID|DeviceIsRunning" "$SDK/System/Library/Frameworks/CoreAudio.framework/Headers" "$SDK/System/Library/Frameworks/AudioToolbox.framework/Headers"' in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareDeprecated.h:213:    @constant       kAudioHardwarePropertyProcessIsMaster
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareDeprecated.h:214:						The deprecated synonym for kAudioHardwarePropertyProcessIsMain
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareDeprecated.h:221:    kAudioHardwarePropertyProcessIsMaster API_DEPRECATED_WITH_REPLACEMENT("kAudioHardwarePropertyProcessIsMain", macos(10.0, 12.0), ios(2.0, 15.0), watchos(1.0, 8.0), tvos(9.0, 15.0)) = 'mast'
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareBase.h:676:    @constant       kAudioDevicePropertyDeviceIsRunning
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareBase.h:740:    kAudioDevicePropertyDeviceIsRunning                 = 'goin',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareBase.h:800:    @constant       kAudioClockDevicePropertyDeviceIsRunning
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareBase.h:824:    kAudioClockDevicePropertyDeviceIsRunning             = 'goin',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:385:                        from the IO context (of which kAudioDevicePropertyDeviceIsRunning and
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:533:    @constant       kAudioHardwarePropertyProcessIsMain
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:547:    @constant       kAudioHardwarePropertyProcessInputMute
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:551:    @constant       kAudioHardwarePropertyProcessIsAudible
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:586:    @constant       kAudioHardwarePropertyProcessObjectList
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:589:    @constant       kAudioHardwarePropertyTranslatePIDToProcessObject
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:622:    kAudioHardwarePropertyProcessIsMain							= 'main',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:625:    kAudioHardwarePropertyProcessInputMute                      = 'pmin',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:626:    kAudioHardwarePropertyProcessIsAudible                      = 'pmut',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:633:    kAudioHardwarePropertyProcessObjectList                     = 'prs#',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:634:    kAudioHardwarePropertyTranslatePIDToProcessObject           = 'id2p',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:918:    @constant       kAudioDevicePropertyDeviceIsRunningSomewhere
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:931:                        kAudioDevicePropertyIsRunning being sent.
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:991:	@constant		kAudioDevicePropertyProcessMute
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1000:    kAudioDevicePropertyDeviceIsRunningSomewhere        = 'gone',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1013:    kAudioDevicePropertyProcessMute						= 'appm'
+
+exec
+/bin/zsh -lc 'SDK=$(xcrun --show-sdk-path) && sed -n '"'540,650p' \""'$SDK/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h" && sed -n '"'885,1025p' \""'$SDK/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h" && rg -n "Process.*(PID|Device|Running|Input)|kAudioProcessProperty" "$SDK/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h"' in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+xcrun: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+xcrun: error: couldn't create cache file '/tmp/xcrun_db-M7VDgCaK' (errno=Operation not permitted)
+xcrun: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+xcrun: error: couldn't create cache file '/tmp/xcrun_db-QS2gehAr' (errno=Operation not permitted)
+    @constant       kAudioHardwarePropertyUserIDChanged
+                        This property exists so that clients can tell the HAL when they are changing
+                        the effective user ID of the process. The way it works is that a client will
+                        set the value of this property and the HAL will flush all its cached per-
+                        user preferences such as the default devices. The value of this property is
+                        a UInt32, but its value has no currently defined meaning and clients may
+                        pass any value when setting it to trigger the cache flush.
+    @constant       kAudioHardwarePropertyProcessInputMute
+                        A UInt32 where a non-zero value indicates that all data coming into the process
+                        for all devices will be silent. A value of 0 indicates that input data will be
+                        received normally.
+    @constant       kAudioHardwarePropertyProcessIsAudible
+                        A UInt32 where a non-zero value indicates that the audio of the process will
+                        be heard. A value of 0 indicates that all audio in the process will not be
+                        heard.
+    @constant       kAudioHardwarePropertySleepingIsAllowed
+                        A UInt32 where 1 means that the process will allow the CPU to idle sleep
+                        even if there is audio IO in progress. A 0 means that the CPU will not be
+                        allowed to idle sleep. Note that this property won't affect when the CPU is
+                        forced to sleep.
+    @constant       kAudioHardwarePropertyUnloadingIsAllowed
+                        A UInt32 where 1 means that this process wants the HAL to unload itself
+                        after a period of inactivity where there are no IOProcs and no listeners
+                        registered with any AudioObject.
+    @constant       kAudioHardwarePropertyHogModeIsAllowed
+                        A UInt32 where 1 means that this process wants the HAL to automatically take
+                        hog mode and 0 means that the HAL should not automatically take hog mode on
+                        behalf of the process. Processes that only ever use the default device are
+                        the sort of that should set this property's value to 0.
+    @constant       kAudioHardwarePropertyUserSessionIsActiveOrHeadless
+                        A UInt32 where a value other than 0 indicates that the login session of the
+                        user of the process is either an active console session or a headless
+                        session.
+    @constant       kAudioHardwarePropertyServiceRestarted
+                        A UInt32 whose value has no meaning. Rather, this property exists so that
+                        clients can be informed when the service has been reset for some reason.
+                        When a reset happens, any state the client has, such as cached data or
+                        added listeners, must be re-established by the client.
+    @constant       kAudioHardwarePropertyPowerHint
+                        A UInt32 whose values are drawn from the AudioHardwarePowerHint enum above.
+                        Only those values are allowed. This property allows a process to indicate how
+                        aggressive the system can be with optimizations that save power. The default
+                        value is kAudioHardwarePowerHintNone. Note that the value of this
+                        property can be set in an application's info.plist using the key,
+                        "AudioHardwarePowerHint". The values for this key are the strings that
+                        correspond to the values in the Power Hints enum.
+    @constant       kAudioHardwarePropertyProcessObjectList
+                        An array of AudioObjectIDs that represent the Process objects for all client processes
+                        currently connected to the system.
+    @constant       kAudioHardwarePropertyTranslatePIDToProcessObject
+                        This property fetches the AudioObjectID that corresponds to the Process object
+                        that has the given PID. The PID is passed in via the qualifier as a pid_t
+                        while the AudioObjectID for the Process is returned to the caller as the
+                        property's data. Note that an error is not returned if the PID doesn't refer
+                        to any Process. Rather, this property will return kAudioObjectUnknown
+                        as the value of the property.
+    @constant       kAudioHardwarePropertyTapList
+                        An array of AudioObjectIDs that represent the Tap objects on the system.
+    @constant       kAudioHardwarePropertyTranslateUIDToTap
+                        This property fetches the AudioObjectID that corresponds to the AudioTap
+                        that has the given UID. The UID is passed in via the qualifier as a CFString
+                        while the AudioObjectID for the AudioTap is returned to the caller as the 
+                        property's data. Note that an error is not returned if the UID doesn't refer 
+                        to any AudioTap. Rather, this property will return kAudioObjectUnknown as the 
+                        value of the property.
+*/
+CF_ENUM(AudioObjectPropertySelector)
+{
+    kAudioHardwarePropertyDevices                               = 'dev#',
+    kAudioHardwarePropertyDefaultInputDevice                    = 'dIn ',
+    kAudioHardwarePropertyDefaultOutputDevice                   = 'dOut',
+    kAudioHardwarePropertyDefaultSystemOutputDevice             = 'sOut',
+    kAudioHardwarePropertyTranslateUIDToDevice                  = 'uidd',
+    kAudioHardwarePropertyMixStereoToMono                       = 'stmo',
+    kAudioHardwarePropertyPlugInList                            = 'plg#',
+    kAudioHardwarePropertyTranslateBundleIDToPlugIn             = 'bidp',
+    kAudioHardwarePropertyTransportManagerList                  = 'tmg#',
+    kAudioHardwarePropertyTranslateBundleIDToTransportManager   = 'tmbi',
+    kAudioHardwarePropertyBoxList                               = 'box#',
+    kAudioHardwarePropertyTranslateUIDToBox                     = 'uidb',
+    kAudioHardwarePropertyClockDeviceList                       = 'clk#',
+    kAudioHardwarePropertyTranslateUIDToClockDevice             = 'uidc',
+    kAudioHardwarePropertyProcessIsMain							= 'main',
+    kAudioHardwarePropertyIsInitingOrExiting                    = 'inot',
+    kAudioHardwarePropertyUserIDChanged                         = 'euid',
+    kAudioHardwarePropertyProcessInputMute                      = 'pmin',
+    kAudioHardwarePropertyProcessIsAudible                      = 'pmut',
+    kAudioHardwarePropertySleepingIsAllowed                     = 'slep',
+    kAudioHardwarePropertyUnloadingIsAllowed                    = 'unld',
+    kAudioHardwarePropertyHogModeIsAllowed                      = 'hogr',
+    kAudioHardwarePropertyUserSessionIsActiveOrHeadless         = 'user',
+    kAudioHardwarePropertyServiceRestarted                      = 'srst',
+    kAudioHardwarePropertyPowerHint                             = 'powh',
+    kAudioHardwarePropertyProcessObjectList                     = 'prs#',
+    kAudioHardwarePropertyTranslatePIDToProcessObject           = 'id2p',
+    kAudioHardwarePropertyTapList                               = 'tps#',
+    kAudioHardwarePropertyTranslateUIDToTap                     = 'uidt',
+};
+
+//==================================================================================================
+#pragma mark AudioSystemObject Functions
+
+/*!
+    @functiongroup  AudioSystemObject
+*/
+
+/*!
+    @function       AudioHardwareUnload
+    @abstract       When this routine is called, all IO on all devices within a process will be
+                    terminated and all resources capable of being released will be released. This
+                    routine essentially returns the HAL to its uninitialized state.
+                        start time. Clear to indicate that the HAL should be consulted. This flag
+                        cannot be set if kAudioDeviceStartTimeDontConsultDeviceFlag is set.
+*/
+CF_ENUM(UInt32)
+{
+    kAudioDeviceStartTimeIsInputFlag            = (1 << 0),
+    kAudioDeviceStartTimeDontConsultDeviceFlag  = (1 << 1),
+    kAudioDeviceStartTimeDontConsultHALFlag     = (1 << 2)
+};
+
+//==================================================================================================
+#pragma mark AudioDevice Properties
+
+/*!
+    @enum           AudioDevice Properties
+    @abstract       AudioObjectPropertySelector values provided by the AudioDevice class.
+    @discussion     The AudioDevice class is a subclass of the AudioObjectClass. The class has four
+                    scopes, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput,
+                    kAudioObjectPropertyScopeOutput, and kAudioObjectPropertyScopePlayThrough. The
+                    class has a main element and an element for each channel in each stream
+                    numbered according to the starting channel number of each stream.
+    @constant       kAudioDevicePropertyPlugIn
+                        An OSStatus that contains any error codes generated by loading the IOAudio
+                        driver plug-in for the AudioDevice or kAudioHardwareNoError if the plug-in
+                        loaded successfully. This property only exists for IOAudio-based
+                        AudioDevices whose driver has specified a plug-in to load.
+    @constant       kAudioDevicePropertyDeviceHasChanged
+                        The type of this property is a UInt32, but its value has no meaning. This
+                        property exists so that clients can listen to it and be told when the
+                        configuration of the AudioDevice has changed in ways that cannot otherwise
+                        be conveyed through other notifications. In response to this notification,
+                        clients should re-evaluate everything they need to know about the device,
+                        particularly the layout and values of the controls.
+    @constant       kAudioDevicePropertyDeviceIsRunningSomewhere
+                        A UInt32 where 1 means that the AudioDevice is running in at least one
+                        process on the system and 0 means that it isn't running at all.
+    @constant       kAudioDeviceProcessorOverload
+                        A UInt32 where the value has no meaning. This property exists so that
+                        clients can be notified when the AudioDevice detects that an IO cycle has
+                        run past its deadline. Note that the notification for this property is
+                        usually sent from the AudioDevice's IO thread.
+    @constant       kAudioDevicePropertyIOStoppedAbnormally
+                        A UInt32 where the value has no meaning. This property exists so that
+                        clients can be notified when IO on the device has stopped outside of the
+                        normal mechanisms. This typically comes up when IO is stopped after
+                        AudioDeviceStart has returned successfully but prior to the notification for
+                        kAudioDevicePropertyIsRunning being sent.
+    @constant       kAudioDevicePropertyHogMode
+                        A pid_t indicating the process that currently owns exclusive access to the
+                        AudioDevice or a value of -1 indicating that the device is currently
+                        available to all processes. If the AudioDevice is in a non-mixable mode,
+                        the HAL will automatically take hog mode on behalf of the first process to
+                        start an IOProc.
+                        Note that when setting this property, the value passed in is ignored. If
+                        another process owns exclusive access, that remains unchanged. If the
+                        current process owns exclusive access, it is released and made available to
+                        all processes again. If no process has exclusive access (meaning the current
+                        value is -1), this process gains ownership of exclusive access.  On return,
+                        the pid_t pointed to by inPropertyData will contain the new value of the
+                        property.
+    @constant       kAudioDevicePropertyBufferFrameSize
+                        A UInt32 whose value indicates the number of frames in the IO buffers.
+    @constant       kAudioDevicePropertyBufferFrameSizeRange
+                        An AudioValueRange indicating the minimum and maximum values, inclusive, for
+                        kAudioDevicePropertyBufferFrameSize.
+    @constant       kAudioDevicePropertyUsesVariableBufferFrameSizes
+                        A UInt32 that, if implemented by a device, indicates that the sizes of the
+                        buffers passed to an IOProc will vary by a small amount. The value of this
+                        property will indicate the largest buffer that will be passed and
+                        kAudioDevicePropertyBufferFrameSize will indicate the smallest buffer that
+                        will get passed to the IOProc. The usage of this property is narrowed to
+                        only allow for devices whose buffer sizes vary by small amounts greater than
+                        kAudioDevicePropertyBufferFrameSize. It is not intended to be a license for
+                        devices to be able to send buffers however they please. Rather, it is
+                        intended to allow for hardware whose natural rhythms lead to this necessity.
+    @constant       kAudioDevicePropertyIOCycleUsage
+                        A Float32 whose range is from 0 to 1. This value indicates how much of the
+                        client portion of the IO cycle the process will use. The client portion of
+                        the IO cycle is the portion of the cycle in which the device calls the
+                        IOProcs so this property does not the apply to the duration of the entire
+                        cycle.
+    @constant       kAudioDevicePropertyStreamConfiguration
+                        This property returns the stream configuration of the device in an
+                        AudioBufferList (with the buffer pointers set to NULL) which describes the
+                        list of streams and the number of channels in each stream. This corresponds
+                        to what will be passed into the IOProc.
+    @constant       kAudioDevicePropertyIOProcStreamUsage
+                        An AudioHardwareIOProcStreamUsage structure which details the stream usage
+                        of a given IO proc. If a stream is marked as not being used, the given
+                        IOProc will see a corresponding NULL buffer pointer in the AudioBufferList
+                        passed to its IO proc. Note that the number of streams detailed in the
+                        AudioHardwareIOProcStreamUsage must include all the streams of that
+                        direction on the device. Also, when getting the value of the property, one
+                        must fill out the mIOProc field of the AudioHardwareIOProcStreamUsage with
+                        the address of the of the IOProc whose stream usage is to be retrieved.
+    @constant       kAudioDevicePropertyActualSampleRate
+                        A Float64 that indicates the current actual sample rate of the AudioDevice
+                        as measured by its time stamps.
+    @constant       kAudioDevicePropertyClockDevice
+                        A CFString that contains the UID for the AudioClockDevice that is currently
+                        serving as the main time base of the device. The caller is responsible
+                        for releasing the returned CFObject.
+    @constant       kAudioDevicePropertyIOThreadOSWorkgroup
+                        An os_workgroup_t that represents the thread workgroup the AudioDevice's
+                        IO thread belongs to. The caller is responsible for releasing the returned
+                        object.
+	@constant		kAudioDevicePropertyProcessMute
+						A UInt32 where a non-zero value indicates that the current process's audio
+						will be zeroed out by the system. Note that this property does not apply to
+						aggregate devices, just real, physical devices.
+*/
+CF_ENUM(AudioObjectPropertySelector)
+{
+    kAudioDevicePropertyPlugIn                          = 'plug',
+    kAudioDevicePropertyDeviceHasChanged                = 'diff',
+    kAudioDevicePropertyDeviceIsRunningSomewhere        = 'gone',
+    kAudioDeviceProcessorOverload                       = 'over',
+    kAudioDevicePropertyIOStoppedAbnormally             = 'stpd',
+    kAudioDevicePropertyHogMode                         = 'oink',
+    kAudioDevicePropertyBufferFrameSize                 = 'fsiz',
+    kAudioDevicePropertyBufferFrameSizeRange            = 'fsz#',
+    kAudioDevicePropertyUsesVariableBufferFrameSizes    = 'vfsz',
+    kAudioDevicePropertyIOCycleUsage                    = 'ncyc',
+    kAudioDevicePropertyStreamConfiguration             = 'slay',
+    kAudioDevicePropertyIOProcStreamUsage               = 'suse',
+    kAudioDevicePropertyActualSampleRate                = 'asrt',
+    kAudioDevicePropertyClockDevice                     = 'apcd',
+    kAudioDevicePropertyIOThreadOSWorkgroup             = 'oswg',
+    kAudioDevicePropertyProcessMute						= 'appm'
+};
+
+/*!
+    @enum           AudioDevice Properties Implemented via AudioControl objects
+    @abstract       AudioObjectPropertySelector values for AudioDevice properties that are
+                    implemented by AudioControl objects.
+    @discussion     These properties are also accessible by locating the AudioControl object
+                    attached to the AudioDevice and using that object to access the properties of
+                    the control.
+    @constant       kAudioDevicePropertyJackIsConnected
+                        A UInt32 where a value of 0 means that there isn't anything plugged into the
+                        jack associated withe given element and scope. This property is implemented
+547:    @constant       kAudioHardwarePropertyProcessInputMute
+625:    kAudioHardwarePropertyProcessInputMute                      = 'pmin',
+1953:    @constant       kAudioProcessPropertyPID
+1955:    @constant       kAudioProcessPropertyBundleID
+1958:    @constant       kAudioProcessPropertyDevices
+1962:    @constant       kAudioProcessPropertyIsRunning
+1967:    @constant       kAudioProcessPropertyIsRunningInput
+1971:    @constant       kAudioProcessPropertyIsRunningOutput
+1978:    kAudioProcessPropertyPID        	 = 'ppid',
+1979:    kAudioProcessPropertyBundleID   	 = 'pbid',
+1980:    kAudioProcessPropertyDevices    	 = 'pdv#',
+1981:    kAudioProcessPropertyIsRunning  	 = 'pir?',
+1982:	kAudioProcessPropertyIsRunningInput  = 'piri',
+1983:	kAudioProcessPropertyIsRunningOutput = 'piro',
+
+exec
+/bin/zsh -lc "sed -n '1920,1992p' /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h && plutil -p /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Resources/Info.plist 2>/dev/null | head -40" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+                        drift compensation. The range of values is from 0 to 128, where the lower
+                        the number, the worse the quality but also the less CPU is used to do the
+                        compensation.
+*/
+CF_ENUM(AudioObjectPropertySelector)
+{
+    kAudioSubTapPropertyExtraLatency             = 'xltc',
+    kAudioSubTapPropertyDriftCompensation        = 'drft',
+    kAudioSubTapPropertyDriftCompensationQuality = 'drfq'
+};
+
+//==================================================================================================
+#pragma mark -
+#pragma mark Process Constants
+
+/*!
+    @enum           Process Class Constants
+    @abstract       Various constants related to the Process class.
+    @discussion     The Process class contains information about a client process connected to the HAL.
+    @constant       kAudioProcessClassID
+                       The AudioClassID that identifies the Process class.
+*/
+CF_ENUM(AudioClassID)
+{
+    kAudioProcessClassID = 'clnt'
+};
+
+//==================================================================================================
+#pragma mark Process Properties
+
+/*!
+    @enum           Process Properties
+    @abstract       Processes AudioObjectPropertySelector values provided by the Process class.
+    @constant       kAudioProcessPropertyPID
+                        A pid\_t indicating the process ID associated with the process.
+    @constant       kAudioProcessPropertyBundleID
+                        A CFString that contains the bundle ID of the process. The caller is
+                        responsible for releasing the returned CFObject.
+    @constant       kAudioProcessPropertyDevices
+                        An array of AudioObjectIDs that represent the devices currently used by the
+                        process for input or used by the process for output. The scope will select
+                        the input or output device list.
+    @constant       kAudioProcessPropertyIsRunning
+                        A UInt32 where a value of 0 indicates that there is not audio IO in progress
+                        in the process, and a value of 1 indicates that there is audio IO in progress
+                        in the process. Note that audio IO may in progress even if no input or output
+                        streams are active.
+    @constant       kAudioProcessPropertyIsRunningInput
+                        A UInt32 where a value of 0 indicates that the process is not running any
+                        IO or there is not any active input streams, and a value of 1 indicates that
+                        the process is running IO and there is at least one active input stream.
+    @constant       kAudioProcessPropertyIsRunningOutput
+                        A UInt32 where a value of 0 indicates that the process is not running any
+                        IO or there is not any active output streams, and a value of 1 indicates that
+                        the process is running IO and there is at least one active output stream.
+*/
+CF_ENUM(AudioObjectPropertySelector)
+{
+    kAudioProcessPropertyPID        	 = 'ppid',
+    kAudioProcessPropertyBundleID   	 = 'pbid',
+    kAudioProcessPropertyDevices    	 = 'pdv#',
+    kAudioProcessPropertyIsRunning  	 = 'pir?',
+	kAudioProcessPropertyIsRunningInput  = 'piri',
+	kAudioProcessPropertyIsRunningOutput = 'piro',
+};
+
+//==================================================================================================
+#pragma mark -
+#pragma mark Tap Constants
+
+/*!
+    @enum           Tap Class Constants
+    @abstract       Various constants related to the Tap class.
+
+web search: 
+web search: "kAudioProcessPropertyIsRunningInput" Apple documentation ...
+exec
+/bin/zsh -lc 'rg -n "kAudioProcessClassID|kAudioProcessPropertyPID|ProcessObjectList|API_AVAILABLE|MAC_OS_X_VERSION_14" /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/*.h | head -100' in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:586:    @constant       kAudioHardwarePropertyProcessObjectList
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:633:    kAudioHardwarePropertyProcessObjectList                     = 'prs#',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1939:    @constant       kAudioProcessClassID
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1944:    kAudioProcessClassID = 'clnt'
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1953:    @constant       kAudioProcessPropertyPID
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1978:    kAudioProcessPropertyPID        	 = 'ppid',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareTapping.h:44:							  AudioObjectID*  outTapID)                                     API_AVAILABLE(macos(14.2)) API_UNAVAILABLE(ios, watchos, tvos);
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardwareTapping.h:54:AudioHardwareDestroyProcessTap(AudioObjectID inTapID)                                       API_AVAILABLE(macos(14.2)) API_UNAVAILABLE(ios, watchos, tvos);
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/CATapDescription.h:34:} API_AVAILABLE(macos(13.0), ios(16.0));
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/CATapDescription.h:44:API_AVAILABLE(macos(12.0), ios(15.0))
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/CATapDescription.h:136:API_AVAILABLE(macos(26.0));
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/CATapDescription.h:167:API_AVAILABLE(macos(26.0));
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:586:    @constant       kAudioHardwarePropertyProcessObjectList
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:633:    kAudioHardwarePropertyProcessObjectList                     = 'prs#',
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1939:    @constant       kAudioProcessClassID
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1944:    kAudioProcessClassID = 'clnt'
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1953:    @constant       kAudioProcessPropertyPID
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreAudio.framework/Headers/AudioHardware.h:1978:    kAudioProcessPropertyPID        	 = 'ppid',
+
+web search: 
+web search: "kAudioProcessPropertyBundleID" "macOS" ...
+web search: 
+web search: site:developer.apple.com "NSScreenCaptureUsageDescription" ...
+codex
+I’ve confirmed two decisive constraints: ScreenCaptureKit is the supported system-audio path and is Screen Recording–gated, while Apple documents a one-minute recognition-task ceiling for `SFSpeechRecognizer`. I’m checking the public Core Audio process APIs and the persistence/UI implications next.
+exec
+/bin/zsh -lc 'rg -n -i "create table.*versions|memory_versions|metadata|meeting_memory|ThreadKeyDeriver|fingerprint|extract_status" Sources Tests Package.swift 2>/dev/null' in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+Tests/MaxMiMCPTests/MCPServerTests.swift:8:         ["name": "meeting_memory", "description": "d", "inputSchema": ["type": "object"]]]
+Tests/MaxMiMCPTests/MCPServerTests.swift:42:                       ["search_memory", "list_active_threads", "meeting_memory"])
+Tests/MaxMiMCPTests/ToolsTests.swift:15:                       ["search_memory", "list_active_threads", "meeting_memory"])
+Tests/MaxMiMCPTests/ToolsTests.swift:30:        let r = try await makeTools().call(name: "meeting_memory", arguments: ["action": "list"])
+Sources/MaxMiMCP/Tools.swift:17:            ["name": "meeting_memory",
+Sources/MaxMiMCP/Tools.swift:44:        case "meeting_memory":
+Sources/MaxMiMCP/Tools.swift:47:                return ToolResult(text: "meeting_memory requires action: list | get_context | search", isError: true)
+Sources/MaxMiStore/PauseSettings.swift:19:            // Recoverable metadata: log decode failure and treat as empty.
+Sources/MaxMiStore/PauseSettings.swift:32:                // Recoverable metadata: log decode failure and treat as empty.
+Sources/MaxMiStore/StoreAPI.swift:33:    /// Split content into items, fingerprint each (normalized), record novel ones.
+Sources/MaxMiStore/StoreAPI.swift:35:    private func recordNovelFingerprints(_ content: String, threadID: String, nowMs: EpochMs,
+Sources/MaxMiStore/StoreAPI.swift:44:            let fp = ContentHash.sha256Hex("\(threadID)\n\(item)")   // thread-scoped fingerprint
+Sources/MaxMiStore/StoreAPI.swift:47:                    "SELECT 1 FROM message_fingerprints WHERE fingerprint=? LIMIT 1", arguments: [fp]) != nil
+Sources/MaxMiStore/StoreAPI.swift:50:                    try d.execute(sql: "INSERT OR IGNORE INTO message_fingerprints (fingerprint, thread_id, seen_at) VALUES (?,?,?)",
+Sources/MaxMiStore/StoreAPI.swift:85:            // Per-item fingerprint dedup: if no line is novel for this thread, skip (spec §3b).
+Sources/MaxMiStore/StoreAPI.swift:88:            if !recordNovelFingerprints(input.content, threadID: threadID, nowMs: nowMs, d) {
+Sources/MaxMiStore/StoreAPI.swift:101:                                        extract_status='pending', is_frozen=0 WHERE id=?
+Sources/MaxMiStore/StoreAPI.swift:107:                    INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status)
+Sources/MaxMiStore/StoreAPI.swift:118:        // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
+Sources/MaxMiStore/StoreAPI.swift:129:                WHERE v.extract_status = 'pending'
+Sources/MaxMiStore/StoreAPI.swift:148:            try d.execute(sql: "UPDATE versions SET extract_status='completed' WHERE id=? AND content_hash=?",
+Sources/MaxMiStore/StoreAPI.swift:156:            try d.execute(sql: "UPDATE versions SET extract_status='failed' WHERE id=?", arguments: [versionID])
+Sources/MaxMi/AppWiring.swift:212:            let cleanKey = ThreadKeyDeriver.derive(parsed)
+Sources/MaxMiStore/Migrations.swift:18:            CREATE TABLE versions (
+Sources/MaxMiStore/Migrations.swift:27:              extract_status TEXT NOT NULL DEFAULT 'pending',
+Sources/MaxMiStore/Migrations.swift:64:            CREATE TABLE message_fingerprints (
+Sources/MaxMiStore/Migrations.swift:65:              fingerprint  TEXT PRIMARY KEY,
+Sources/MaxMiStore/Migrations.swift:69:            CREATE INDEX idx_fingerprints_thread ON message_fingerprints(thread_id);
+Tests/MaxMiCaptureTests/KeyFixturesTests.swift:35:            let derived = keys.map { ThreadKeyDeriver.derive(cap(app, $0)) }
+Tests/MaxMiCaptureTests/KeyFixturesTests.swift:45:            let k = ThreadKeyDeriver.derive(cap("Warp", garbage))
+Tests/MaxMiCaptureTests/KeyFixturesTests.swift:52:        let a = ThreadKeyDeriver.derive(cap("Notion", "notion:plan-v1.2"))
+Tests/MaxMiCaptureTests/KeyFixturesTests.swift:53:        let b = ThreadKeyDeriver.derive(cap("Notion", "notion:budget-2.5"))
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:4:final class ThreadKeyDeriverTests: XCTestCase {
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:11:        XCTAssertEqual(ThreadKeyDeriver.hygiene("terminal:warp/maxmi.app).", appFallback: "terminal:warp"),
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:15:        XCTAssertEqual(ThreadKeyDeriver.hygiene("terminal:warp/layer…)", appFallback: "terminal:warp"),
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:19:        XCTAssertEqual(ThreadKeyDeriver.hygiene("terminal:warp/My  Project", appFallback: "terminal:warp"),
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:23:        XCTAssertEqual(ThreadKeyDeriver.hygiene("terminal:warp/inspect2.mjs", appFallback: "terminal:warp"),
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:27:        XCTAssertEqual(ThreadKeyDeriver.hygiene("terminal:", appFallback: "terminal:warp"), "terminal:warp")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:28:        XCTAssertEqual(ThreadKeyDeriver.hygiene("   ", appFallback: "web:unknown"), "web:unknown")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:32:        XCTAssertLessThanOrEqual(ThreadKeyDeriver.hygiene(long, appFallback: "web:example.com").count, 200)
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:37:        let a = ThreadKeyDeriver.derive(cap("Web", "https://www.google.com/maps/@13.0001,77.71,2550m/data=!3?entry=ttu"))
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:38:        let b = ThreadKeyDeriver.derive(cap("Web", "https://www.google.com/maps/@12.999,77.71,2070m/data=!3?entry=ttu"))
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:44:        let a = ThreadKeyDeriver.derive(cap("Web", "https://docs.google.com/document/d/\(id)/edit?tab=t.6xoj"))
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:45:        let b = ThreadKeyDeriver.derive(cap("Web", "https://docs.google.com/document/d/\(id)/edit?tab=t.p2vx"))
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:51:        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Slack", "slack:acme/general")), "slack:acme/general")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:54:        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Warp", "terminal:warp/maxmi.app).")), "terminal:warp")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:55:        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Warp", "terminal:warp/inspect2.mjs")), "terminal:warp")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:58:        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Mail", "mail:inbox")), "mail:inbox")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:63:        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Notion", "notion:plan-v1.2")), "notion:plan-v1.2")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:64:        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Notes", "notes:node.js")), "notes:node.js")
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:66:        XCTAssertNotEqual(ThreadKeyDeriver.derive(cap("Notion", "notion:plan-v1.2")),
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:67:                          ThreadKeyDeriver.derive(cap("Notion", "notion:budget-2.5")))
+Tests/MaxMiCaptureTests/ThreadKeyDeriverTests.swift:69:        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Warp", "terminal:warp/inspect2.mjs")), "terminal:warp")
+Tests/MaxMiStoreTests/FingerprintDedupTests.swift:6:final class FingerprintDedupTests: XCTestCase {
+Tests/MaxMiStoreTests/FingerprintDedupTests.swift:20:        let fp = try db.dbQueue.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM message_fingerprints") }
+Tests/MaxMiStoreTests/FingerprintDedupTests.swift:21:        XCTAssertEqual(fp, 2, "both lines fingerprinted")
+Tests/MaxMiStoreTests/FingerprintDedupTests.swift:33:        let fp = try db.dbQueue.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM message_fingerprints") }
+Tests/MaxMiStoreTests/FingerprintDedupTests.swift:34:        XCTAssertEqual(fp, 3, "third line adds one fingerprint")
+Tests/MaxMiStoreTests/MigrationTests.swift:27:                INSERT INTO versions (id,thread_id,hour_bucket,content,content_hash,word_count,is_frozen,committed_at,extract_status)
+Tests/MaxMiStoreTests/MigrationTests.swift:31:                INSERT INTO versions (id,thread_id,hour_bucket,content,content_hash,word_count,is_frozen,committed_at,extract_status)
+Tests/MaxMiStoreTests/MigrationTests.swift:88:    func testV2AddsMessageFingerprintsTable() throws {
+Tests/MaxMiStoreTests/MigrationTests.swift:92:                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='message_fingerprints'")
+Tests/MaxMiStoreTests/MigrationTests.swift:93:            XCTAssertEqual(n, 1, "v2 migration must create message_fingerprints")
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:25:            XCTAssertEqual(row["extract_status"], "pending")
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:41:        try db.dbQueue.write { try $0.execute(sql: "UPDATE versions SET extract_status='completed'") }
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:48:            XCTAssertEqual(row["extract_status"], "pending", "content change resets status")
+Tests/MaxMiCaptureTests/Fixtures/keys/README.md:10:   parser's key HINT or add a rule to `ThreadKeyDeriver` — never loosen the assertion.
+Tests/MaxMiStoreTests/BackfillTests.swift:22:                INSERT INTO versions (id,thread_id,hour_bucket,content,content_hash,word_count,is_frozen,committed_at,extract_status)
+Sources/MaxMiCapture/ThreadKeyDeriver.swift:7:public enum ThreadKeyDeriver {
+Tests/MaxMiStoreTests/MarkExtractedTests.swift:59:            XCTAssertEqual(try String.fetchOne(d, sql: "SELECT extract_status FROM versions"), "pending")
+Sources/MaxMiCapture/DiscordParser.swift:10:/// acceptable best-effort (the ThreadKeyDeriver + fingerprint dedup keep threads clean regardless).
+
+exec
+/bin/zsh -lc "sed -n '1,210p' Sources/MaxMiStore/Migrations.swift && sed -n '1,210p' Sources/MaxMiStore/StoreAPI.swift && sed -n '1,100p' Sources/MaxMiMCP/Tools.swift && sed -n '1,160p' Sources/MaxMiMCP/MemoryQueries.swift 2>/dev/null" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+import GRDB
+
+enum Migrations {
+    static var migrator: DatabaseMigrator {
+        var m = DatabaseMigrator()
+        m.registerMigration("v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE threads (
+              id             TEXT PRIMARY KEY,
+              source_app     TEXT NOT NULL,
+              source_key     TEXT NOT NULL,
+              source_title   TEXT,
+              last_tree_hash TEXT,
+              created_at     INTEGER NOT NULL,
+              updated_at     INTEGER NOT NULL,
+              UNIQUE(source_app, source_key)
+            );
+            CREATE TABLE versions (
+              id             TEXT PRIMARY KEY,
+              thread_id      TEXT NOT NULL REFERENCES threads(id),
+              hour_bucket    INTEGER NOT NULL,
+              content        TEXT NOT NULL,
+              content_hash   TEXT NOT NULL,
+              word_count     INTEGER NOT NULL DEFAULT 0,
+              is_frozen      INTEGER NOT NULL DEFAULT 0,
+              committed_at   INTEGER NOT NULL,
+              extract_status TEXT NOT NULL DEFAULT 'pending',
+              UNIQUE(thread_id, hour_bucket)
+            );
+            CREATE INDEX idx_versions_thread ON versions(thread_id);
+            CREATE TABLE derivatives (
+              id               TEXT PRIMARY KEY,
+              thread_id        TEXT NOT NULL REFERENCES threads(id),
+              version_id       TEXT NOT NULL REFERENCES versions(id),
+              content          TEXT NOT NULL,
+              content_hash     TEXT NOT NULL,
+              committed_at     INTEGER NOT NULL,
+              embedding_status TEXT NOT NULL DEFAULT 'pending',
+              UNIQUE(thread_id, content_hash)
+            );
+            CREATE INDEX idx_derivatives_version ON derivatives(version_id);
+            CREATE TABLE retry_queue (
+              id              TEXT PRIMARY KEY,
+              kind            TEXT NOT NULL,
+              version_id      TEXT,
+              derivative_id   TEXT,
+              attempts        INTEGER NOT NULL DEFAULT 0,
+              next_attempt_at INTEGER NOT NULL,
+              last_error      TEXT
+            );
+            CREATE INDEX idx_retry_due ON retry_queue(next_attempt_at);
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+            CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL);
+            """)
+            try db.execute(sql: """
+            CREATE VIRTUAL TABLE derivative_embeddings USING vec0(
+              derivative_id TEXT PRIMARY KEY,
+              embedding     FLOAT[1536]
+            );
+            """)
+        }
+        m.registerMigration("v2") { db in
+            try db.execute(sql: """
+            CREATE TABLE message_fingerprints (
+              fingerprint  TEXT PRIMARY KEY,
+              thread_id    TEXT NOT NULL REFERENCES threads(id),
+              seen_at      INTEGER NOT NULL
+            );
+            CREATE INDEX idx_fingerprints_thread ON message_fingerprints(thread_id);
+            """)
+        }
+        return m
+    }
+}
+import Foundation
+import GRDB
+import MaxMiCore
+
+public struct CaptureInput: Sendable {
+    public let sourceApp: String
+    public let sourceKey: String
+    public let sourceTitle: String?
+    public let content: String
+    public init(sourceApp: String, sourceKey: String, sourceTitle: String?, content: String) {
+        self.sourceApp = sourceApp; self.sourceKey = sourceKey
+        self.sourceTitle = sourceTitle; self.content = content
+    }
+}
+
+public enum CommitResult: Equatable, Sendable {
+    case deduplicated
+    case committed(versionID: String, contentHash: String)
+}
+
+public final class Store {
+    let db: MaxMiDatabase
+    let cipher: any FieldCipher
+    public init(db: MaxMiDatabase, cipher: any FieldCipher) {
+        self.db = db; self.cipher = cipher
+    }
+
+    /// Decrypt for reads; integrity/malformed failures become a marker, never a throw.
+    func decryptOrMarker(_ stored: String) -> String {
+        (try? cipher.decrypt(stored)) ?? "[unreadable memory]"
+    }
+
+    /// Split content into items, fingerprint each (normalized), record novel ones.
+    /// Returns true if ANY item was novel (=> commit). Fails OPEN (true) on error (spec §7).
+    private func recordNovelFingerprints(_ content: String, threadID: String, nowMs: EpochMs,
+                                         _ d: Database) -> Bool {
+        // Items = non-empty lines (chat/mail/terminal); a single-line/document is one item.
+        let items = content.split(separator: "\n").map {
+            $0.trimmingCharacters(in: .whitespaces).lowercased()
+        }.filter { !$0.isEmpty }
+        guard !items.isEmpty else { return true }
+        var anyNovel = false
+        for item in items {
+            let fp = ContentHash.sha256Hex("\(threadID)\n\(item)")   // thread-scoped fingerprint
+            do {
+                let exists = try Int.fetchOne(d, sql:
+                    "SELECT 1 FROM message_fingerprints WHERE fingerprint=? LIMIT 1", arguments: [fp]) != nil
+                if !exists {
+                    anyNovel = true
+                    try d.execute(sql: "INSERT OR IGNORE INTO message_fingerprints (fingerprint, thread_id, seen_at) VALUES (?,?,?)",
+                                  arguments: [fp, threadID, nowMs])
+                }
+            } catch {
+                return true   // fail open: never lose a capture over a dedup error
+            }
+        }
+        return anyNovel
+    }
+
+    public func commitCapture(_ input: CaptureInput, nowMs: EpochMs) throws -> CommitResult {
+        let hash = ContentHash.sha256Hex(input.content)
+        let bucket = HourBucket.bucket(forMs: nowMs)
+        let words = input.content.split(whereSeparator: \.isWhitespace).count
+        let storedContent = try cipher.encrypt(input.content)
+
+        return try db.dbQueue.write { d in
+            // 1. Upsert thread; dedup on unchanged tree hash.
+            let existing = try Row.fetchOne(d,
+                sql: "SELECT id, last_tree_hash FROM threads WHERE source_app=? AND source_key=?",
+                arguments: [input.sourceApp, input.sourceKey])
+            let threadID: String
+            if let existing {
+                if existing["last_tree_hash"] as String? == hash { return .deduplicated }
+                threadID = existing["id"]
+                try d.execute(sql: "UPDATE threads SET source_title=?, last_tree_hash=?, updated_at=? WHERE id=?",
+                              arguments: [input.sourceTitle, hash, nowMs, threadID])
+            } else {
+                threadID = Ident.uuidv7(nowMs: nowMs)
+                try d.execute(sql: """
+                    INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?)
+                    """, arguments: [threadID, input.sourceApp, input.sourceKey, input.sourceTitle, hash, nowMs, nowMs])
+            }
+
+            // Per-item fingerprint dedup: if no line is novel for this thread, skip (spec §3b).
+            // Complements last_tree_hash (which catches identical whole trees) by catching
+            // recaptures where only order/chrome changed but no new message appeared.
+            if !recordNovelFingerprints(input.content, threadID: threadID, nowMs: nowMs, d) {
+                return .deduplicated
+            }
+
+            // 2. Freeze-then-create: seal mutable versions from past hours.
+            try d.execute(sql: "UPDATE versions SET is_frozen=1 WHERE thread_id=? AND is_frozen=0 AND hour_bucket<>?",
+                          arguments: [threadID, bucket])
+
+            // 3. Upsert this hour's version (replace content, reset pending, un-freeze if clock stepped back).
+            if let vid = try String.fetchOne(d, sql: "SELECT id FROM versions WHERE thread_id=? AND hour_bucket=?",
+                                             arguments: [threadID, bucket]) {
+                try d.execute(sql: """
+                    UPDATE versions SET content=?, content_hash=?, word_count=?, committed_at=?,
+                                        extract_status='pending', is_frozen=0 WHERE id=?
+                    """, arguments: [storedContent, hash, words, nowMs, vid])
+                return .committed(versionID: vid, contentHash: hash)
+            } else {
+                let vid = Ident.uuidv7(nowMs: nowMs)
+                try d.execute(sql: """
+                    INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status)
+                    VALUES (?,?,?,?,?,?,0,?,'pending')
+                    """, arguments: [vid, threadID, bucket, storedContent, hash, words, nowMs])
+                return .committed(versionID: vid, contentHash: hash)
+            }
+        }
+    }
+}
+
+extension Store {
+    public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
+        // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
+        // can serve as baseline; its unextracted facts are suppressed from the newer diff).
+        try db.dbQueue.read { d in
+            let currentBucket = HourBucket.bucket(forMs: nowMs)
+            let rows = try Row.fetchAll(d, sql: """
+                SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
+                       t.source_app, t.source_key,
+                       (SELECT p.content FROM versions p
+                         WHERE p.thread_id = v.thread_id AND p.hour_bucket < v.hour_bucket
+                         ORDER BY p.hour_bucket DESC LIMIT 1) AS previous_frozen_content
+                FROM versions v JOIN threads t ON t.id = v.thread_id
+                WHERE v.extract_status = 'pending'
+                  AND (v.is_frozen = 1 OR v.hour_bucket < ? OR v.committed_at <= ?)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM retry_queue r
+                    WHERE r.kind = 'extract' AND r.version_id = v.id AND r.next_attempt_at > ?
+                  )
+                ORDER BY v.committed_at
+                """, arguments: [currentBucket, nowMs - idleThresholdMs, nowMs])
+            return rows.map { r in
+                PendingVersion(id: r["id"], threadID: r["thread_id"], hourBucket: r["hour_bucket"],
+                               content: decryptOrMarker(r["content"]), contentHash: r["content_hash"],
+                               sourceApp: r["source_app"], sourceKey: r["source_key"],
+                               previousFrozenContent: (r["previous_frozen_content"] as String?).map(decryptOrMarker))
+            }
+        }
+    }
+
+    public func markExtracted(versionID: String, contentHashRead: String) throws -> Bool {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE versions SET extract_status='completed' WHERE id=? AND content_hash=?",
+                          arguments: [versionID, contentHashRead])
+            return d.changesCount > 0
+        }
+    }
+
+    public func markExtractFailed(versionID: String) throws {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE versions SET extract_status='failed' WHERE id=?", arguments: [versionID])
+        }
+    }
+
+    public func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PendingDerivative] {
+        try db.dbQueue.write { d in
+            var inserted: [PendingDerivative] = []
+            for fact in facts {
+                let id = Ident.uuidv7(nowMs: nowMs)
+                let hash = ContentHash.sha256Hex(fact)
+                let storedContent = try cipher.encrypt(fact)
+                try d.execute(sql: """
+                    INSERT OR IGNORE INTO derivatives (id, thread_id, version_id, content, content_hash, committed_at, embedding_status)
+                    VALUES (?,?,?,?,?,?,'pending')
+                    """, arguments: [id, threadID, versionID, storedContent, hash, nowMs])
+                if d.changesCount > 0 { inserted.append(PendingDerivative(id: id, content: fact)) }
+            }
+            return inserted
+        }
+    }
+
+    public func markEmbedded(derivativeID: String) throws {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE derivatives SET embedding_status='completed' WHERE id=?", arguments: [derivativeID])
+        }
+    }
+
+    public func pendingDerivatives(versionID: String) throws -> [PendingDerivative] {
+        try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: "SELECT id, content FROM derivatives WHERE version_id=? AND embedding_status='pending'",
+                             arguments: [versionID])
+                .map { PendingDerivative(id: $0["id"], content: decryptOrMarker($0["content"])) }
+        }
+    }
+
+    public func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws {
+        try db.dbQueue.write { d in
+            let existing = try Row.fetchOne(d, sql: """
+                SELECT id, attempts FROM retry_queue
+                WHERE kind=? AND ifnull(version_id,'')=ifnull(?,'') AND ifnull(derivative_id,'')=ifnull(?,'')
+                """, arguments: [kind, versionID, derivativeID])
+            let attempts = (existing?["attempts"] as Int? ?? 0)
+            let backoff: EpochMs = min(30_000 * EpochMs(1 << min(attempts, 10)), 3_600_000)
+            if let existing {
+                try d.execute(sql: "UPDATE retry_queue SET attempts=?, next_attempt_at=?, last_error=? WHERE id=?",
+                              arguments: [attempts + 1, nowMs + backoff, error, existing["id"] as String])
+            } else {
+                try d.execute(sql: """
+                    INSERT INTO retry_queue (id, kind, version_id, derivative_id, attempts, next_attempt_at, last_error)
+                    VALUES (?,?,?,?,1,?,?)
+                    """, arguments: [Ident.uuidv7(nowMs: nowMs), kind, versionID, derivativeID, nowMs + backoff, error])
+            }
+        }
+    }
+
+import Foundation
+
+public enum MaxMiToolsDefinitions {
+    public static var all: [[String: Any]] {
+        [
+            ["name": "search_memory",
+             "description": "Semantic search over everything the user has read on screen. Returns matching memory facts (third person) with sources, as markdown.",
+             "inputSchema": ["type": "object",
+                             "properties": ["query": ["type": "string", "description": "What to search for"],
+                                            "limit": ["type": "number", "description": "Max results (default 10, max 20)"]],
+                             "required": ["query"]]],
+            ["name": "list_active_threads",
+             "description": "Recently viewed pages/threads with their latest memory facts, as markdown.",
+             "inputSchema": ["type": "object",
+                             "properties": ["limit": ["type": "number", "description": "Max threads (default 10, max 20)"]],
+                             "required": [String]()]],
+            ["name": "meeting_memory",
+             "description": "Query meeting memories. (No meetings are captured in this MaxMi version yet.)",
+             "inputSchema": ["type": "object",
+                             "properties": ["action": ["type": "string", "enum": ["list", "get_context", "search"]],
+                                            "query": ["type": "string"]],
+                             "required": ["action"]]],
+        ]
+    }
+}
+
+public struct MaxMiTools: ToolProvider {
+    let queries: MemoryQueries
+    public init(queries: MemoryQueries) { self.queries = queries }
+
+    public var toolDefinitions: [[String: Any]] {
+        MaxMiToolsDefinitions.all
+    }
+
+    public func call(name: String, arguments: [String: Any]) async -> ToolResult {
+        switch name {
+        case "search_memory":
+            guard let query = arguments["query"] as? String else {
+                return ToolResult(text: "search_memory requires a 'query' string", isError: true)
+            }
+            return await queries.searchMemory(query: query, limit: intArg(arguments["limit"]))
+        case "list_active_threads":
+            return queries.listActiveThreads(limit: intArg(arguments["limit"]))
+        case "meeting_memory":
+            guard let action = arguments["action"] as? String,
+                  ["list", "get_context", "search"].contains(action) else {
+                return ToolResult(text: "meeting_memory requires action: list | get_context | search", isError: true)
+            }
+            return queries.meetingMemory(action: action)
+        default:
+            return ToolResult(text: "Unknown tool: \(name)", isError: true)
+        }
+    }
+
+    private func intArg(_ v: Any?) -> Int? {
+        (v as? Int) ?? (v as? Double).map(Int.init) ?? (v as? NSNumber)?.intValue
+    }
+}
+import Foundation
+import MaxMiCore
+import MaxMiStore
+
+public final class MemoryQueries: @unchecked Sendable {
+    /// vec0 cosine distance (1 - similarity). Hits above this are noise, not memory.
+    /// Empirically tunable; 0.75 keeps similarity >= 0.25.
+    public static let similarityDistanceFloor = 0.75
+    static let hardCap = 20
+    static let searchDefault = 10
+    static let listDefault = 10
+    static let lruCapacity = 32
+
+    static let offlineText = "Memory search needs the Gemini API key and network access (vector search embeds the query). Capture and browsing history are unaffected."
+    static let noDBText = "MaxMi hasn't captured anything yet — is the menu-bar app running?"
+    static let stubText = "No meetings captured yet — meeting capture is a later MaxMi milestone. Use search_memory for everything read on screen."
+
+    let store: Store
+    let relay: any MemoryRelay
+    let now: @Sendable () -> Date
+    private var lruKeys: [String] = []              // most recent last
+    private var lruVectors: [String: [Float]] = [:]
+    private let lruLock = NSLock()
+
+    public init(store: Store, relay: any MemoryRelay,
+                now: @escaping @Sendable () -> Date = Date.init) {
+        self.store = store; self.relay = relay; self.now = now
+    }
+
+    public func searchMemory(query: String, limit: Int?) async -> ToolResult {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return ToolResult(text: "query must not be empty", isError: true) }
+        let k = min(max(limit ?? Self.searchDefault, 1), Self.hardCap)
+
+        let vector: [Float]
+        if let cached = lruGet(q) {
+            vector = cached
+        } else {
+            do { vector = try await relay.embed(text: q) }
+            catch {
+                logStderr("embed failed: \(error)")
+                return ToolResult(text: Self.offlineText, isError: true)
+            }
+            lruPut(q, vector)
+        }
+
+        do {
+            let hits = try store.factHits(near: vector, limit: k)
+                .filter { $0.distance <= Self.similarityDistanceFloor }
+            let total = try store.totalFactCount()
+            guard !hits.isEmpty else {
+                let hint = total > 0
+                    ? "Nothing sufficiently similar. Try different wording, or list_active_threads for recent activity."
+                    : ""
+                return ToolResult(text: "No memories matched \"\(q)\".\(hint.isEmpty ? "" : " \(hint)")")
+            }
+            var md = "## Memory search: \"\(q)\"\n\n"
+            for h in hits {
+                md += "- \(h.content)\n  — \(h.sourceTitle ?? h.sourceKey) (\(h.sourceKey)), \(relative(h.committedAt))\n"
+            }
+            md += "\n_\(hits.count) results (of \(total) memories)_"
+            return ToolResult(text: md)
+        } catch {
+            return ToolResult(text: "Memory database unavailable: \(error)", isError: true)
+        }
+    }
+
+    func relative(_ ms: EpochMs) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        f.locale = Locale(identifier: "en_US")
+        f.dateTimeStyle = .named
+        return f.localizedString(for: Date(timeIntervalSince1970: Double(ms) / 1000), relativeTo: now())
+    }
+
+    private func lruGet(_ key: String) -> [Float]? {
+        lruLock.lock(); defer { lruLock.unlock() }
+        guard let v = lruVectors[key] else { return nil }
+        lruKeys.removeAll { $0 == key }; lruKeys.append(key)
+        return v
+    }
+    private func lruPut(_ key: String, _ vector: [Float]) {
+        lruLock.lock(); defer { lruLock.unlock() }
+        lruVectors[key] = vector
+        lruKeys.removeAll { $0 == key }; lruKeys.append(key)
+        if lruKeys.count > Self.lruCapacity {
+            lruVectors.removeValue(forKey: lruKeys.removeFirst())
+        }
+    }
+
+    public func listActiveThreads(limit: Int?) -> ToolResult {
+        let k = min(max(limit ?? Self.listDefault, 1), Self.hardCap)
+        do {
+            let threads = try store.recentThreads(limit: k)
+            guard !threads.isEmpty else { return ToolResult(text: Self.noDBText) }
+            var md = "## Recently active threads\n"
+            for t in threads {
+                md += "\n### \(t.sourceTitle ?? t.sourceKey)\n\(t.sourceKey) — last seen \(relative(t.updatedAt))\n"
+                for f in t.recentFacts { md += "- \(f)\n" }
+                if t.recentFacts.isEmpty { md += "_(no facts extracted yet)_\n" }
+            }
+            return ToolResult(text: md)
+        } catch {
+            return ToolResult(text: "Memory database unavailable: \(error)", isError: true)
+        }
+    }
+
+    public func meetingMemory(action: String) -> ToolResult {
+        ToolResult(text: Self.stubText)
+    }
+}
+
+exec
+/bin/zsh -lc "sed -n '1,240p' Package.swift && rg -n \"MACOSX_DEPLOYMENT_TARGET|platforms|macOS\" . --glob '"'!**/.build/**'"' --glob '"'!docs/**'"' | head -100" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "MaxMi",
+    platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+    ],
+    targets: [
+        .target(
+            name: "CSQLiteVec",
+            path: "Vendor/sqlite-vec",
+            sources: ["sqlite-vec.c"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("SQLITE_CORE"),           // link against real sqlite3 symbols, no ext thunk
+                .unsafeFlags(["-Wno-everything"]) // vendored amalgamation, not our lint problem
+            ]
+        ),
+        .target(name: "MaxMiCore"),
+        .target(name: "MaxMiStore", dependencies: [
+            "MaxMiCore", "CSQLiteVec",
+            .product(name: "GRDB", package: "GRDB.swift"),
+        ]),
+        .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),
+        .target(name: "MaxMiRelay", dependencies: ["MaxMiCore"]),
+        .executableTarget(name: "MaxMi", dependencies: [
+            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay",
+        ]),
+        .executableTarget(name: "MaxMiMCP", dependencies: [
+            "MaxMiCore", "MaxMiStore", "MaxMiRelay",
+        ]),
+        .testTarget(name: "MaxMiCoreTests", dependencies: ["MaxMiCore"]),
+        .testTarget(name: "MaxMiStoreTests", dependencies: ["MaxMiStore"]),
+        .testTarget(name: "MaxMiCaptureTests", dependencies: ["MaxMiCapture"],
+                    resources: [.copy("Fixtures")]),
+        .testTarget(name: "MaxMiRelayTests", dependencies: ["MaxMiRelay"]),
+        .testTarget(name: "MaxMiMCPTests", dependencies: ["MaxMiMCP"]),
+    ]
+)
+./README.md:30:MaxMi encrypts memory content using AES-256-GCM (`enc:v1:` wire format). The encryption key is stored in the macOS login Keychain under service `dev.mafex.maxmi.dbkey`. The app and the bundled `maxmi-mcp` server share the key by service name — both are signed with the same identity, so each reads the same login-keychain item (the first read by each binary prompts once for "Always Allow", then stays silent). No keychain-access-group entitlement is used, since that requires a provisioning profile. Deleting the Keychain key makes old memories unrecoverable. Metadata, URLs, and embeddings remain cleartext by design for efficient search and deduplication. See `docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md` §8 for the threat model.
+./Package.swift:6:    platforms: [.macOS(.v14)],
+./Sources/MaxMiCapture/MessagesParser.swift:5:/// Modern macOS blocks reading message text via AppleScript, and chat.db needs Full Disk Access,
+./Sources/MaxMiCapture/Denylist.swift:24:        "com.apple.Passwords",                  // Passwords app (macOS 15+)
+
+web search: 
+web search: site:developer.apple.com AudioHardwareCreateProcessTap macOS 14.2 CATapDescription permissions ...
+exec
+/bin/zsh -lc "nl -ba README.md | sed -n '24,36p'; nl -ba Sources/MaxMiStore/Migrations.swift | sed -n '8,44p'; nl -ba Sources/MaxMiStore/StoreAPI.swift | sed -n '75,118p'" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+    24	   tccutil reset Accessibility dev.mafex.maxmi
+    25	   ```
+    26	   Then launch the app again and grant the permission.
+    27	
+    28	## Encryption
+    29	
+    30	MaxMi encrypts memory content using AES-256-GCM (`enc:v1:` wire format). The encryption key is stored in the macOS login Keychain under service `dev.mafex.maxmi.dbkey`. The app and the bundled `maxmi-mcp` server share the key by service name — both are signed with the same identity, so each reads the same login-keychain item (the first read by each binary prompts once for "Always Allow", then stays silent). No keychain-access-group entitlement is used, since that requires a provisioning profile. Deleting the Keychain key makes old memories unrecoverable. Metadata, URLs, and embeddings remain cleartext by design for efficient search and deduplication. See `docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md` §8 for the threat model.
+    31	
+    32	## Connect to Claude (MCP)
+    33	
+    34	The app bundles `maxmi-mcp`, a local MCP server that lets Claude search your memory.
+    35	
+    36	**Claude Code:**
+     8	            CREATE TABLE threads (
+     9	              id             TEXT PRIMARY KEY,
+    10	              source_app     TEXT NOT NULL,
+    11	              source_key     TEXT NOT NULL,
+    12	              source_title   TEXT,
+    13	              last_tree_hash TEXT,
+    14	              created_at     INTEGER NOT NULL,
+    15	              updated_at     INTEGER NOT NULL,
+    16	              UNIQUE(source_app, source_key)
+    17	            );
+    18	            CREATE TABLE versions (
+    19	              id             TEXT PRIMARY KEY,
+    20	              thread_id      TEXT NOT NULL REFERENCES threads(id),
+    21	              hour_bucket    INTEGER NOT NULL,
+    22	              content        TEXT NOT NULL,
+    23	              content_hash   TEXT NOT NULL,
+    24	              word_count     INTEGER NOT NULL DEFAULT 0,
+    25	              is_frozen      INTEGER NOT NULL DEFAULT 0,
+    26	              committed_at   INTEGER NOT NULL,
+    27	              extract_status TEXT NOT NULL DEFAULT 'pending',
+    28	              UNIQUE(thread_id, hour_bucket)
+    29	            );
+    30	            CREATE INDEX idx_versions_thread ON versions(thread_id);
+    31	            CREATE TABLE derivatives (
+    32	              id               TEXT PRIMARY KEY,
+    33	              thread_id        TEXT NOT NULL REFERENCES threads(id),
+    34	              version_id       TEXT NOT NULL REFERENCES versions(id),
+    35	              content          TEXT NOT NULL,
+    36	              content_hash     TEXT NOT NULL,
+    37	              committed_at     INTEGER NOT NULL,
+    38	              embedding_status TEXT NOT NULL DEFAULT 'pending',
+    39	              UNIQUE(thread_id, content_hash)
+    40	            );
+    41	            CREATE INDEX idx_derivatives_version ON derivatives(version_id);
+    42	            CREATE TABLE retry_queue (
+    43	              id              TEXT PRIMARY KEY,
+    44	              kind            TEXT NOT NULL,
+    75	                try d.execute(sql: "UPDATE threads SET source_title=?, last_tree_hash=?, updated_at=? WHERE id=?",
+    76	                              arguments: [input.sourceTitle, hash, nowMs, threadID])
+    77	            } else {
+    78	                threadID = Ident.uuidv7(nowMs: nowMs)
+    79	                try d.execute(sql: """
+    80	                    INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
+    81	                    VALUES (?,?,?,?,?,?,?)
+    82	                    """, arguments: [threadID, input.sourceApp, input.sourceKey, input.sourceTitle, hash, nowMs, nowMs])
+    83	            }
+    84	
+    85	            // Per-item fingerprint dedup: if no line is novel for this thread, skip (spec §3b).
+    86	            // Complements last_tree_hash (which catches identical whole trees) by catching
+    87	            // recaptures where only order/chrome changed but no new message appeared.
+    88	            if !recordNovelFingerprints(input.content, threadID: threadID, nowMs: nowMs, d) {
+    89	                return .deduplicated
+    90	            }
+    91	
+    92	            // 2. Freeze-then-create: seal mutable versions from past hours.
+    93	            try d.execute(sql: "UPDATE versions SET is_frozen=1 WHERE thread_id=? AND is_frozen=0 AND hour_bucket<>?",
+    94	                          arguments: [threadID, bucket])
+    95	
+    96	            // 3. Upsert this hour's version (replace content, reset pending, un-freeze if clock stepped back).
+    97	            if let vid = try String.fetchOne(d, sql: "SELECT id FROM versions WHERE thread_id=? AND hour_bucket=?",
+    98	                                             arguments: [threadID, bucket]) {
+    99	                try d.execute(sql: """
+   100	                    UPDATE versions SET content=?, content_hash=?, word_count=?, committed_at=?,
+   101	                                        extract_status='pending', is_frozen=0 WHERE id=?
+   102	                    """, arguments: [storedContent, hash, words, nowMs, vid])
+   103	                return .committed(versionID: vid, contentHash: hash)
+   104	            } else {
+   105	                let vid = Ident.uuidv7(nowMs: nowMs)
+   106	                try d.execute(sql: """
+   107	                    INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status)
+   108	                    VALUES (?,?,?,?,?,?,0,?,'pending')
+   109	                    """, arguments: [vid, threadID, bucket, storedContent, hash, words, nowMs])
+   110	                return .committed(versionID: vid, contentHash: hash)
+   111	            }
+   112	        }
+   113	    }
+   114	}
+   115	
+   116	extension Store {
+   117	    public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
+   118	        // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
+
+codex
+## Feasibility verdict
+
+**Do not implement M5 from this draft unchanged.** The popup and system-audio capture are feasible on macOS 14/15, and a public Core Audio approach can identify processes actively using audio input. But the proposed default transcription path fundamentally fails 30+ minute meetings: Apple explicitly documents a roughly **one-minute limit per `SFSpeechRecognizer` task**. [Apple Speech documentation](https://developer.apple.com/documentation/speech/sfspeechrecognizer)
+
+The two major corrections are:
+
+- Replace “mic-active + frontmost app” with public Core Audio **audio process objects**.
+- Make a long-form transcription engine a real v1 dependency: streaming cloud, or a local long-form model. Plain `SFSpeechRecognizer` is not one.
+
+## Critical issues
+
+1. **`SFSpeechRecognizer` breaks the primary success case.**
+
+   `SFSpeechAudioBufferRecognitionRequest` can accept live PCM, but `SFSpeechRecognizer` tasks have Apple’s documented one-minute duration ceiling. `requiresOnDeviceRecognition = true` does not make a 30-minute request supported; availability also varies by locale/model download.
+
+   A 30-minute meeting needs one of:
+
+   - A true streaming provider, such as Deepgram.
+   - A bundled/on-demand local long-form model (for example, a Core ML/Whisper-family implementation).
+   - Rolling ~45–55 second Speech tasks with overlap, stitching, retries, and duplicate-boundary handling. Treat this only as a degraded experimental fallback: it creates many tasks, can lose words at boundaries, and may hit service throttling.
+
+   Also add the missing `NSSpeechRecognitionUsageDescription` and `SFSpeechRecognizer.requestAuthorization`.
+
+2. **The detector should not use the frontmost-app heuristic.**
+
+   The spec is too pessimistic about public APIs and therefore chooses an inferior design. Public Core Audio exposes:
+
+   - `kAudioHardwarePropertyProcessObjectList`
+   - `kAudioProcessPropertyPID`
+   - `kAudioProcessPropertyBundleID`
+   - `kAudioProcessPropertyIsRunningInput`
+   - `kAudioProcessPropertyDevices`
+
+   Listen for changes to the process list and relevant per-process properties with `AudioObjectAddPropertyListenerBlock`; identify processes where `IsRunningInput == 1`, then use the PID/bundle ID to classify them. These are public APIs, unlike `responsibility_get_pid_responsible_for_pid`. [Process-object list](https://developer.apple.com/documentation/coreaudio/kaudiohardwarepropertyprocessobjectlist), [active input property](https://developer.apple.com/documentation/coreaudio/kaudioprocesspropertyisrunninginput)
+
+   This indicates a process is doing input I/O; it does **not** prove a meeting. Browser helper processes, Zoom’s lobby, a Slack huddle, Voice Memos, dictation, and background recording remain ambiguous. For a helper with no useful bundle ID, do not infer an owning app through the private responsibility SPI.
+
+3. **ScreenCaptureKit is appropriate, but the spec needs sharper scope and permission language.**
+
+   `SCStream` with `SCStreamConfiguration.capturesAudio = true` is the supported API for capturing app/system output audio. It is gated by Screen Recording consent, and `NSScreenCaptureUsageDescription` is the correct Info.plist key. [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)
+
+   It is not a meeting-audio API:
+
+   - You still need an `SCContentFilter`.
+   - Audio filtering is at **application** granularity, not browser-tab/window granularity.
+   - A display-wide filter can capture unrelated music, notifications, or another call.
+   - A Google Meet tab means browser-level audio is the best public scope; it cannot isolate a tab.
+   - Set `excludesCurrentProcessAudio = true`.
+
+   Consider the public macOS 14.2+ Core Audio process-tap APIs as a future per-process-output alternative: `CATapDescription` can create a mix of specified processes’ output audio. It needs serious device/route testing, so it should not be quietly substituted into this milestone. [CATapDescription](https://developer.apple.com/documentation/coreaudio/catapdescription)
+
+4. **“Call app backgrounded” must not end recording.**
+
+   This will truncate normal meetings the first time a user switches to Notes, Mail, or a browser. Likewise, a muted participant may no longer have active input despite still being in the meeting.
+
+   Use manual Stop as authoritative. Treat process input stopping, app termination, and disappearance of corroborating signals as a debounced “meeting may have ended” prompt: **Finish / Keep recording**.
+
+5. **The audio pipeline is materially under-specified.**
+
+   `SCStream` system audio and `AVAudioEngine` microphone buffers do not arrive as one already-synchronized stream. They can differ in sample rate, channel count, clock/timestamps, route changes, and latency. A robust pipeline must:
+
+   - retain source timestamps;
+   - resample/channel-normalize with `AVAudioConverter`;
+   - align and mix on a single timeline;
+   - handle Bluetooth/AirPods and output/input device changes;
+   - define whether local mic is mixed, kept as a separate channel, or excluded to avoid duplicated/echoed speech;
+   - bound memory and apply backpressure.
+
+   “Keep audio buffer, retry finalize” is dangerous as written: raw 48 kHz stereo PCM is roughly 23 MB/minute per source. Persist encrypted rolling audio chunks if recovery is a product requirement; otherwise explicitly promise only the transcript received so far.
+
+6. **The generic capture commit path is wrong for meetings without changes.**
+
+   Current versions are unique by `(thread_id, hour_bucket)` and are deliberately updated in-place; capture dedup is line/fingerprint-based. [Schema](/Users/mafex/code/personal/MaxMi/Sources/MaxMiStore/Migrations.swift:18), [commit behavior](/Users/mafex/code/personal/MaxMi/Sources/MaxMiStore/StoreAPI.swift:85)
+
+   `meeting:<app>/<title>` can merge recurring meetings, overwrite two same-title meetings in one hour, and accidentally deduplicate repeated discussion. Each meeting must have a stable, unique session ID, typically UUIDv7/start timestamp, and an immutable final transcript version.
+
+## Should-fix
+
+- Keep `MaxMiMeetings`, but make it a non-UI module with an actor/serial state machine. Core Audio callbacks, ScreenCaptureKit queues, Speech callbacks, database work, and AppKit must not mutate session state independently.
+- Make detection multi-signal:
+  - public Core Audio active-input process is the primary signal;
+  - known native meeting-app allowlist;
+  - optional AX window-title evidence;
+  - per-app debounce/cooldown and a stable session identity.
+  
+  Browser auto-detection should be explicitly “best effort”; it is not reliable enough to promise Meet parity. A muted join will otherwise be missed.
+- Use a first-class `meetings` table, or at minimum typed/indexed meeting columns rather than JSON substring matching. A small table with `id`, `thread_id`, `version_id`, app, start/end, state, capture mode, and error/transcription status makes lifecycle, listing, deletion, and recovery tractable. Keep the encrypted transcript in `versions` to reuse extraction/search.
+- Do not query `metadata LIKE '%"kind":"meeting"%'`. It is unindexed and formatting-sensitive. If JSON must remain, use SQLite JSON functions plus an expression/index; typed columns are cleaner.
+- Be candid that metadata is cleartext in the current threat model. The app already intentionally leaves metadata, URLs, and embeddings cleartext, so a meeting title/app/start time is sensitive leakage—not “all meeting content encrypted at rest.” [Encryption policy](/Users/mafex/code/personal/MaxMi/README.md:30)
+- For the panel: `.nonactivatingPanel`, `.statusBar`, and `.fullScreenAuxiliary` are directionally correct. `fullScreenAuxiliary` is specifically what lets an auxiliary window share a fullscreen Space. [AppKit documentation](https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior-swift.struct/fullscreenauxiliary)
+  
+  However:
+  - `NSScreen.main` is wrong on a secondary fullscreen display; choose the meeting window’s screen where possible, otherwise cursor/active-screen policy.
+  - `ignoresMouseEvents = true` applies to the entire panel—buttons cannot remain clickable. Keep it false, or implement deliberate hit-testing in the content view.
+  - Test Stage Manager, separate Spaces, multiple displays, fullscreen Zoom, and click behavior without app activation.
+
+## Nice-to-have
+
+- Show a persistent menu-bar/red recording state and a clear “system audio unavailable; microphone only” state.
+- Have a per-app/session cooldown and “never ask again,” plus a user-visible manual “Record meeting” command. This covers muted joins and avoids relying on fragile detection.
+- Add real-device QA, not just mocks: Zoom/Teams/Webex, Safari/Chrome Meet, AirPods, USB mic, display audio, virtual audio device, permission deny/re-enable, device switch mid-call, sleep/wake, app crash, and two simultaneous audio apps.
+- Treat live Speech integration tests as signed-host/manual tests; CI should test segmentation, timestamp mixing, state transitions, and storage with deterministic fixtures.
+
+## Overall recommendation
+
+Approve the **module boundary and consent-first popup concept**, but return the spec for revision before implementation.
+
+The revised v1 should use public Core Audio process objects for candidate detection, ScreenCaptureKit for consent-gated output audio, manual Stop plus conservative end suggestions, unique immutable meeting sessions, and a genuine long-form transcription strategy. Without those changes, the advertised “Zoom/Meet/Teams → record 30+ minutes → transcript” exit criterion will not be met reliably.
+tokens used
+84,815
+## Feasibility verdict
+
+**Do not implement M5 from this draft unchanged.** The popup and system-audio capture are feasible on macOS 14/15, and a public Core Audio approach can identify processes actively using audio input. But the proposed default transcription path fundamentally fails 30+ minute meetings: Apple explicitly documents a roughly **one-minute limit per `SFSpeechRecognizer` task**. [Apple Speech documentation](https://developer.apple.com/documentation/speech/sfspeechrecognizer)
+
+The two major corrections are:
+
+- Replace “mic-active + frontmost app” with public Core Audio **audio process objects**.
+- Make a long-form transcription engine a real v1 dependency: streaming cloud, or a local long-form model. Plain `SFSpeechRecognizer` is not one.
+
+## Critical issues
+
+1. **`SFSpeechRecognizer` breaks the primary success case.**
+
+   `SFSpeechAudioBufferRecognitionRequest` can accept live PCM, but `SFSpeechRecognizer` tasks have Apple’s documented one-minute duration ceiling. `requiresOnDeviceRecognition = true` does not make a 30-minute request supported; availability also varies by locale/model download.
+
+   A 30-minute meeting needs one of:
+
+   - A true streaming provider, such as Deepgram.
+   - A bundled/on-demand local long-form model (for example, a Core ML/Whisper-family implementation).
+   - Rolling ~45–55 second Speech tasks with overlap, stitching, retries, and duplicate-boundary handling. Treat this only as a degraded experimental fallback: it creates many tasks, can lose words at boundaries, and may hit service throttling.
+
+   Also add the missing `NSSpeechRecognitionUsageDescription` and `SFSpeechRecognizer.requestAuthorization`.
+
+2. **The detector should not use the frontmost-app heuristic.**
+
+   The spec is too pessimistic about public APIs and therefore chooses an inferior design. Public Core Audio exposes:
+
+   - `kAudioHardwarePropertyProcessObjectList`
+   - `kAudioProcessPropertyPID`
+   - `kAudioProcessPropertyBundleID`
+   - `kAudioProcessPropertyIsRunningInput`
+   - `kAudioProcessPropertyDevices`
+
+   Listen for changes to the process list and relevant per-process properties with `AudioObjectAddPropertyListenerBlock`; identify processes where `IsRunningInput == 1`, then use the PID/bundle ID to classify them. These are public APIs, unlike `responsibility_get_pid_responsible_for_pid`. [Process-object list](https://developer.apple.com/documentation/coreaudio/kaudiohardwarepropertyprocessobjectlist), [active input property](https://developer.apple.com/documentation/coreaudio/kaudioprocesspropertyisrunninginput)
+
+   This indicates a process is doing input I/O; it does **not** prove a meeting. Browser helper processes, Zoom’s lobby, a Slack huddle, Voice Memos, dictation, and background recording remain ambiguous. For a helper with no useful bundle ID, do not infer an owning app through the private responsibility SPI.
+
+3. **ScreenCaptureKit is appropriate, but the spec needs sharper scope and permission language.**
+
+   `SCStream` with `SCStreamConfiguration.capturesAudio = true` is the supported API for capturing app/system output audio. It is gated by Screen Recording consent, and `NSScreenCaptureUsageDescription` is the correct Info.plist key. [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)
+
+   It is not a meeting-audio API:
+
+   - You still need an `SCContentFilter`.
+   - Audio filtering is at **application** granularity, not browser-tab/window granularity.
+   - A display-wide filter can capture unrelated music, notifications, or another call.
+   - A Google Meet tab means browser-level audio is the best public scope; it cannot isolate a tab.
+   - Set `excludesCurrentProcessAudio = true`.
+
+   Consider the public macOS 14.2+ Core Audio process-tap APIs as a future per-process-output alternative: `CATapDescription` can create a mix of specified processes’ output audio. It needs serious device/route testing, so it should not be quietly substituted into this milestone. [CATapDescription](https://developer.apple.com/documentation/coreaudio/catapdescription)
+
+4. **“Call app backgrounded” must not end recording.**
+
+   This will truncate normal meetings the first time a user switches to Notes, Mail, or a browser. Likewise, a muted participant may no longer have active input despite still being in the meeting.
+
+   Use manual Stop as authoritative. Treat process input stopping, app termination, and disappearance of corroborating signals as a debounced “meeting may have ended” prompt: **Finish / Keep recording**.
+
+5. **The audio pipeline is materially under-specified.**
+
+   `SCStream` system audio and `AVAudioEngine` microphone buffers do not arrive as one already-synchronized stream. They can differ in sample rate, channel count, clock/timestamps, route changes, and latency. A robust pipeline must:
+
+   - retain source timestamps;
+   - resample/channel-normalize with `AVAudioConverter`;
+   - align and mix on a single timeline;
+   - handle Bluetooth/AirPods and output/input device changes;
+   - define whether local mic is mixed, kept as a separate channel, or excluded to avoid duplicated/echoed speech;
+   - bound memory and apply backpressure.
+
+   “Keep audio buffer, retry finalize” is dangerous as written: raw 48 kHz stereo PCM is roughly 23 MB/minute per source. Persist encrypted rolling audio chunks if recovery is a product requirement; otherwise explicitly promise only the transcript received so far.
+
+6. **The generic capture commit path is wrong for meetings without changes.**
+
+   Current versions are unique by `(thread_id, hour_bucket)` and are deliberately updated in-place; capture dedup is line/fingerprint-based. [Schema](/Users/mafex/code/personal/MaxMi/Sources/MaxMiStore/Migrations.swift:18), [commit behavior](/Users/mafex/code/personal/MaxMi/Sources/MaxMiStore/StoreAPI.swift:85)
+
+   `meeting:<app>/<title>` can merge recurring meetings, overwrite two same-title meetings in one hour, and accidentally deduplicate repeated discussion. Each meeting must have a stable, unique session ID, typically UUIDv7/start timestamp, and an immutable final transcript version.
+
+## Should-fix
+
+- Keep `MaxMiMeetings`, but make it a non-UI module with an actor/serial state machine. Core Audio callbacks, ScreenCaptureKit queues, Speech callbacks, database work, and AppKit must not mutate session state independently.
+- Make detection multi-signal:
+  - public Core Audio active-input process is the primary signal;
+  - known native meeting-app allowlist;
+  - optional AX window-title evidence;
+  - per-app debounce/cooldown and a stable session identity.
+  
+  Browser auto-detection should be explicitly “best effort”; it is not reliable enough to promise Meet parity. A muted join will otherwise be missed.
+- Use a first-class `meetings` table, or at minimum typed/indexed meeting columns rather than JSON substring matching. A small table with `id`, `thread_id`, `version_id`, app, start/end, state, capture mode, and error/transcription status makes lifecycle, listing, deletion, and recovery tractable. Keep the encrypted transcript in `versions` to reuse extraction/search.
+- Do not query `metadata LIKE '%"kind":"meeting"%'`. It is unindexed and formatting-sensitive. If JSON must remain, use SQLite JSON functions plus an expression/index; typed columns are cleaner.
+- Be candid that metadata is cleartext in the current threat model. The app already intentionally leaves metadata, URLs, and embeddings cleartext, so a meeting title/app/start time is sensitive leakage—not “all meeting content encrypted at rest.” [Encryption policy](/Users/mafex/code/personal/MaxMi/README.md:30)
+- For the panel: `.nonactivatingPanel`, `.statusBar`, and `.fullScreenAuxiliary` are directionally correct. `fullScreenAuxiliary` is specifically what lets an auxiliary window share a fullscreen Space. [AppKit documentation](https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior-swift.struct/fullscreenauxiliary)
+  
+  However:
+  - `NSScreen.main` is wrong on a secondary fullscreen display; choose the meeting window’s screen where possible, otherwise cursor/active-screen policy.
+  - `ignoresMouseEvents = true` applies to the entire panel—buttons cannot remain clickable. Keep it false, or implement deliberate hit-testing in the content view.
+  - Test Stage Manager, separate Spaces, multiple displays, fullscreen Zoom, and click behavior without app activation.
+
+## Nice-to-have
+
+- Show a persistent menu-bar/red recording state and a clear “system audio unavailable; microphone only” state.
+- Have a per-app/session cooldown and “never ask again,” plus a user-visible manual “Record meeting” command. This covers muted joins and avoids relying on fragile detection.
+- Add real-device QA, not just mocks: Zoom/Teams/Webex, Safari/Chrome Meet, AirPods, USB mic, display audio, virtual audio device, permission deny/re-enable, device switch mid-call, sleep/wake, app crash, and two simultaneous audio apps.
+- Treat live Speech integration tests as signed-host/manual tests; CI should test segmentation, timestamp mixing, state transitions, and storage with deterministic fixtures.
+
+## Overall recommendation
+
+Approve the **module boundary and consent-first popup concept**, but return the spec for revision before implementation.
+
+The revised v1 should use public Core Audio process objects for candidate detection, ScreenCaptureKit for consent-gated output audio, manual Stop plus conservative end suggestions, unique immutable meeting sessions, and a genuine long-form transcription strategy. Without those changes, the advertised “Zoom/Meet/Teams → record 30+ minutes → transcript” exit criterion will not be met reliably.
