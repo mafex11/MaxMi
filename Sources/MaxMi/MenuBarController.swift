@@ -106,21 +106,15 @@ final class MenuBarController {
         quit.setAction { onQuit() }
         menu.addItem(quit)
 
-        // Install click handler instead of setting item.menu directly
+        // Install click handler: statusItem.menu stays nil; we popUpMenu directly on right-click
         statusItem = item
         if let button = item.button {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             let handler = ClickHandler(
                 onLeftClick: { onOpenActivity() },
                 onRightClick: { @MainActor [weak item] in
-                    // Use the modern approach: temporarily set menu, let it show, then clear
                     guard let item else { return }
-                    item.menu = menu
-                    button.performClick(nil)
-                    // Menu will show; clear it after to restore click handling
-                    DispatchQueue.main.async {
-                        item.menu = nil
-                    }
+                    item.popUpMenu(menu)
                 }
             )
             self.clickHandler = handler

@@ -11,20 +11,32 @@ public actor GeminiThrottle {
     public init() {}
 
     public func waitIfNeeded() async {
-        if let backoff = backoffUntil, backoff > Date() {
-            let delay = backoff.timeIntervalSinceNow
+        // Reserve the next allowed request time SYNCHRONOUSLY before any await to prevent reentrancy races
+        let now = Date()
+        let nextAllowed: Date
+
+        if let backoff = backoffUntil, backoff > now {
+            nextAllowed = backoff
+        } else if let last = lastRequestTime {
+            let minInterval = 0.1
+            let elapsed = now.timeIntervalSince(last)
+            if elapsed < minInterval {
+                nextAllowed = last.addingTimeInterval(minInterval)
+            } else {
+                nextAllowed = now
+            }
+        } else {
+            nextAllowed = now
+        }
+
+        // Reserve this slot before sleeping
+        lastRequestTime = max(nextAllowed, now)
+
+        // Now sleep if needed
+        let delay = nextAllowed.timeIntervalSince(now)
+        if delay > 0 {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
-
-        if let last = lastRequestTime {
-            let elapsed = Date().timeIntervalSince(last)
-            let minInterval = 0.1
-            if elapsed < minInterval {
-                try? await Task.sleep(nanoseconds: UInt64((minInterval - elapsed) * 1_000_000_000))
-            }
-        }
-
-        lastRequestTime = Date()
     }
 
     public func recordSuccess() {

@@ -4,12 +4,13 @@ import MaxMiCore
 import MaxMiStore
 
 @MainActor
-final class ActivityPrivacyWindow {
+final class ActivityPrivacyWindow: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let store: Store
 
     init(store: Store) {
         self.store = store
+        super.init()
     }
 
     func show() {
@@ -25,11 +26,26 @@ final class ActivityPrivacyWindow {
             let contentView = ActivityPrivacyView(store: store)
             window.contentViewController = NSHostingController(rootView: contentView)
             window.setFrameAutosaveName("ActivityPrivacyWindow")
+            window.delegate = self
             self.window = window
         }
 
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    nonisolated func windowWillClose(_ notification: Notification) {
+        // When the privacy window closes and consent is still unset, persist .declined
+        Task { @MainActor in
+            do {
+                let consent = try store.activityConsent()
+                if consent == .unset {
+                    try store.setActivityConsent(.declined)
+                }
+            } catch {
+                NSLog("MaxMi: failed to persist declined consent on window close: \(error)")
+            }
+        }
     }
 }
 
@@ -52,8 +68,8 @@ private struct ActivityPrivacyView: View {
                     Text("""
                         MaxMi can synthesize your Mac activity into a timeline using Gemini AI. Screen content will be:
                         • Encrypted locally before processing
-                        • Sent to Google Gemini for summarization
-                        • Never stored on Google's servers beyond the request
+                        • Sent to Google's Gemini API for processing
+                        • Subject to Google's Gemini API data use policies
 
                         You can exclude specific apps and disable this feature at any time.
                         """)
@@ -143,7 +159,11 @@ private struct ActivityPrivacyView: View {
                 }
                 try store.setActivityEnabled(true)
             } else {
-                // Disable: set consent to declined if it was unset
+                // Disable: close active sessions/visits and persist the disable
+                let nowMs = epochNowMs()
+                try store.closeOpenVisits(nowMs: nowMs)
+                try store.closeActiveSession(nowMs: nowMs)
+
                 let consent = try store.activityConsent()
                 if consent == .unset {
                     try store.setActivityConsent(.declined)

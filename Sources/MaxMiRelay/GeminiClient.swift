@@ -54,12 +54,21 @@ public final class GeminiClient: MemoryRelay {
     }
 
     public func embed(text: String) async throws -> [Float] {
+        await throttle.waitIfNeeded()
+
         let body: [String: Any] = [
             "model": "models/\(config.embedModel)",
             "content": ["parts": [["text": text]]],
             "outputDimensionality": config.embedDims,
         ]
-        let data = try await post(path: "models/\(config.embedModel):embedContent", body: body)
+        let data: Data
+        do {
+            data = try await post(path: "models/\(config.embedModel):embedContent", body: body)
+            await throttle.recordSuccess()
+        } catch let RelayError.httpStatus(code) {
+            await throttle.recordFailure(statusCode: code)
+            throw RelayError.httpStatus(code)
+        }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let emb = obj["embedding"] as? [String: Any],
               let values = emb["values"] as? [Double] else {

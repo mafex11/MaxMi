@@ -108,8 +108,8 @@ final class AppWiring {
         menuBar = MenuBarController()
         menuBar.hasAPIKey = config.geminiAPIKey != nil
         let activityRepo = StoreActivitySummaryRepository(store: store)
-        let activityRelay = GeminiActivityRelay(geminiClient: relay)
-        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay)
+        let activityRelay = GeminiActivityRelay(geminiClient: relay, maxEvidenceChars: 12_000)
+        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay, maxEvidenceChars: 12_000)
 
         // Initialize activity UI
         // Store is internally serialized by GRDB; we safely capture it via nonisolated(unsafe)
@@ -187,10 +187,21 @@ final class AppWiring {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let nowMs = epochNowMs()
-                if let visitID = self.currentVisitID {
-                    try? self.store.closeSession(visitID, nowMs: nowMs)
-                    self.currentVisitID = nil
-                }
+                try? self.store.closeOpenVisits(nowMs: nowMs)
+                self.currentVisitID = nil
+                try? self.store.closeActiveSession(nowMs: nowMs)
+            }
+        }
+
+        // Screen lock / session resign for activity
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let nowMs = epochNowMs()
+                try? self.store.closeOpenVisits(nowMs: nowMs)
+                self.currentVisitID = nil
                 try? self.store.closeActiveSession(nowMs: nowMs)
             }
         }
@@ -241,13 +252,11 @@ final class AppWiring {
         // Bump generation on EVERY focus transition
         focusGeneration += 1
 
-        // Close active session + prior visit
+        // Close active session + all open visits (there should only be one, but closeOpenVisits is the clean approach)
         do {
             try store.closeActiveSession(nowMs: nowMs)
-            if let visitID = currentVisitID {
-                try store.closeSession(visitID, nowMs: nowMs)
-                currentVisitID = nil
-            }
+            try store.closeOpenVisits(nowMs: nowMs)
+            currentVisitID = nil
         } catch {
             NSLog("MaxMi: activity close failed on focus change: \(error)")
         }
@@ -468,24 +477,22 @@ final class AppWiring {
                             sourceTitle: parsed.sourceTitle, content: parsed.content),
                 nowMs: nowMs)
 
-            // After normal memory capture commits, record activity evidence ONLY if generation matches
+            // After normal memory capture commits, record activity evidence ONLY if generation matches AND committed (not deduplicated)
             let eligible = isActivityEligible(bundleID: appInfo.bundleID)
-            if shouldRecordActivity(captureGeneration: captureGeneration, currentGeneration: focusGeneration, eligible: eligible) {
-                do {
-                    let vid: String?
-                    switch result {
-                    case .committed(let versionID, _): vid = versionID
-                    case .deduplicated: vid = nil
+            if MaxMiCore.shouldRecordActivity(captureGeneration: captureGeneration, currentGeneration: focusGeneration, eligible: eligible) {
+                // Only record activity for .committed captures (not deduplicated)
+                if case .committed(let versionID, _) = result {
+                    do {
+                        _ = try store.recordActivityCapture(
+                            appBundle: appInfo.bundleID,
+                            appLabel: appInfo.name,
+                            versionID: versionID,
+                            content: parsed.content,
+                            nowMs: nowMs
+                        )
+                    } catch {
+                        NSLog("MaxMi: activity capture failed: \(error)")
                     }
-                    _ = try store.recordActivityCapture(
-                        appBundle: appInfo.bundleID,
-                        appLabel: appInfo.name,
-                        versionID: vid,
-                        content: parsed.content,
-                        nowMs: nowMs
-                    )
-                } catch {
-                    NSLog("MaxMi: activity capture failed: \(error)")
                 }
             }
 
@@ -511,10 +518,5 @@ final class AppWiring {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft - 1, captureGeneration: captureGeneration)
         }
-    }
-
-    // Pure decision function for activity recording: only record if generation matches and app is eligible
-    private func shouldRecordActivity(captureGeneration: Int, currentGeneration: Int, eligible: Bool) -> Bool {
-        return captureGeneration == currentGeneration && eligible
     }
 }
