@@ -4,6 +4,7 @@ import MaxMiCore
 import MaxMiStore
 import MaxMiCapture
 import MaxMiRelay
+import MaxMiActivity
 import MaxMiMeetings
 
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
@@ -65,6 +66,7 @@ final class AppWiring {
     // Activity focus-generation mechanism
     var focusGeneration: Int = 0
     var currentVisitID: String?
+    let displaySummarizer: DisplaySummarizer
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -100,6 +102,9 @@ final class AppWiring {
         pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
         menuBar = MenuBarController()
         menuBar.hasAPIKey = config.geminiAPIKey != nil
+        let activityRepo = StoreActivitySummaryRepository(store: store)
+        let activityRelay = GeminiActivityRelay(geminiClient: relay)
+        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay)
     }
 
     func start() {
@@ -174,6 +179,10 @@ final class AppWiring {
                 await self.pipeline.tick()
                 // Close idle activity sessions (5 min gap)
                 _ = try? self.store.closeIdleSessions(idleGapMs: 5*60_000, nowMs: epochNowMs())
+                // Summarize due sessions if activity enabled
+                if self.isActivitySynthesisEnabled() {
+                    await self.displaySummarizer.summarizeDue(nowMs: epochNowMs())
+                }
             }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -223,6 +232,16 @@ final class AppWiring {
                 && !excluded.contains(bundleID)
         } catch {
             NSLog("MaxMi: activity eligibility check failed: \(error)")
+            return false
+        }
+    }
+
+    private func isActivitySynthesisEnabled() -> Bool {
+        do {
+            let consent = try store.activityConsent()
+            let enabled = try store.activityEnabled()
+            return consent == .granted && enabled
+        } catch {
             return false
         }
     }
