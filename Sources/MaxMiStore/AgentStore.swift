@@ -360,4 +360,31 @@ extension Store {
             }
         }
     }
+
+    public func lastAgentRunStartedAt() throws -> EpochMs? {
+        try db.dbQueue.read { d in
+            try Int64.fetchOne(d, sql: """
+                SELECT MAX(started_at) FROM agent_runs WHERE status='completed'
+                """)
+        }
+    }
+
+    public func summarizedSessionCount() throws -> Int {
+        try db.dbQueue.read { d in
+            try Int.fetchOne(d, sql: """
+                SELECT COUNT(*) FROM activity_sessions WHERE summary_status='summarized'
+                """) ?? 0
+        }
+    }
+
+    public func lastAgentRunFailed() throws -> Bool {
+        try db.dbQueue.read { d in
+            guard let status = try String.fetchOne(d, sql: """
+                SELECT status FROM agent_runs ORDER BY started_at DESC LIMIT 1
+                """) else {
+                return false
+            }
+            return status == "failed"
+        }
+    }
 }
