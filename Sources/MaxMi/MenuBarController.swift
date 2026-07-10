@@ -9,6 +9,7 @@ final class MenuBarController {
     private let encryptionItem = NSMenuItem(title: "⚠ Memory encryption unavailable", action: nil, keyEquivalent: "")
     private let pauseItem = NSMenuItem(title: "Pause Capture", action: nil, keyEquivalent: "p")
     private var menuDelegate: MenuDelegate?
+    private var clickHandler: ClickHandler?
 
     var captureCount: Int = 0 { didSet { countItem.title = "Captures: \(captureCount)" } }
     var paused: Bool = false { didSet { pauseItem.title = paused ? "Resume Capture" : "Pause Capture" } }
@@ -23,12 +24,33 @@ final class MenuBarController {
         pausedApps: @escaping () -> Set<String>,
         onToggleAppPause: @escaping (String) -> Void,
         lastSourceKey: @escaping () -> String?,
-        onPauseCurrentThread: @escaping () -> Void
+        onPauseCurrentThread: @escaping () -> Void,
+        onOpenActivity: @escaping () -> Void,
+        onOpenPrivacy: @escaping () -> Void
     ) {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "🧠"
+
+        // Set dog icon from bundle
+        if let imageURL = Bundle.main.url(forResource: "tray-dog", withExtension: "png"),
+           let image = NSImage(contentsOf: imageURL) {
+            image.isTemplate = true
+            item.button?.image = image
+        }
+
         let menu = NSMenu()
+
+        // Activity menu items
+        let openActivityItem = NSMenuItem(title: "Open MaxMi", action: nil, keyEquivalent: "")
+        openActivityItem.setAction { onOpenActivity() }
+        menu.addItem(openActivityItem)
+
+        let privacyItem = NSMenuItem(title: "Activity Privacy…", action: nil, keyEquivalent: "")
+        privacyItem.setAction { onOpenPrivacy() }
+        menu.addItem(privacyItem)
+
+        menu.addItem(.separator())
+
         permissionItem.isHidden = accessibilityGranted
         keyItem.isHidden = hasAPIKey
         encryptionItem.isHidden = encryptionAvailable
@@ -83,8 +105,28 @@ final class MenuBarController {
         let quit = NSMenuItem(title: "Quit MaxMi", action: nil, keyEquivalent: "q")
         quit.setAction { onQuit() }
         menu.addItem(quit)
-        item.menu = menu
+
+        // Install click handler instead of setting item.menu directly
         statusItem = item
+        if let button = item.button {
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            let handler = ClickHandler(
+                onLeftClick: { onOpenActivity() },
+                onRightClick: { @MainActor [weak item] in
+                    // Use the modern approach: temporarily set menu, let it show, then clear
+                    guard let item else { return }
+                    item.menu = menu
+                    button.performClick(nil)
+                    // Menu will show; clear it after to restore click handling
+                    DispatchQueue.main.async {
+                        item.menu = nil
+                    }
+                }
+            )
+            self.clickHandler = handler
+            button.target = handler
+            button.action = #selector(ClickHandler.handleClick)
+        }
     }
 }
 
@@ -120,5 +162,28 @@ private final class MenuDelegate: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         updateAppPauseMenu()
         updatePauseThreadItem()
+    }
+}
+
+@MainActor
+private final class ClickHandler: NSObject {
+    let onLeftClick: () -> Void
+    let onRightClick: () -> Void
+
+    init(onLeftClick: @escaping () -> Void, onRightClick: @escaping () -> Void) {
+        self.onLeftClick = onLeftClick
+        self.onRightClick = onRightClick
+    }
+
+    @objc func handleClick() {
+        guard let event = NSApp.currentEvent else { return }
+        switch event.type {
+        case .leftMouseUp:
+            onLeftClick()
+        case .rightMouseUp:
+            onRightClick()
+        default:
+            break
+        }
     }
 }

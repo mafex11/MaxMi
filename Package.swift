@@ -49,7 +49,7 @@ let package = Package(
         .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore", "CWhisper"]),
         .target(name: "MaxMiUI", dependencies: ["MaxMiCore"]),
         .executableTarget(name: "MaxMi", dependencies: [
-            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay", "MaxMiActivity", "MaxMiMeetings",
+            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay", "MaxMiActivity", "MaxMiMeetings", "MaxMiUI",
         ]),
         .executableTarget(name: "MaxMiMCP", dependencies: [
             "MaxMiCore", "MaxMiStore", "MaxMiRelay",

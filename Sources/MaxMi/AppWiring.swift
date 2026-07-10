@@ -6,6 +6,7 @@ import MaxMiCapture
 import MaxMiRelay
 import MaxMiActivity
 import MaxMiMeetings
+import MaxMiUI
 
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
 final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is internally serialized by GRDB's DatabaseQueue
@@ -68,6 +69,10 @@ final class AppWiring {
     var currentVisitID: String?
     let displaySummarizer: DisplaySummarizer
 
+    // Activity UI
+    let activityWindow: ActivityWindow
+    let activityPrivacyWindow: ActivityPrivacyWindow
+
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MaxMi", isDirectory: true)
@@ -105,6 +110,33 @@ final class AppWiring {
         let activityRepo = StoreActivitySummaryRepository(store: store)
         let activityRelay = GeminiActivityRelay(geminiClient: relay)
         displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay)
+
+        // Initialize activity UI
+        // Store is internally serialized by GRDB; we safely capture it via nonisolated(unsafe)
+        nonisolated(unsafe) let activityStore = store
+        let viewModel = ActivityViewModel(
+            load: { @Sendable in
+                do {
+                    let sessions = try activityStore.recentSessions(limit: 100)
+                    return try sessions.map { session in
+                        let evidence = try activityStore.sessionEvidence(session.id)
+                        return TimelineSessionDTO(
+                            id: session.id,
+                            appLabel: session.appLabel,
+                            summary: session.summary,
+                            startedAtMs: session.startedAtMs,
+                            evidence: evidence
+                        )
+                    }
+                } catch {
+                    NSLog("MaxMi: failed to load activity sessions: \(error)")
+                    return []
+                }
+            },
+            now: { epochNowMs() }
+        )
+        activityWindow = ActivityWindow(viewModel: viewModel)
+        activityPrivacyWindow = ActivityPrivacyWindow(store: store)
     }
 
     func start() {
@@ -122,7 +154,9 @@ final class AppWiring {
             onPauseCurrentThread: { [weak self] in
                 guard let self, let key = self.lastSourceKey else { return }
                 try? self.store.setThreadPaused(key, paused: true, nowMs: epochNowMs())
-            }
+            },
+            onOpenActivity: { [weak self] in self?.activityWindow.show() },
+            onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() }
         )
         menuBar.encryptionAvailable = encryptionAvailable
         guard encryptionAvailable else { return }          // capture paused per §9
@@ -135,6 +169,15 @@ final class AppWiring {
             try store.closeOpenSessions(nowMs: epochNowMs())
         } catch {
             NSLog("MaxMi: activity startup crash-repair failed: \(error)")
+        }
+
+        // Show privacy window on first run if consent is unset
+        do {
+            if try store.activityConsent() == .unset {
+                activityPrivacyWindow.show()
+            }
+        } catch {
+            NSLog("MaxMi: failed to check activity consent: \(error)")
         }
 
         // Sleep/lock notification for activity
@@ -468,5 +511,10 @@ final class AppWiring {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft - 1, captureGeneration: captureGeneration)
         }
+    }
+
+    // Pure decision function for activity recording: only record if generation matches and app is eligible
+    private func shouldRecordActivity(captureGeneration: Int, currentGeneration: Int, eligible: Bool) -> Bool {
+        return captureGeneration == currentGeneration && eligible
     }
 }
