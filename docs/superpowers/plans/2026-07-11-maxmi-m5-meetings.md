@@ -1,0 +1,523 @@
+# MaxMi M5 Meetings Implementation Plan — Detection + Right-Lane Recorder + Transcription
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Ship M5 — auto-detect meetings, show a right-edge recorder popup, capture+mix system/mic audio, transcribe (whisper.cpp default), store as first-class meeting memories, serve via `meeting_memory` MCP — per `docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md` (Codex gpt-5.6-terra: GO).
+
+**Architecture:** New non-UI `MaxMiMeetings` module (CoreAudio detection, ScreenCaptureKit+AVAudioEngine capture, AVAudioConverter mixing, pluggable Transcriber, actor `MeetingSession` state machine). AppKit `NSPanel` right-lane popup in the app target. First-class `meetings` table (v3 migration) + `versions.metadata` link. Real `meeting_memory` MCP over the table. Meetings bypass fingerprint dedup (unique UUIDv7 session id per meeting).
+
+**Tech Stack:** Swift 6, ScreenCaptureKit, AVFoundation/AVAudioEngine/AVAudioConverter, CoreAudio (public process-object API), whisper.cpp (C interop), GRDB, AppKit NSPanel.
+
+## Global Constraints
+
+- Build/test: `DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" swift test`; zero new warnings.
+- Detection: **public** CoreAudio `kAudioHardwarePropertyProcessObjectList` + `kAudioProcessPropertyIsRunningInput`/`PID`/`BundleID` + `AudioObjectAddPropertyListenerBlock`. NOT the private responsibility SPI; NOT frontmost-app heuristic.
+- Transcription default: **whisper.cpp**, multilingual **`ggml-base`** (~140 MB), downloaded+checksum-verified+atomically-installed to Application Support BEFORE Record arms (no recording-while-downloading; no raw-PCM buffer). Deepgram = opt-in key. SFSpeech = degraded fallback only (needs `NSSpeechRecognitionUsageDescription`).
+- Audio: `SCStream` (`capturesAudio=true`, `excludesCurrentProcessAudio=true`) with `SCContentFilter(display:includingApplications:exceptingWindows:)` scoped to the detected `SCRunningApplication`; mic-only fallback when no shareable app OR Screen Recording denied. `AudioMixer` uses `AVAudioConverter` + timestamp alignment; handles device changes; NO raw-PCM retention for retry.
+- Popup: `NSPanel` `.nonactivatingPanel`, borderless, `isFloatingPanel=true`, `level=.statusBar`, `collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]`, `ignoresMouseEvents=false`, docked to the **meeting window's screen** `visibleFrame` (fallback cursor screen), reposition on `didChangeScreenParametersNotification`.
+- Lifecycle: **manual Stop authoritative**; app-backgrounding/input-stop → debounced "Finish or keep recording?" prompt, never auto-truncate. Consent-first: never record without a Record click.
+- Storage: each meeting = new `meetings` row (UUIDv7 id) + immutable encrypted transcript version linked via `versions.metadata` JSON `{"meetingId":"<uuid>"}`. Fingerprint dedup BYPASSED for meetings. `meetings` columns (app/title/times) cleartext for indexing; transcript content encrypted.
+- `MeetingSession` is an `actor`; all CoreAudio/SCStream/transcriber/DB events funnel in; AppKit updates hop to `@MainActor`.
+- Permissions requested lazily on first Record: Microphone, Screen Recording; Speech only if SFSpeech selected.
+- Commit messages conventional; NO Co-Authored-By / AI attribution trailers.
+- Repo `/Users/mafex/code/personal/MaxMi/`, branch `m5-meetings` off main.
+
+## File Structure
+
+```
+Package.swift                                  MODIFY: add MaxMiMeetings target + MaxMiMeetingsTests
+Sources/MaxMiMeetings/MeetingAppList.swift     NEW: meeting-app bundle-id allowlist + classification
+Sources/MaxMiMeetings/MeetingDetector.swift    NEW: public CoreAudio process-object detector
+Sources/MaxMiMeetings/Transcriber.swift        NEW: Transcriber protocol + TranscriptChunk
+Sources/MaxMiMeetings/WhisperTranscriber.swift NEW: whisper.cpp-backed default engine
+Sources/MaxMiMeetings/WhisperModelStore.swift  NEW: download/verify/install ggml-base
+Sources/MaxMiMeetings/AudioMixer.swift         NEW: AVAudioConverter normalize + timestamp-align
+Sources/MaxMiMeetings/AudioCapture.swift       NEW: SCStream + AVAudioEngine -> AudioMixer -> Transcriber
+Sources/MaxMiMeetings/MeetingSession.swift     NEW: actor state machine
+Sources/CWhisper/                              NEW: whisper.cpp C target (or SPM dep) — see Task 4
+Sources/MaxMiStore/Migrations.swift            MODIFY: v3 (meetings table + versions.metadata)
+Sources/MaxMiStore/MeetingStore.swift          NEW: commitMeeting + meeting queries
+Sources/MaxMiMCP/MemoryQueries.swift           MODIFY: real meeting_memory over meetings table
+Sources/MaxMiMCP/Tools.swift                   MODIFY: meeting_memory description + action routing
+Sources/MaxMi/RightLanePanel.swift             NEW: NSPanel right-lane recorder
+Sources/MaxMi/AppWiring.swift                  MODIFY: own MeetingSession; wire detector->panel->store
+packaging/Info.plist                           MODIFY: mic/screen-capture/speech usage keys
+Tests/MaxMiMeetingsTests/*                      NEW: detector, mixer, session, transcriber-protocol
+Tests/MaxMiStoreTests/MeetingStoreTests.swift  NEW; MigrationTests.swift MODIFY
+Tests/MaxMiMCPTests/MeetingMemoryTests.swift    NEW
+```
+
+Task order (dependency-first, each independently testable): 1 storage → 2 MCP → 3 detector → 4 whisper interop+model → 5 transcriber+mixer → 6 audio capture → 7 session actor → 8 popup UI → 9 wiring → 10 live verify.
+
+---
+
+### Task 1: v3 migration + MeetingStore (storage foundation)
+
+**Files:** Modify `Sources/MaxMiStore/Migrations.swift`; Create `Sources/MaxMiStore/MeetingStore.swift`; Create `Tests/MaxMiStoreTests/MeetingStoreTests.swift`; Modify `Tests/MaxMiStoreTests/MigrationTests.swift`.
+
+**Interfaces:**
+- Consumes: `Store` (db, cipher), `ContentHash`, `Ident.uuidv7`, `HourBucket` (existing).
+- Produces:
+```swift
+public struct MeetingRecord: Sendable {
+    public let id: String            // UUIDv7
+    public let app: String
+    public let title: String?
+    public let startedAtMs: EpochMs
+    public let endedAtMs: EpochMs?
+    public let state: String         // "recording"|"completed"|"failed"|"skipped"
+    public let captureMode: String   // "system+mic"|"mic-only"
+    public let transcriptionStatus: String  // "pending"|"complete"|"partial"
+}
+extension Store {
+    // Inserts a meetings row + an immutable transcript version (encrypted), linked via
+    // versions.metadata {"meetingId":id}. Bypasses fingerprint dedup. Returns meeting id.
+    public func commitMeeting(id: String, app: String, title: String?, transcript: String,
+                              startedAtMs: EpochMs, endedAtMs: EpochMs, captureMode: String,
+                              transcriptionStatus: String, nowMs: EpochMs) throws -> String
+    public func recentMeetings(limit: Int) throws -> [MeetingRecord]
+    public func meeting(id: String) throws -> MeetingRecord?
+}
+```
+
+- [ ] **Step 1: Failing migration test** — add to `Tests/MaxMiStoreTests/MigrationTests.swift`:
+```swift
+    func testV3AddsMeetingsTableAndMetadata() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.read { d in
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='meetings'"), 1)
+            let cols = try Row.fetchAll(d, sql: "PRAGMA table_info(versions)").map { $0["name"] as String }
+            XCTAssertTrue(cols.contains("metadata"), "versions.metadata column must exist")
+        }
+    }
+```
+- [ ] **Step 2: Run — FAIL.** `swift test --filter testV3AddsMeetingsTableAndMetadata`
+- [ ] **Step 3: Add v3 migration** — in `Migrations.swift`, after the v2 block, before `return m`:
+```swift
+        m.registerMigration("v3") { db in
+            try db.execute(sql: "ALTER TABLE versions ADD COLUMN metadata TEXT;")
+            try db.execute(sql: """
+            CREATE TABLE meetings (
+              id           TEXT PRIMARY KEY,
+              thread_id    TEXT NOT NULL REFERENCES threads(id),
+              version_id   TEXT REFERENCES versions(id),
+              app          TEXT NOT NULL,
+              title        TEXT,
+              started_at   INTEGER NOT NULL,
+              ended_at     INTEGER,
+              state        TEXT NOT NULL,
+              capture_mode TEXT NOT NULL,
+              transcription_status TEXT NOT NULL DEFAULT 'pending'
+            );
+            CREATE INDEX idx_meetings_started ON meetings(started_at DESC);
+            """)
+        }
+```
+- [ ] **Step 4: Run — migration test PASS.**
+- [ ] **Step 5: Failing MeetingStore tests** — `Tests/MaxMiStoreTests/MeetingStoreTests.swift`:
+```swift
+import XCTest
+import GRDB
+@testable import MaxMiStore
+import MaxMiCore
+
+final class MeetingStoreTests: XCTestCase {
+    var store: Store!; var db: MaxMiDatabase!
+    override func setUpWithError() throws {
+        db = try MaxMiDatabase.inMemory(); store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
+    }
+    let t0 = EpochMs(495_600) * 3_600_000
+    func testCommitMeetingCreatesRowAndEncryptedVersion() throws {
+        let id = try store.commitMeeting(id: "m-1", app: "Zoom", title: "Standup", transcript: "hello team let's begin",
+            startedAtMs: t0, endedAtMs: t0 + 600_000, captureMode: "system+mic", transcriptionStatus: "complete", nowMs: t0 + 600_000)
+        XCTAssertEqual(id, "m-1")
+        try db.dbQueue.read { d in
+            let m = try Row.fetchOne(d, sql: "SELECT * FROM meetings WHERE id=?", arguments: ["m-1"])!
+            XCTAssertEqual(m["app"] as String, "Zoom")
+            XCTAssertEqual(m["state"] as String, "completed")
+            // transcript stored encrypted in the linked version
+            let vid = m["version_id"] as String
+            let content = try String.fetchOne(d, sql: "SELECT content FROM versions WHERE id=?", arguments: [vid])!
+            XCTAssertTrue(content.hasPrefix("enc:v1:"), "transcript must be encrypted at rest")
+            // metadata links version -> meeting
+            let meta = try String.fetchOne(d, sql: "SELECT metadata FROM versions WHERE id=?", arguments: [vid])!
+            XCTAssertTrue(meta.contains("m-1"))
+        }
+    }
+    func testTwoSameTitleMeetingsStayDistinct() throws {
+        _ = try store.commitMeeting(id: "m-a", app: "Zoom", title: "Standup", transcript: "one",
+            startedAtMs: t0, endedAtMs: t0+1000, captureMode: "mic-only", transcriptionStatus: "complete", nowMs: t0+1000)
+        _ = try store.commitMeeting(id: "m-b", app: "Zoom", title: "Standup", transcript: "two",
+            startedAtMs: t0+2000, endedAtMs: t0+3000, captureMode: "mic-only", transcriptionStatus: "complete", nowMs: t0+3000)
+        XCTAssertEqual(try store.recentMeetings(limit: 10).count, 2, "same-title meetings must NOT merge")
+    }
+    func testRecentMeetingsNewestFirst() throws {
+        _ = try store.commitMeeting(id: "old", app: "Teams", title: "A", transcript: "x", startedAtMs: t0, endedAtMs: t0+1, captureMode: "mic-only", transcriptionStatus: "complete", nowMs: t0+1)
+        _ = try store.commitMeeting(id: "new", app: "Teams", title: "B", transcript: "y", startedAtMs: t0+10_000, endedAtMs: t0+11_000, captureMode: "mic-only", transcriptionStatus: "complete", nowMs: t0+11_000)
+        XCTAssertEqual(try store.recentMeetings(limit: 10).first?.id, "new")
+    }
+}
+```
+- [ ] **Step 6: Run — FAIL** (commitMeeting undefined).
+- [ ] **Step 7: Implement MeetingStore.swift:**
+```swift
+import Foundation
+import GRDB
+import MaxMiCore
+
+public struct MeetingRecord: Sendable {
+    public let id: String; public let app: String; public let title: String?
+    public let startedAtMs: EpochMs; public let endedAtMs: EpochMs?
+    public let state: String; public let captureMode: String; public let transcriptionStatus: String
+}
+
+extension Store {
+    public func commitMeeting(id: String, app: String, title: String?, transcript: String,
+                              startedAtMs: EpochMs, endedAtMs: EpochMs, captureMode: String,
+                              transcriptionStatus: String, nowMs: EpochMs) throws -> String {
+        let threadKey = "meeting:\(id)"           // identity = immutable session id (no dedup/merge)
+        let hash = ContentHash.sha256Hex(transcript)
+        let bucket = HourBucket.bucket(forMs: startedAtMs)
+        let words = transcript.split(whereSeparator: \.isWhitespace).count
+        let storedContent = try cipher.encrypt(transcript)
+        let meta = "{\"meetingId\":\"\(id)\"}"
+        return try db.dbQueue.write { d in
+            let threadID = Ident.uuidv7(nowMs: nowMs)
+            try d.execute(sql: """
+                INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?)
+                """, arguments: [threadID, "Meeting", threadKey, title, hash, startedAtMs, endedAtMs])
+            let vid = Ident.uuidv7(nowMs: nowMs)
+            try d.execute(sql: """
+                INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status, metadata)
+                VALUES (?,?,?,?,?,?,1,?, 'pending', ?)
+                """, arguments: [vid, threadID, bucket, storedContent, hash, words, nowMs, meta])
+            try d.execute(sql: """
+                INSERT INTO meetings (id, thread_id, version_id, app, title, started_at, ended_at, state, capture_mode, transcription_status)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, arguments: [id, threadID, vid, app, title, startedAtMs, endedAtMs,
+                                 transcriptionStatus == "partial" ? "failed" : "completed", captureMode, transcriptionStatus])
+            return id
+        }
+    }
+    public func recentMeetings(limit: Int) throws -> [MeetingRecord] {
+        try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: "SELECT * FROM meetings ORDER BY started_at DESC LIMIT ?", arguments: [limit]).map(Self.rec)
+        }
+    }
+    public func meeting(id: String) throws -> MeetingRecord? {
+        try db.dbQueue.read { d in try Row.fetchOne(d, sql: "SELECT * FROM meetings WHERE id=?", arguments: [id]).map(Self.rec) }
+    }
+    private static func rec(_ r: Row) -> MeetingRecord {
+        MeetingRecord(id: r["id"], app: r["app"], title: r["title"], startedAtMs: r["started_at"],
+                      endedAtMs: r["ended_at"], state: r["state"], captureMode: r["capture_mode"],
+                      transcriptionStatus: r["transcription_status"])
+    }
+}
+```
+- [ ] **Step 8: Run — PASS** (3 MeetingStore + migration). Full suite green.
+- [ ] **Step 9: Commit** `feat(store): v3 meetings table + MeetingStore.commitMeeting (unique session, encrypted transcript)`
+
+---
+
+### Task 2: Real meeting_memory MCP tool
+
+**Files:** Modify `Sources/MaxMiMCP/MemoryQueries.swift`, `Sources/MaxMiMCP/Tools.swift`; Create `Tests/MaxMiMCPTests/MeetingMemoryTests.swift`.
+
+**Interfaces:**
+- Consumes: `Store.recentMeetings`, `Store.meeting`, existing vec search (for `search`), field cipher (decrypt transcript).
+- Produces: `meetingMemory(action:query:)` returning markdown `ToolResult` for `list` / `search <q>` / `get_context <id>`.
+
+- [ ] **Step 1: Failing test** — `Tests/MaxMiMCPTests/MeetingMemoryTests.swift`:
+```swift
+import XCTest
+@testable import MaxMiMCP
+@testable import MaxMiStore
+import MaxMiCore
+
+final class MeetingMemoryTests: XCTestCase {
+    func makeQueries() throws -> (MemoryQueries, Store) {
+        let db = try MaxMiDatabase.inMemory()
+        let store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
+        let t0 = EpochMs(495_700) * 3_600_000
+        _ = try store.commitMeeting(id: "mm-1", app: "Zoom", title: "Roadmap sync", transcript: "we decided to ship M5 next",
+            startedAtMs: t0, endedAtMs: t0+600_000, captureMode: "system+mic", transcriptionStatus: "complete", nowMs: t0+600_000)
+        return (MemoryQueries(store: store, cipher: AESGCMFieldCipher.testCipher), store)
+    }
+    func testListReturnsMeetings() throws {
+        let (q, _) = try makeQueries()
+        let r = q.meetingMemory(action: "list", query: nil)
+        XCTAssertFalse(r.isError); XCTAssertTrue(r.text.contains("Roadmap sync")); XCTAssertTrue(r.text.contains("Zoom"))
+    }
+    func testGetContextReturnsTranscript() throws {
+        let (q, _) = try makeQueries()
+        let r = q.meetingMemory(action: "get_context", query: "mm-1")
+        XCTAssertTrue(r.text.contains("ship M5 next"), "decrypted transcript in context")
+    }
+    func testUnknownActionErrors() throws {
+        let (q, _) = try makeQueries()
+        XCTAssertTrue(q.meetingMemory(action: "bogus", query: nil).isError)
+    }
+}
+```
+(Match `MemoryQueries`/`ToolResult` actual init signatures — adapt args to the real types when implementing.)
+- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 3: Implement** — replace the `meetingMemory` stub in `MemoryQueries.swift`: `list` → `store.recentMeetings(limit:20)` formatted markdown; `get_context <id>` → `store.meeting(id)` + decrypt its version content + list derivatives; `search <q>` → reuse the existing semantic search, filter to versions whose `metadata` contains a meetingId (or join meetings), decrypt. Update `Tools.swift` description to "Query captured meeting transcripts and summaries (list | search | get_context)." and route the `query` arg.
+- [ ] **Step 4: Run — PASS.** Full suite green.
+- [ ] **Step 5: Commit** `feat(mcp): real meeting_memory over meetings table (list/search/get_context)`
+
+---
+
+### Task 3: MeetingDetector (public CoreAudio process-object detection)
+
+**Files:** Create `Sources/MaxMiMeetings/MeetingAppList.swift`, `Sources/MaxMiMeetings/MeetingDetector.swift`; add `MaxMiMeetings` target to `Package.swift`; Create `Tests/MaxMiMeetingsTests/MeetingDetectorTests.swift`.
+
+**Interfaces:**
+- Produces:
+```swift
+public struct MeetingAppList {
+    public static let bundleIDs: Set<String>  // us.zoom.xos, com.microsoft.teams2, com.cisco.webexmeetingsapp, browsers...
+    public static func classify(bundleID: String) -> MeetingAppKind?  // .native(app) | .browser
+}
+public enum MeetingAppKind: Equatable { case native(String); case browser(String) }
+
+public protocol MeetingDetecting: AnyObject {
+    var onCandidate: ((_ bundleID: String, _ pid: pid_t) -> Void)? { get set }  // meeting app started input
+    var onEnded: ((_ bundleID: String) -> Void)? { get set }
+    func start(); func stop()
+}
+public final class MeetingDetector: MeetingDetecting { public init(debounceMs: Int = 1500) }
+```
+- The CoreAudio enumeration/listener is live-only (not unit-tested); the **allowlist + classification + debounce state machine** are unit-tested via an injectable `evaluate(activeInputBundleIDs:)` seam.
+
+- [ ] **Step 1: Add Package.swift target** — after the MaxMiCapture target:
+```swift
+        .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore"]),
+```
+and a test target:
+```swift
+        .testTarget(name: "MaxMiMeetingsTests", dependencies: ["MaxMiMeetings"]),
+```
+- [ ] **Step 2: Failing tests** — `Tests/MaxMiMeetingsTests/MeetingDetectorTests.swift`:
+```swift
+import XCTest
+@testable import MaxMiMeetings
+
+final class MeetingDetectorTests: XCTestCase {
+    func testClassifiesKnownApps() {
+        XCTAssertEqual(MeetingAppList.classify(bundleID: "us.zoom.xos"), .native("Zoom"))
+        XCTAssertEqual(MeetingAppList.classify(bundleID: "com.microsoft.teams2"), .native("Microsoft Teams"))
+        XCTAssertEqual(MeetingAppList.classify(bundleID: "com.google.Chrome"), .browser("Chrome"))
+        XCTAssertNil(MeetingAppList.classify(bundleID: "com.apple.Terminal"))
+    }
+    func testEvaluateFiresCandidateOnMeetingAppInput() {
+        let d = MeetingDetector()
+        var fired: String?
+        d.onCandidate = { bid, _ in fired = bid }
+        d.evaluate(activeInputBundleIDs: ["us.zoom.xos"], pidFor: { _ in 123 })
+        XCTAssertEqual(fired, "us.zoom.xos")
+    }
+    func testEvaluateIgnoresNonMeetingInput() {
+        let d = MeetingDetector(); var fired = false
+        d.onCandidate = { _, _ in fired = true }
+        d.evaluate(activeInputBundleIDs: ["com.apple.VoiceMemos"], pidFor: { _ in 1 })
+        XCTAssertFalse(fired, "voice memo mic use is not a meeting")
+    }
+    func testEndFiresWhenInputStops() {
+        let d = MeetingDetector(); var ended: String?
+        d.onEnded = { ended = $0 }
+        d.evaluate(activeInputBundleIDs: ["us.zoom.xos"], pidFor: { _ in 1 })
+        d.evaluate(activeInputBundleIDs: [], pidFor: { _ in 1 })
+        XCTAssertEqual(ended, "us.zoom.xos")
+    }
+}
+```
+- [ ] **Step 3: Run — FAIL.**
+- [ ] **Step 4: Implement** `MeetingAppList.swift` (the allowlist + `classify`) and `MeetingDetector.swift` with: the CoreAudio live path (`start()` registers an `AudioObjectAddPropertyListenerBlock` on `kAudioHardwarePropertyProcessObjectList`, reads `kAudioProcessPropertyIsRunningInput`/`kAudioProcessPropertyBundleID` per process, builds `activeInputBundleIDs`, calls `evaluate`), and the **pure testable** `evaluate(activeInputBundleIDs:pidFor:)` that applies the allowlist + tracks active set to fire `onCandidate`/`onEnded` with debounce. On non-macOS/CoreAudio error, `start()` logs + no-ops.
+- [ ] **Step 5: Run — PASS.** Full suite green.
+- [ ] **Step 6: Commit** `feat(meetings): MeetingDetector via public CoreAudio process-object API + app allowlist`
+
+---
+
+### Task 4: whisper.cpp interop + WhisperModelStore
+
+**Files:** Create `Sources/CWhisper/` (C target wrapping whisper.cpp) OR add an SPM dependency; Create `Sources/MaxMiMeetings/WhisperModelStore.swift`; Modify `Package.swift`; Create `Tests/MaxMiMeetingsTests/WhisperModelStoreTests.swift`.
+
+**Interfaces:**
+- Produces:
+```swift
+public struct WhisperModelStore {
+    public init(dir: URL)                                  // Application Support/MaxMi/models
+    public var isReady: Bool { get }                       // model present + checksum ok
+    public func ensureModel(download: (URL) async throws -> URL) async throws  // atomic install
+    public var modelURL: URL { get }
+    public static let modelName = "ggml-base.bin"
+    public static let sha256 = "<pin the ggml-base checksum>"
+}
+```
+- Model download itself is live (network); tests cover **isReady** (file present + checksum), **atomic install** (temp→rename), and **checksum rejection** using a fixture file — NOT a real download.
+
+- [ ] **Step 1: Package.swift — add whisper.** Prefer a pinned SPM package if a maintained `whisper.cpp` Swift package is available; else vendor a minimal `CWhisper` systemLibrary/C target. Add as a dependency of `MaxMiMeetings`. (Implementer: pick the approach that builds cleanly on this toolchain; document which in the commit.)
+- [ ] **Step 2: Failing tests** — `WhisperModelStoreTests`: write a fake model file + its real sha256 → `isReady == true`; wrong checksum → `isReady == false`; `ensureModel` with a stub download that returns a temp file → installs atomically and becomes ready. (All local, no network.)
+- [ ] **Step 3: Run — FAIL.**
+- [ ] **Step 4: Implement WhisperModelStore** — `isReady` = file exists at `modelURL` AND its sha256 matches; `ensureModel` = if ready return; else call the injected `download` closure to fetch to a temp URL, verify checksum, `FileManager.moveItem` (atomic) into place, else throw; disk-space precheck.
+- [ ] **Step 5: Run — PASS.** Build the CWhisper target (compile-only check).
+- [ ] **Step 6: Commit** `feat(meetings): whisper.cpp interop + WhisperModelStore (verified atomic model install)`
+
+---
+
+### Task 5: Transcriber protocol + WhisperTranscriber + rolling SFSpeech fallback
+
+**Files:** Create `Sources/MaxMiMeetings/Transcriber.swift`, `Sources/MaxMiMeetings/WhisperTranscriber.swift`; Create `Tests/MaxMiMeetingsTests/TranscriberTests.swift`.
+
+**Interfaces:**
+```swift
+public struct TranscriptChunk: Sendable { public let text: String; public let isFinal: Bool }
+public protocol Transcriber: AnyObject, Sendable {
+    func start() throws
+    func feed(_ pcm: [Float], sampleRate: Double)          // 16kHz mono expected; converts if needed
+    func finish() async -> String                          // full transcript
+    var onPartial: ((String) -> Void)? { get set }         // for live UI
+}
+public final class WhisperTranscriber: Transcriber { public init(modelURL: URL) }
+```
+
+- [ ] **Step 1: Failing tests** — a `MockTranscriber` conforms to the protocol; test the protocol contract (feed accumulates, finish returns joined text, onPartial fires). For `WhisperTranscriber`, a test that (if the model fixture exists) transcribes a tiny bundled WAV to non-empty text, else `throw XCTSkip`. Test the SFSpeech rolling-window stitch logic as a **pure function** `stitch(_ windows: [String]) -> String` (dedupe overlap) with fixed inputs.
+- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 3: Implement** the protocol, `WhisperTranscriber` (feed PCM into a persistent whisper context in windows; `onPartial` from intermediate results; `finish` returns the full text), and the `stitch` helper for the SFSpeech fallback. Resampling to 16kHz mono via `AVAudioConverter`.
+- [ ] **Step 4: Run — PASS.**
+- [ ] **Step 5: Commit** `feat(meetings): Transcriber protocol + WhisperTranscriber + overlap-stitch fallback`
+
+---
+
+### Task 6: AudioMixer + AudioCapture (SCStream + mic)
+
+**Files:** Create `Sources/MaxMiMeetings/AudioMixer.swift`, `Sources/MaxMiMeetings/AudioCapture.swift`; Create `Tests/MaxMiMeetingsTests/AudioMixerTests.swift`.
+
+**Interfaces:**
+```swift
+public final class AudioMixer {
+    public init(targetSampleRate: Double = 16_000)
+    // Feed source buffers (system + mic) with timestamps; emits normalized 16k mono frames.
+    public func mixSystem(_ buf: AVAudioPCMBuffer, at: AVAudioTime)
+    public func mixMic(_ buf: AVAudioPCMBuffer, at: AVAudioTime)
+    public var onFrames: (([Float]) -> Void)?
+    public var level: Float { get }   // for the popup meter
+}
+public final class AudioCapture: NSObject {
+    public init(mixer: AudioMixer)
+    // Starts SCStream scoped to `app` (or mic-only if app nil / screen-recording denied) + mic engine.
+    public func start(app: SCRunningApplication?, captureSystem: Bool) async throws
+    public func stop() async
+    public private(set) var captureMode: String   // "system+mic" | "mic-only"
+}
+```
+
+- [ ] **Step 1: Failing AudioMixer tests** — construct two `AVAudioPCMBuffer`s at 48kHz stereo and 44.1kHz mono, feed both, assert `onFrames` emits 16kHz mono frames and `level` reflects amplitude. (Pure DSP, no devices.)
+- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 3: Implement AudioMixer** — `AVAudioConverter` per source to 16kHz mono; timestamp-align into a mix buffer; emit frames; compute RMS level. **Implement AudioCapture** — `SCStream` with `SCContentFilter(display:includingApplications:exceptingWindows:)` for the target app (`capturesAudio=true`, `excludesCurrentProcessAudio=true`), `AVAudioEngine` input tap for mic; both feed the mixer; set `captureMode`; on SCStream setup failure or `captureSystem=false` → mic-only. Handle `AVAudioEngineConfigurationChange` (device switch).
+- [ ] **Step 4: Run — PASS** (mixer tests; AudioCapture live-only, compile-checked). Full suite green.
+- [ ] **Step 5: Commit** `feat(meetings): AudioMixer (converter+align) + AudioCapture (SCStream app-scoped + mic)`
+
+---
+
+### Task 7: MeetingSession actor (state machine)
+
+**Files:** Create `Sources/MaxMiMeetings/MeetingSession.swift`; Create `Tests/MaxMiMeetingsTests/MeetingSessionTests.swift`.
+
+**Interfaces:**
+```swift
+public enum MeetingState: Equatable { case idle, prompting, recording, finishing, failed, skipped }
+public protocol MeetingSessionDelegate: AnyObject {   // UI + storage hooks, injectable for tests
+    func showPrompt(app: String)
+    func showRecording()
+    func hidePanel()
+    func persist(app: String, title: String?, transcript: String, startedAtMs: Int64, endedAtMs: Int64,
+                 captureMode: String, transcriptionStatus: String) async
+}
+public actor MeetingSession {
+    public init(delegate: MeetingSessionDelegate, makeCapture: @escaping () -> AudioCaptureControlling,
+                makeTranscriber: @escaping () -> Transcriber, now: @escaping () -> Int64)
+    public func candidateDetected(app: String, title: String?)  // -> prompting
+    public func userAcceptedRecord() async                       // -> recording
+    public func userSkipped()                                    // -> skipped, hide
+    public func userStopped() async                              // -> finishing -> persist
+    public func inputStopped()                                   // -> debounced end prompt (NOT auto-stop)
+    public var state: MeetingState { get }
+}
+```
+(`AudioCaptureControlling`/`Transcriber` injected as protocols so the session is fully unit-testable with mocks.)
+
+- [ ] **Step 1: Failing tests** — with a mock delegate + mock capture + mock transcriber, drive: detect→prompt (state prompting, showPrompt called); accept→recording (capture.start called, showRecording); stop→finishing→persist (transcript from transcriber.finish, persist called with it); skip path (no persist); **inputStopped does NOT persist/stop** (stays recording pending user confirm); error path (capture.start throws → failed, hidePanel, no persist).
+- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 3: Implement** the actor state machine per the transitions; `userStopped` awaits `transcriber.finish()` then `delegate.persist(...)`; `inputStopped` triggers a debounced end-suggestion (delegate can re-prompt) but never auto-finalizes.
+- [ ] **Step 4: Run — PASS.**
+- [ ] **Step 5: Commit** `feat(meetings): MeetingSession actor state machine (consent-first, manual-stop authoritative)`
+
+---
+
+### Task 8: RightLanePanel (NSPanel recorder UI)
+
+**Files:** Create `Sources/MaxMi/RightLanePanel.swift`; Create `Tests/MaxMiTests/` is absent (app target untested per M4) → add a tiny pure helper test for placement math in an existing testable spot OR keep placement math in a `static func` in RightLanePanel and test via a new `Tests/MaxMiMeetingsTests` helper if the function is moved to the module.
+
+**Interfaces:**
+```swift
+// Placement math is pure + testable; the NSPanel itself is AppKit glue (manual QA).
+public enum RightLanePlacement {
+    // Given a screen visibleFrame + panel size, return the docked right-edge origin.
+    public static func origin(inScreen visibleFrame: CGRect, panelSize: CGSize, topInset: CGFloat = 80) -> CGPoint
+    // Choose the screen: the one containing the meeting window frame, else the one with the cursor.
+    public static func chooseScreen(meetingWindow: CGRect?, screens: [CGRect], cursor: CGPoint) -> CGRect
+}
+@MainActor final class RightLanePanel { /* NSPanel; states: nudge / recording / finishing */ }
+```
+
+- [ ] **Step 1: Failing placement tests** — put `RightLanePlacement` in `MaxMiMeetings` (testable module) and test: origin docks to the right edge (x = frame.maxX - panelWidth - margin) at the top inset; `chooseScreen` picks the screen containing the meeting window, falls back to the cursor's screen when meetingWindow is nil or off-screen. (Covers the "not NSScreen.main" fix.)
+- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 3: Implement** `RightLanePlacement` (pure), then `RightLanePanel` in the app target: `NSPanel(.nonactivatingPanel, borderless)`, `isFloatingPanel=true`, `level=.statusBar`, `collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]`, `ignoresMouseEvents=false`; three state views (nudge with Record/Don't-record, recording with ●+timer+level bar+Stop, finishing spinner); positions via `RightLanePlacement.chooseScreen`/`origin`; observes `didChangeScreenParametersNotification`; auto-dismiss timer for the nudge.
+- [ ] **Step 4: Run — PASS** (placement tests). Build the app target (panel compiles).
+- [ ] **Step 5: Commit** `feat(ui): RightLanePanel meeting recorder popup + tested placement math`
+
+---
+
+### Task 9: Wire it all in AppWiring + Info.plist
+
+**Files:** Modify `Sources/MaxMi/AppWiring.swift`, `packaging/Info.plist`.
+
+**Interfaces:** Consumes everything above. Produces no new public API; AppWiring owns a `MeetingDetector`, a `MeetingSession` (whose delegate bridges to `RightLanePanel` + `Store.commitMeeting`), and the `WhisperModelStore`.
+
+- [ ] **Step 1: Info.plist** — add `NSMicrophoneUsageDescription`, `NSScreenCaptureUsageDescription`, `NSSpeechRecognitionUsageDescription` with honest strings (e.g. "MaxMi records and transcribes meetings you choose to capture.").
+- [ ] **Step 2: Wire AppWiring** — on start (after capture wiring), if meeting features enabled: create `WhisperModelStore`, `MeetingDetector`, and a `MeetingSession` with a delegate that (a) shows/updates `RightLanePanel` on `@MainActor`, (b) `persist` → `store.commitMeeting(...)`. Detector `onCandidate` → `session.candidateDetected`; panel Record/Skip/Stop buttons → `session.userAccepted/Skipped/Stopped`. Ensure the whisper model before arming Record (panel "Preparing…" state). Guard: meeting features behind the same encryption/permission availability as capture.
+- [ ] **Step 3: Build** — `swift build` clean.
+- [ ] **Step 4: Full suite** — all green, zero warnings.
+- [ ] **Step 5: Commit** `feat(meetings): wire detector -> session -> right-lane panel -> MeetingStore + Info.plist perms`
+
+---
+
+### Task 10: Live verification (controller/human — closes M5)
+
+**Files:** none. Do NOT run as a subagent.
+
+- [ ] **Step 1: Rebuild + relaunch** (grant persists; no tccutil reset): `./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"; sleep 2; open MaxMi.app`. Grant Microphone + Screen Recording when first prompted (on first Record).
+- [ ] **Step 2: Model readiness** — first enable: confirm the popup shows "Preparing transcription…" then arms Record once `ggml-base` is downloaded+verified.
+- [ ] **Step 3: Detection + popup** — join a Zoom (or Meet in Chrome) call → right-edge popup appears within a few seconds, buttons clickable, floats over fullscreen Zoom on the correct screen, doesn't steal focus.
+- [ ] **Step 4: Record path** — click Record, speak for 2+ min (ideally test a 30+ min call once), click Stop → verify:
+```bash
+DB=~/Library/Application\ Support/MaxMi/maxmi.db
+sqlite3 -header -column "$DB" "SELECT id, app, title, state, capture_mode, transcription_status, (ended_at-started_at)/1000 AS dur_s FROM meetings ORDER BY started_at DESC LIMIT 3;"
+sqlite3 "$DB" "SELECT substr(content,1,12) FROM versions v JOIN meetings m ON m.version_id=v.id ORDER BY m.started_at DESC LIMIT 1;"  # expect enc:v1:
+```
+- [ ] **Step 5: MCP** — `meeting_memory` list/search/get_context returns the meeting + decrypted transcript; `search_memory` also finds it.
+- [ ] **Step 6: Negatives** — "Don't record" → no meeting row; switch apps mid-record → recording continues (no auto-truncate); deny Screen Recording once → `capture_mode='mic-only'` + panel note.
+- [ ] **Step 7: Distinctness** — two short back-to-back meetings → two distinct `meetings` rows.
+- [ ] **Step 8: Declare M5 complete** when 1-7 hold.
+
+---
+
+## Self-Review (at plan-writing time)
+
+**Spec coverage:** §3 detection→T3; transcription (whisper default/model-ready/Deepgram/SFSpeech-fallback)→T4,T5; audio (SCStream app-scoped + mixer + mic-only fallback)→T6; popup (clickable, meeting-window's-screen)→T8; storage (meetings table, unique id, no dedup, encrypted transcript, metadata link)→T1; MCP→T2; session actor (manual-stop, backgrounding-safe, consent)→T7; wiring+permissions→T9; exit criteria→T10. §4 non-goals honored (whisper default, no auto-record, no auto-end). §7 schema→T1 migration verbatim. §9 perms→T9. §12 tests map to each task's tests.
+
+**Placeholder scan:** two deliberate implementer-choice points flagged, not placeholders: T4 (whisper SPM-dep vs vendored C target — "pick what builds, document in commit") and T4 model sha256 ("pin the checksum"). Both are genuine environment-dependent decisions the implementer must resolve with the real toolchain/model; every other step has concrete code.
+
+**Type consistency:** `commitMeeting(...)` signature identical in T1 def, T2 test seed, T9 wiring. `Transcriber`/`AudioMixer`/`MeetingSession` protocol signatures consistent across T5/T6/T7/T9. `MeetingRecord` fields match the meetings table columns (T1). `RightLanePlacement` in MaxMiMeetings (testable) used by T8 panel. `meeting_memory` actions (list/search/get_context) consistent T2↔spec §8↔T10.
