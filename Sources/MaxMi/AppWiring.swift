@@ -209,6 +209,10 @@ final class AppWiring {
                 return
             }
 
+            // Central keying chokepoint: parsers propose a key; the deriver makes it clean+stable
+            // (coarsen-don't-drop). No parser writes the final source_key directly (spec §3a).
+            let cleanKey = ThreadKeyDeriver.derive(parsed)
+
             // Decision gate: denylist + per-thread pause. Fail closed on DB error.
             let pausedThreads: Set<String>
             do {
@@ -217,11 +221,7 @@ final class AppWiring {
                 NSLog("MaxMi: pausedThreads read failed, skipping capture: \(error)")
                 return
             }
-            guard CaptureDispatch.shouldCommit(parsed: parsed, pausedThreads: pausedThreads) else { return }
-
-            // Central keying chokepoint: parsers propose a key; the deriver makes it clean+stable
-            // (coarsen-don't-drop). No parser writes the final source_key directly (spec §3a).
-            let cleanKey = ThreadKeyDeriver.derive(parsed)
+            guard CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: cleanKey, pausedThreads: pausedThreads) else { return }
             let result = try store.commitCapture(
                 CaptureInput(sourceApp: parsed.sourceApp, sourceKey: cleanKey,
                             sourceTitle: parsed.sourceTitle, content: parsed.content),

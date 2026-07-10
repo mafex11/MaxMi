@@ -57,4 +57,15 @@ final class ThreadKeyDeriverTests: XCTestCase {
     func testMailKeyPreserved() {
         XCTAssertEqual(ThreadKeyDeriver.derive(cap("Mail", "mail:inbox")), "mail:inbox")
     }
+
+    func testDocTitleWithDotNotCoarsened() {
+        // Notion/Notes/Obsidian slug arbitrary titles; a dot in the title must NOT collapse the key.
+        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Notion", "notion:plan-v1.2")), "notion:plan-v1.2")
+        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Notes", "notes:node.js")), "notes:node.js")
+        // and two different such docs stay DISTINCT
+        XCTAssertNotEqual(ThreadKeyDeriver.derive(cap("Notion", "notion:plan-v1.2")),
+                          ThreadKeyDeriver.derive(cap("Notion", "notion:budget-2.5")))
+        // terminal garbage still coarsens (parent segment exists)
+        XCTAssertEqual(ThreadKeyDeriver.derive(cap("Warp", "terminal:warp/inspect2.mjs")), "terminal:warp")
+    }
 }

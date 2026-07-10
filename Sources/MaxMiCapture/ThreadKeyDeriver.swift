@@ -59,8 +59,9 @@ public enum ThreadKeyDeriver {
         path = path.lowercased().replacingOccurrences(of: " ", with: "-")
         while path.contains("--") { path = path.replacingOccurrences(of: "--", with: "-") }
         // last segment file-extension coarsening: "warp/inspect2.mjs" -> "warp"
+        // but only if a parent segment remains (don't coarsen single-segment doc keys like "plan-v1.2")
         var segs = path.split(separator: "/").map(String.init)
-        if let last = segs.last, let dot = last.lastIndex(of: "."), dot != last.startIndex {
+        if segs.count >= 2, let last = segs.last, let dot = last.lastIndex(of: "."), dot != last.startIndex {
             let ext = last[last.index(after: dot)...]
             if ext.count <= 5 && !ext.isEmpty && ext.allSatisfy({ $0.isLetter || $0.isNumber }) {
                 segs.removeLast()

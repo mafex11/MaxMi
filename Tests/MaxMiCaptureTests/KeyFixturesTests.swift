@@ -47,4 +47,11 @@ final class KeyFixturesTests: XCTestCase {
             XCTAssertFalse(k.contains(".mjs") || k.contains(".app"), "file-ext leaf must be coarsened away: \(k)")
         }
     }
+
+    func testDocTitlesWithDotsStayDistinct() {
+        let a = ThreadKeyDeriver.derive(cap("Notion", "notion:plan-v1.2"))
+        let b = ThreadKeyDeriver.derive(cap("Notion", "notion:budget-2.5"))
+        assertClean(a); assertClean(b)
+        XCTAssertNotEqual(a, b, "different documents must not merge")
+    }
 }

@@ -4,21 +4,21 @@ import XCTest
 final class CaptureDispatchTests: XCTestCase {
     func testShouldCommit_normalKeyAllowed() {
         let parsed = ParsedCapture(sourceApp: "Web", sourceKey: "https://example.com", sourceTitle: "Example", content: "foo")
-        XCTAssertTrue(CaptureDispatch.shouldCommit(parsed: parsed, pausedThreads: []))
+        XCTAssertTrue(CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: "https://example.com", pausedThreads: []))
     }
 
     func testShouldCommit_pausedThreadSkipped() {
         let parsed = ParsedCapture(sourceApp: "Slack", sourceKey: "slack:acme/general", sourceTitle: "general", content: "foo")
-        XCTAssertFalse(CaptureDispatch.shouldCommit(parsed: parsed, pausedThreads: ["slack:acme/general"]))
+        XCTAssertFalse(CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: "slack:acme/general", pausedThreads: ["slack:acme/general"]))
     }
 
     func testShouldCommit_denylistedKeySkipped() {
         let parsed = ParsedCapture(sourceApp: "Web", sourceKey: "chrome://settings", sourceTitle: "Settings", content: "foo")
-        XCTAssertFalse(CaptureDispatch.shouldCommit(parsed: parsed, pausedThreads: []))
+        XCTAssertFalse(CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: "chrome://settings", pausedThreads: []))
     }
 
     func testShouldCommit_unpausedThreadAllowed() {
         let parsed = ParsedCapture(sourceApp: "Slack", sourceKey: "slack:acme/general", sourceTitle: "general", content: "foo")
-        XCTAssertTrue(CaptureDispatch.shouldCommit(parsed: parsed, pausedThreads: ["slack:acme/random"]))
+        XCTAssertTrue(CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: "slack:acme/general", pausedThreads: ["slack:acme/random"]))
     }
 }
