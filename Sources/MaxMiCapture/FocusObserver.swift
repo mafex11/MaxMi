@@ -21,6 +21,7 @@ public final class FocusObserver {
     let recaptureIntervalSec: Double
     let isCapturable: @Sendable (String) -> Bool
     let onCapture: @MainActor (AppInfo, pid_t) -> Void
+    public var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?
 
     var debounceTask: Task<Void, Never>?
     var recaptureTimer: Timer?
@@ -62,18 +63,25 @@ public final class FocusObserver {
     }
 
     func frontmostChanged(_ app: NSRunningApplication) {
-        guard let bid = app.bundleIdentifier, isCapturable(bid) else {
+        guard let bid = app.bundleIdentifier else { return }
+        let newPid = app.processIdentifier
+        let capturable = isCapturable(bid)
+        let newAppName = app.localizedName ?? bid
+
+        // Fire onFocusChanged on EVERY frontmost change (before the capturable gate)
+        onFocusChanged?(AppInfo(bundleID: bid, name: newAppName, windowTitle: nil), capturable, newPid)
+
+        guard capturable else {
             detachAXObserver()
             recaptureTimer?.invalidate(); recaptureTimer = nil
             current = nil; return
         }
-        let newPid = app.processIdentifier
         if let cur = current, cur.bundleID == bid, cur.pid == newPid {
             scheduleCapture(); return   // same app/pid -> no observer churn
         }
         detachAXObserver()
         current = (bundleID: bid, pid: newPid)
-        appName = app.localizedName ?? bid
+        appName = newAppName
         if let browser = Browser(rawValue: bid), browser.isChromium {
             ChromiumKick.apply(pid: newPid)
         }
