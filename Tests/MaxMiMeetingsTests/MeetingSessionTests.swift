@@ -533,6 +533,50 @@ final class MeetingSessionTests: XCTestCase {
 
         XCTAssertGreaterThan(panel.lastLevel, 0, "Level should be updated from polling")
     }
+
+    @MainActor
+    func testSkipDuringRecordingTearsDownAndNoLeak() async throws {
+        let panel = MockPanel()
+        let persister = MockPersister()
+        let authorizer = MockAuthorizer()
+        let capture = MockCapture()
+        let transcriber = MockSessionTranscriber()
+        let clock = FakeClock()
+
+        let session = MeetingSession(
+            panel: panel,
+            persister: persister,
+            authorizer: authorizer,
+            makeCapture: { capture },
+            makeTranscriber: { transcriber },
+            clock: clock
+        )
+
+        // Detect -> accept (recording) -> skip
+        await session.candidateDetected(bundleID: "us.zoom.xos", pid: 123, title: "Meeting")
+        await session.userAcceptedRecord()
+
+        let stateBeforeSkip = await session.state
+        XCTAssertEqual(stateBeforeSkip, .recording, "Should be recording before skip")
+
+        // Skip while recording
+        await session.userSkipped()
+
+        // Assert state is .skipped
+        let state = await session.state
+        XCTAssertEqual(state, .skipped)
+
+        // Assert capture was stopped
+        let stopCalled = await capture.stopCalled
+        XCTAssertTrue(stopCalled, "Capture should be stopped when skipping during recording")
+
+        // Assert no persistence occurred
+        let meetings = await persister.persistedMeetings
+        XCTAssertEqual(meetings.count, 0, "userSkipped should never persist")
+
+        // Assert panel was hidden
+        XCTAssertTrue(panel.hideCalled)
+    }
 }
 
 // MARK: - Mock Extensions for Test Control

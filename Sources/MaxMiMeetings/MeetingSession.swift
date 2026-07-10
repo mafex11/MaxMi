@@ -169,6 +169,15 @@ public actor MeetingSession {
 
     /// User skipped -> no persist, hide panel
     public func userSkipped() async {
+        // Skip is a prompt-time action, but be defensive: if we're somehow recording,
+        // tear down capture/transcriber + the level poll so nothing leaks.
+        levelTask?.cancel()
+        levelTask = nil
+        if _state == .recording {
+            await capture?.stop()
+        }
+        capture = nil
+        transcriber = nil
         _state = .skipped
         await MainActor.run {
             panel.hidePanel()
