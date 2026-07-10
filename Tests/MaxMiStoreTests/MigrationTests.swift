@@ -93,4 +93,12 @@ final class MigrationTests: XCTestCase {
             XCTAssertEqual(n, 1, "v2 migration must create message_fingerprints")
         }
     }
+    func testV3AddsMeetingsTableAndMetadata() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.read { d in
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='meetings'"), 1)
+            let cols = try Row.fetchAll(d, sql: "PRAGMA table_info(versions)").map { $0["name"] as String }
+            XCTAssertTrue(cols.contains("metadata"), "versions.metadata column must exist")
+        }
+    }
 }
