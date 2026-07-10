@@ -39,7 +39,11 @@
 ## 3. MaxMi adaptation (what differs, and why)
 
 - **SwiftUI, not React/Electron.** MaxMi is all-Swift. The Activity window + Action Items are **SwiftUI** (a normal closable `NSWindow` hosting `NSHostingController`, app is `.accessory`), giving native, GPU-smooth animations. View model is `@MainActor @Observable`; DB/Gemini work happens off-main and publishes a prebuilt view state back. Window manager is retained in AppWiring (doesn't deallocate on close). "60fps" is a *performance target measured in Instruments*, not an acceptance criterion (Codex).
-- **Deterministic segmentation; Gemini ONLY for display summary (▲REV — Codex critical).** The store is hour-bucketed and mutable, so Gemini cannot "detect" sessions from data never stored as events. Instead: a **`SessionSegmenter`** deterministically cuts sessions from `activity_app_visits` (app change + configurable inactivity gap) and attaches the versions committed during each span. Gemini's ONLY job is `DisplaySummarizer` — writing a display summary for a **closed/idle** session from its member derivatives + bounded source snippets (with version-id provenance). No Gemini "detect-conversation" pass.
+- **Deterministic segmentation; Gemini ONLY for display summary (▲REV — Codex critical).** The store is hour-bucketed and mutable, so Gemini cannot "detect" sessions from data never stored as events. Instead, sessions have a **deterministic lifecycle** (▲REV3 — Codex, resolves the evidence-needs-session-id ordering):
+  1. On the **first eligible capture in a focus span** (app not sensitive/excluded), atomically create an **open/provisional** `activity_sessions` row (`ended_at` null, `summary_status='pending'`).
+  2. After each **successful non-deduplicated capture commit** attributed to that span, append an immutable `activity_session_evidence` snapshot (coalesced by `(session_id, content_hash)`) and bump `last_activity_at`. Evidence is never buffered only in memory (crash-safe).
+  3. **`SessionSegmenter` is the finalization/lifecycle policy** (NOT a "create session after evidence exists"): it **closes** the open session on app switch or inactivity-gap, setting `ended_at`; a new eligible capture then opens a fresh session.
+  Gemini's ONLY job is `DisplaySummarizer` — writing the display summary for a **closed/idle** session from its evidence snapshots (with provenance). No Gemini "detect-conversation" pass.
 - **Gemini is a cloud call — explicit consent (▲REV — Codex critical).** "Local Gemini" was inaccurate; the app POSTs to Google's Gemini API. M6 sends synthesized summaries + open-item history. This needs **explicit user-facing consent** (a first-run/Settings disclosure that activity synthesis sends content to Gemini), not "unchanged trust model". Reuses the relay but via a dedicated `ActivityGenerationRelay` extension (`MemoryRelay` today only has `extract`/`embed`).
 - **No accounts / sign-in / billing.** Minimi has auth+billing; MaxMi is single-user local — dropped.
 - **FocusObserver gains a transition callback (▲REV — Codex critical).** It currently only exposes `onCapture` and drops state on non-capturable apps. M6 adds `onFocusChanged(app, isCapturable)` so `ActivityStore.recordVisit` can open/close visits. Open visits are **closed** on: app switch, sleep/screen-lock (`NSWorkspace` notifications), termination, and **startup crash-repair** (close any dangling open visit). **Sensitive apps (denylist) produce NO visit** — we don't even record their app name.
@@ -86,7 +90,7 @@ packaging/assets/                              NEW: dog app icon (icon.icns) + t
 packaging/make-app.sh                          MODIFY: install icon.icns + tray assets
 ```
 
-Data flow (▲REV2 — consistent with the revised model): FocusObserver `onFocusChanged` → `ActivityStore` opens/closes `activity_app_visits` (skipping sensitive + user-excluded apps) and snapshots attributed content into `activity_session_evidence`. On session close/idle → `SessionSegmenter` (deterministic: app-change + gap) finalizes `activity_sessions` + evidence → `DisplaySummarizer` (Gemini) writes the encrypted `summary_ciphertext` for closed sessions (guarded by `source_hash`). Idle-gated/overdue trigger (`NSBackgroundActivityScheduler` + launch/foreground catch-up, durable cursor) → `HourlyAgent` (actor) reviews new evidence since `agent_runs.input_to` → Gemini structured-output ID-ops → `AgentStore` applies create/update/resolve transactionally + events audit. Menu-bar dog left-click → `ActivityWindow` (SwiftUI) loads `ActivityViewModel` → renders timeline + action items.
+Data flow (▲REV3 — lifecycle explicit): FocusObserver `onFocusChanged` → `ActivityStore` opens/closes `activity_app_visits` (skipping sensitive + user-excluded apps) AND opens a provisional `activity_sessions` row on the first eligible capture of a span. Each committed capture → append immutable `activity_session_evidence` snapshot + bump `last_activity_at`. `SessionSegmenter` (deterministic finalization policy: app-change + inactivity gap) **closes** the session → `DisplaySummarizer` (Gemini) writes the encrypted `summary_ciphertext` for the now-closed session (guarded by `source_hash`). Idle-gated/overdue trigger (`NSBackgroundActivityScheduler` + launch/foreground catch-up, durable cursor) → `HourlyAgent` (actor) reviews new evidence since `agent_runs.input_to` → Gemini structured-output ID-ops → `AgentStore` applies create/update/resolve transactionally + events audit. Menu-bar dog left-click → `ActivityWindow` (SwiftUI) loads `ActivityViewModel` → renders timeline + action items.
 
 ## 6. UI/UX spec (SwiftUI, Minimi-style — clean/animated/smooth)
 
@@ -134,12 +138,14 @@ CREATE INDEX idx_sessions_summ ON activity_sessions(summary_status) WHERE summar
 -- attributed content at capture time into an immutable, encrypted row PER SESSION.
 CREATE TABLE activity_session_evidence (
   id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL REFERENCES activity_sessions(id),
+  session_id TEXT NOT NULL REFERENCES activity_sessions(id) ON DELETE CASCADE,  -- ▲REV3
   version_id TEXT REFERENCES versions(id),     -- soft provenance link (may later mutate)
   captured_at INTEGER NOT NULL,
   content_hash TEXT NOT NULL,                   -- hash of the snapshot at capture time
   content_ciphertext TEXT NOT NULL);            -- immutable encrypted snapshot (enc:v1:)
 CREATE INDEX idx_evidence_session ON activity_session_evidence(session_id, captured_at);
+-- Coalesce duplicate snapshots (repeated ~45s captures of unchanged content) per session.
+CREATE UNIQUE INDEX idx_evidence_dedup ON activity_session_evidence(session_id, content_hash);
 
 -- One row per agent review, with a DURABLE CURSOR (source of truth, survives restart/sleep).
 CREATE TABLE agent_runs (
@@ -165,7 +171,7 @@ CREATE INDEX idx_items_status ON agent_action_items(status, detected_at DESC);
 
 -- Audit trail of item changes (create/update/resolve/dismiss) — bounded, for "auditable updates".
 CREATE TABLE agent_action_item_events (
-  id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES agent_action_items(id),
+  id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES agent_action_items(id) ON DELETE CASCADE,  -- ▲REV3
   event TEXT NOT NULL, run_id TEXT, at INTEGER NOT NULL);
 ```
 
@@ -196,8 +202,8 @@ CREATE TABLE agent_action_item_events (
 - No cloud activity backend (local pipeline calling the existing Gemini relay).
 
 ## 12. Testing
-- **ActivityStore/AgentStore/migration v4:** visit open/close (+ crash-repair of dangling opens); session create + member-version links; summary set with `source_hash` stale-guard (re-summarize only on hash change); action-item ID-op transitions (create/update/resolve/dismiss) + CHECK-constraint enforcement + events audit; encrypted round-trip for summary/title/details/evidence; MigrationTests asserts all 6 tables.
-- **SessionSegmenter:** deterministic grouping (app change + inactivity gap) over synthetic visit+version sets — pure/testable; revisiting same app later = NEW session (no overwrite).
+- **ActivityStore/AgentStore/migration v4:** visit open/close (+ crash-repair of dangling opens); provisional session open-on-first-capture → immutable **evidence snapshot append** (coalesced by `(session_id, content_hash)`) → close; summary set with `source_hash` stale-guard (re-summarize only on evidence-hash change); ON DELETE CASCADE evidence/events on session/item delete (privacy delete); action-item ID-op transitions (create/update/resolve/dismiss) + CHECK-constraint enforcement + events audit; encrypted round-trip for summary/title/details/evidence/snapshot; PRAGMA foreign_keys enforced; MigrationTests asserts all 6 tables.
+- **SessionSegmenter (finalization policy):** deterministic close-on (app change + inactivity gap) over synthetic visit+capture sequences — pure/testable; revisiting same app later = NEW session (no overwrite); same-hour revisit doesn't corrupt the earlier session's evidence.
 - **HourlyAgent:** cursor advance only after commit; ID-based ops applied transactionally; **never-resolve-on-absence** (item absent from a later response stays open); dismissal terminal; backfill batching caps input. Mock relay returns canned structured-output ops; delta math + cursor asserted.
 - **DisplaySummarizer:** prompt-building + provenance (version-ids) with a mock relay.
 - **ActivityViewModel:** loads Store rows → view state (grouping by day, time-ago formatting) — pure/testable.
