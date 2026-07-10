@@ -2,6 +2,8 @@ import Foundation
 import MaxMiCore
 
 public actor GeminiThrottle {
+    public static let shared = GeminiThrottle()
+
     private var lastRequestTime: Date?
     private var backoffUntil: Date?
     private var consecutiveFailures = 0

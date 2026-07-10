@@ -113,4 +113,13 @@ final class GeminiClientTests: XCTestCase {
         XCTAssertEqual(text, "success")
         XCTAssertEqual(callCount, 2, "retry after backoff should succeed")
     }
+    func testMultipleClientsShareThrottle() async throws {
+        let env = EnvConfig.load(searchPaths: [])
+        let keyed = EnvConfig(geminiAPIKey: "test-key", extractModel: env.extractModel,
+                              embedModel: env.embedModel, embedDims: env.embedDims)
+        let client1 = GeminiClient(config: keyed)
+        let client2 = GeminiClient(config: keyed)
+        XCTAssertTrue(client1.throttle === client2.throttle, "default throttle should be shared across clients")
+        XCTAssertTrue(client1.throttle === GeminiThrottle.shared, "default throttle should be the shared singleton")
+    }
 }

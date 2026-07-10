@@ -9,7 +9,7 @@ public final class GeminiClient: MemoryRelay {
 
     public init(config: EnvConfig, session: URLSession = .shared,
                 baseURL: URL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
-                throttle: GeminiThrottle = GeminiThrottle()) {
+                throttle: GeminiThrottle = GeminiThrottle.shared) {
         self.config = config; self.session = session; self.baseURL = baseURL; self.throttle = throttle
     }
 
