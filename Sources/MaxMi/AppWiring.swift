@@ -4,6 +4,7 @@ import MaxMiCore
 import MaxMiStore
 import MaxMiCapture
 import MaxMiRelay
+import MaxMiMeetings
 
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
 final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is internally serialized by GRDB's DatabaseQueue
@@ -54,6 +55,12 @@ final class AppWiring {
     let registry = ParserRegistry()
     var recentApps: [(bundleID: String, name: String)] = []
     var lastSourceKey: String?
+
+    // Meeting capture components
+    var meetingDetector: MeetingDetector?
+    var meetingSession: MeetingSession?
+    var rightLanePanel: RightLanePanel?
+    var modelStore: WhisperModelStore?
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -138,6 +145,99 @@ final class AppWiring {
         }
         RunLoop.main.add(t, forMode: .common)
         pipelineTimer = t
+
+        // Meeting capture wiring — guarded by same availability as regular capture
+        wireMeetingCapture()
+    }
+
+    private func wireMeetingCapture() {
+        guard encryptionAvailable else { return }  // meetings also require encryption
+        guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }
+
+        // Create model store
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MaxMi", isDirectory: true)
+        let modelsDir = appSupport.appendingPathComponent("models", isDirectory: true)
+        let modelStore = WhisperModelStore(dir: modelsDir)
+        self.modelStore = modelStore
+
+        // Create right-lane panel
+        let panel = RightLanePanel()
+        self.rightLanePanel = panel
+
+        // Create persister
+        let persister = StoreMeetingPersister(store: store)
+
+        // Create session with all dependencies
+        let session = MeetingSession(
+            panel: panel,
+            persister: persister,
+            authorizer: MeetingPermissions(),
+            makeCapture: { AudioCapture(mixer: AudioMixer()) },
+            makeTranscriber: { WhisperTranscriber(modelURL: modelStore.modelURL) },
+            clock: SystemMeetingClock()
+        )
+        self.meetingSession = session
+
+        // Wire panel button callbacks
+        panel.onRecord = { [weak session] in
+            Task {
+                await session?.userAcceptedRecord()
+            }
+        }
+        panel.onSkip = { [weak session] in
+            Task {
+                await session?.userSkipped()
+            }
+        }
+        panel.onStop = { [weak session] in
+            Task {
+                await session?.userStopped()
+            }
+        }
+        panel.onKeep = { [weak session] in
+            Task {
+                await session?.userKeptRecording()
+            }
+        }
+        panel.onFinish = { [weak session] in
+            Task {
+                await session?.userStopped()
+            }
+        }
+
+        // Ensure whisper model before arming detector
+        Task { @MainActor in
+            panel.showPreparing()
+            do {
+                try await modelStore.ensureModel { @Sendable remoteURL in
+                    let (tempURL, _) = try await URLSession.shared.download(from: remoteURL)
+                    return tempURL
+                }
+                panel.hidePanel()  // Model ready, hide preparing UI
+
+                // Now start the detector
+                let detector = MeetingDetector()
+                self.meetingDetector = detector
+
+                // Wire detector callbacks
+                detector.onCandidate = { [weak session] bundleID, pid in
+                    Task {
+                        await session?.candidateDetected(bundleID: bundleID, pid: pid, title: nil)
+                    }
+                }
+                detector.onEnded = { [weak session] bundleID in
+                    Task {
+                        await session?.inputStopped()
+                    }
+                }
+
+                detector.start()
+            } catch {
+                NSLog("MaxMi: whisper model download failed: \(error)")
+                panel.showError("Failed to prepare transcription model")
+            }
+        }
     }
 
     func captureFrontmost(app: AppInfo, pid: pid_t) {

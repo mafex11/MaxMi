@@ -69,6 +69,26 @@ enum Migrations {
             CREATE INDEX idx_fingerprints_thread ON message_fingerprints(thread_id);
             """)
         }
+        m.registerMigration("v3") { db in
+            try db.execute(sql: "ALTER TABLE versions ADD COLUMN metadata TEXT;")
+            try db.execute(sql: """
+            CREATE TABLE meetings (
+              id           TEXT PRIMARY KEY,
+              thread_id    TEXT NOT NULL REFERENCES threads(id),
+              version_id   TEXT REFERENCES versions(id),
+              app          TEXT NOT NULL,
+              title        TEXT,
+              started_at   INTEGER NOT NULL,
+              ended_at     INTEGER,
+              state        TEXT NOT NULL,
+              capture_mode TEXT NOT NULL,
+              transcription_status TEXT NOT NULL DEFAULT 'pending',
+              UNIQUE(version_id),
+              UNIQUE(thread_id)
+            );
+            CREATE INDEX idx_meetings_started ON meetings(started_at DESC);
+            """)
+        }
         return m
     }
 }

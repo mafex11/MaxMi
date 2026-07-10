@@ -105,7 +105,85 @@ public final class MemoryQueries: @unchecked Sendable {
         }
     }
 
-    public func meetingMemory(action: String) -> ToolResult {
-        ToolResult(text: Self.stubText)
+    public func meetingMemory(action: String, query: String?) async -> ToolResult {
+        switch action {
+        case "list":
+            do {
+                let meetings = try store.recentMeetings(limit: 20)
+                guard !meetings.isEmpty else {
+                    return ToolResult(text: Self.stubText)
+                }
+                var md = "## Recent Meetings\n\n"
+                for m in meetings {
+                    let duration = m.endedAtMs.map { ($0 - m.startedAtMs) / 60_000 } ?? 0
+                    md += "### \(m.title ?? "Untitled")\n"
+                    md += "- **App:** \(m.app)\n"
+                    md += "- **Started:** \(relative(m.startedAtMs))\n"
+                    md += "- **Duration:** \(duration) minutes\n"
+                    md += "- **ID:** \(m.id)\n"
+                    md += "- **Mode:** \(m.captureMode)\n\n"
+                }
+                return ToolResult(text: md)
+            } catch {
+                return ToolResult(text: "Failed to list meetings: \(error)", isError: true)
+            }
+
+        case "get_context":
+            guard let meetingID = query, !meetingID.isEmpty else {
+                return ToolResult(text: "get_context requires a meeting ID in the query parameter", isError: true)
+            }
+            do {
+                guard let ctx = try store.meetingContext(id: meetingID) else {
+                    return ToolResult(text: "Meeting '\(meetingID)' not found", isError: true)
+                }
+                var md = "## Meeting: \(ctx.record.title ?? "Untitled")\n\n"
+                md += "**App:** \(ctx.record.app)  \n"
+                md += "**Started:** \(relative(ctx.record.startedAtMs))  \n"
+                if let ended = ctx.record.endedAtMs {
+                    md += "**Duration:** \((ended - ctx.record.startedAtMs) / 60_000) minutes  \n"
+                }
+                md += "\n### Transcript\n\n"
+                md += ctx.transcript.isEmpty ? "_(no transcript)_" : ctx.transcript
+                if !ctx.facts.isEmpty {
+                    md += "\n\n### Extracted Facts\n\n"
+                    for fact in ctx.facts {
+                        md += "- \(fact)\n"
+                    }
+                }
+                return ToolResult(text: md)
+            } catch {
+                return ToolResult(text: "Failed to get meeting context: \(error)", isError: true)
+            }
+
+        case "search":
+            guard let q = query, !q.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return ToolResult(text: "search requires a query string", isError: true)
+            }
+            let vector: [Float]
+            do { vector = try await relay.embed(text: q) }
+            catch {
+                logStderr("embed failed: \(error)")
+                return ToolResult(text: Self.offlineText, isError: true)
+            }
+            do {
+                let hits = try store.meetingFactHits(near: vector, limit: 20)
+                guard !hits.isEmpty else {
+                    return ToolResult(text: "No meeting facts matched \"\(q)\".")
+                }
+                var md = "## Meeting search: \"\(q)\"\n\n"
+                for h in hits {
+                    md += "### \(h.title ?? "Untitled")\n"
+                    md += "- **App:** \(h.app)\n"
+                    md += "- **Started:** \(relative(h.startedAtMs))\n"
+                    md += "- **ID:** \(h.id)\n\n"
+                }
+                return ToolResult(text: md)
+            } catch {
+                return ToolResult(text: "Failed to search meetings: \(error)", isError: true)
+            }
+
+        default:
+            return ToolResult(text: "Unknown action '\(action)'. Use: list | get_context | search", isError: true)
+        }
     }
 }

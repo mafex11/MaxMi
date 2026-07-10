@@ -15,7 +15,7 @@ public enum MaxMiToolsDefinitions {
                              "properties": ["limit": ["type": "number", "description": "Max threads (default 10, max 20)"]],
                              "required": [String]()]],
             ["name": "meeting_memory",
-             "description": "Query meeting memories. (No meetings are captured in this MaxMi version yet.)",
+             "description": "Query captured meeting transcripts and summaries (list | search | get_context).",
              "inputSchema": ["type": "object",
                              "properties": ["action": ["type": "string", "enum": ["list", "get_context", "search"]],
                                             "query": ["type": "string"]],
@@ -46,7 +46,8 @@ public struct MaxMiTools: ToolProvider {
                   ["list", "get_context", "search"].contains(action) else {
                 return ToolResult(text: "meeting_memory requires action: list | get_context | search", isError: true)
             }
-            return queries.meetingMemory(action: action)
+            let query = arguments["query"] as? String
+            return await queries.meetingMemory(action: action, query: query)
         default:
             return ToolResult(text: "Unknown tool: \(name)", isError: true)
         }
