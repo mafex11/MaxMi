@@ -219,8 +219,11 @@ final class AppWiring {
             }
             guard CaptureDispatch.shouldCommit(parsed: parsed, pausedThreads: pausedThreads) else { return }
 
+            // Central keying chokepoint: parsers propose a key; the deriver makes it clean+stable
+            // (coarsen-don't-drop). No parser writes the final source_key directly (spec §3a).
+            let cleanKey = ThreadKeyDeriver.derive(parsed)
             let result = try store.commitCapture(
-                CaptureInput(sourceApp: parsed.sourceApp, sourceKey: parsed.sourceKey,
+                CaptureInput(sourceApp: parsed.sourceApp, sourceKey: cleanKey,
                             sourceTitle: parsed.sourceTitle, content: parsed.content),
                 nowMs: epochNowMs())
 
@@ -228,10 +231,10 @@ final class AppWiring {
             case .committed:
                 captureCount += 1
                 menuBar.captureCount = captureCount
-                lastSourceKey = parsed.sourceKey
+                lastSourceKey = cleanKey
             case .deduplicated:
                 // Update lastSourceKey even on dedup so "Pause current thread" targets the right thread.
-                lastSourceKey = parsed.sourceKey
+                lastSourceKey = cleanKey
             }
         } catch ExtractionError.emptyContent, ExtractionError.noWebArea, ExtractionError.noURL {
             // Browser extraction errors: retry
