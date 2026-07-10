@@ -1,0 +1,294 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4e1a-ef66-7851-87f6-cfd079f15197
+--------
+user
+Applied all 3 durability must-fixes + Task4 wiring + should-fixes:
+#1 Cursor persisted AT CLAIM: claimNextAgentRun writes the page's (input_to_at, input_to_session_id) into the new running row; completeAgentRun(runID:ops:) — NO advanceTo arg — reads the run's OWN persisted tuple and flips status to completed (which makes it the effective cursor). Removes the cursor-corruption API surface.
+#2 Single lease at DB level: added partial unique index `idx_one_running ON agent_runs(status) WHERE status='running'`; claimNextAgentRun fails expired leases, returns nil if an unexpired running run exists, then atomically inserts. Test: unexpired lease blocks 2nd claim.
+#3 Lease-during-call: renewAgentRunLease(runID:leaseMs:nowMs:) to extend during a slow Gemini request; bounded per-tick drain (maxSessionsPerTick 50/page, ≤4 pages/tick); concrete `actor AgentScheduler` serializes triggers (single tick() entry, early-return if running); failed run uses a separate exponential nextRetryAt (not the immediate 30s cadence).
+#4 Task4 now modifies ActivityWindow.swift + AppWiring.swift to construct/inject ActionItemsViewModel + Store-backed load/resolve/dismiss.
+should-fix: AgentReviewInput uses [ReviewSession(id,summary)] so the prompt pairs each summary with its source id; op-conflict validation (create+resolve same new item rejected) in the repo mapping.
+
+GO for M6b subagent implementation, or remaining blockers?
+
+2026-07-10T23:42:43.306980Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll verify the final M6b plan interfaces and task steps for the persisted cursor, DB lease, renewal/backoff, and UI injection before the implementation go/no-go.
+exec
+/bin/zsh -lc 'rg -n -C 3 "claimNextAgentRun|completeAgentRun|input_to_at|idx_one_running|renewAgentRunLease|next_retry|maxSessionsPerTick|AgentScheduler|ReviewSession|ActivityWindow|ActionItemsViewModel|advanceTo" docs/superpowers/plans/2026-07-11-maxmi-m6b-agent.md' in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+11-## Global Constraints
+12-- Build/test: `DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" swift test`; zero new warnings; keep the 294 baseline green.
+13-- **▲REV (Codex plan-review #1 — 3 must-fixes baked in):**
+14:  - **Keyset cursor tuple, never skip on backfill:** the cursor is `(updated_at, session_id)`, NOT a bare timestamp. Paging query orders by `(updated_at ASC, id ASC)` with predicate `updated_at > :curAt OR (updated_at = :curAt AND id > :curID)`; the run commits the cursor tuple of the **last INCLUDED row**, never `now`. So 500 offline sessions across 50-row pages process fully in 10 runs with no skip/dup. (v5 migration adds `agent_runs.input_to_at` + `input_to_session_id`.)
+15:  - **Run lease (claim before Gemini):** `claimNextAgentRun` inserts a `running` row + a `lease_expires_at` and returns the page + cursor BEFORE any Gemini call; the network call happens with NO open SQLite txn; `completeAgentRun(runID:ops:)` applies ops + advances cursor only if the run is still `running`; stale `running` rows past their lease are recovered at claim time. Only one active lease. A crash mid-request leaves a durable `running` row that's reclaimed, not a lost window.
+16:  - **Run + create idempotency:** `completeAgentRun` no-ops unless `status='running'` (conditional UPDATE); each create carries an idempotency key `(runID, opIndex)` stored in a UNIQUE index so a recovered/retried run can't duplicate items.
+17-- Gemini ID-ops: model given open items with opaque IDs, returns create/update(id)/resolve(id,evidence) via structured output + strict local schema validation; unknown IDs rejected; applied transactionally.
+18-- **Never resolve on absence** (only affirmative evidence resolves); **dismissal is terminal** (agent can't reopen); bounded input (token/session cap) + backfill batches (a week offline ≠ one giant prompt).
+19-- Action-item title/details/resolution_evidence encrypted at rest (already `_ciphertext` columns). source_refs JSON provenance. Events audit each change.
+--
+31-Sources/MaxMi/AppWiring.swift                   MODIFY: schedule HourlyAgent (idle+hourly), gate on consent+enabled
+32-Sources/MaxMiUI/ActionItemsView.swift           NEW: SwiftUI inbox (open/resolved/dismissed + resolve/dismiss)
+33-Sources/MaxMiUI/ActivityView.swift              MODIFY: wire the real Action Items tab
+34:Sources/MaxMiUI/ActionItemsViewModel.swift      NEW: @MainActor @Observable over an ActionItemDTO
+35-Tests/MaxMiStoreTests/AgentStoreTests.swift      NEW
+36-Tests/MaxMiActivityTests/HourlyAgentTests.swift  NEW
+37:Tests/MaxMiUITests/ActionItemsViewModelTests.swift NEW
+38-```
+39-
+40-Task order: 1 AgentStore (cursor + item ops) → 2 HourlyAgent (review logic + prompt) → 3 app-target repo/relay + AppWiring scheduling → 4 Action Items SwiftUI inbox → 5 live verify.
+--
+47-
+48-**v5 migration (additive):**
+49-```sql
+50:ALTER TABLE agent_runs ADD COLUMN input_to_at INTEGER;          -- cursor tuple: last-included updated_at (persisted AT CLAIM)
+51-ALTER TABLE agent_runs ADD COLUMN input_to_session_id TEXT;      -- cursor tuple: last-included session id (persisted AT CLAIM)
+52-ALTER TABLE agent_runs ADD COLUMN lease_expires_at INTEGER;      -- for stale-running recovery
+53-ALTER TABLE agent_action_items ADD COLUMN idem_key TEXT;         -- (runID:opIndex) create idempotency
+54-CREATE UNIQUE INDEX idx_items_idem ON agent_action_items(idem_key) WHERE idem_key IS NOT NULL;
+55--- ▲REV2 (Codex must-fix #2): at most ONE unexpired running lease, enforced at the DB level.
+56:CREATE UNIQUE INDEX idx_one_running ON agent_runs(status) WHERE status='running';
+57-```
+58-
+59-**Interfaces (▲REV — lease flow, keyset cursor, idempotency):**
+--
+68-    public let summaries: [String]                  // this page's session summaries (decrypted)
+69-    public let sourceIDs: [String]                  // the session ids in this page (valid source_refs)
+70-    public let openItems: [(id: String, title: String)]
+71:    // (the page's cursor tuple is persisted into the run row at claim — not passed back to completeAgentRun)
+72-}
+73-public enum AgentOp: Sendable {
+74-    case create(kind: String, title: String, details: String?, sourceRefs: [String])
+--
+79-extension Store {
+80-    // Claim a run BEFORE Gemini: recover stale 'running' leases; if new sessions exist beyond the last
+81-    // completed cursor, insert a 'running' agent_runs row w/ lease, return the page (keyset-paged,
+82:    // maxSessions) + its advanceTo cursor tuple. nil if nothing new. Holds NO txn over the later network call.
+83-    // ▲REV2: recovers expired leases; returns nil if an UNEXPIRED running lease exists (single-lease,
+84:    // DB-enforced by idx_one_running); else atomically inserts a 'running' row that PERSISTS the page's
+85:    // (input_to_at, input_to_session_id) cursor tuple AT CLAIM. The tuple only takes effect once the
+86-    // run is 'completed'. Returns the page. Holds NO txn over the later network call.
+87:    public func claimNextAgentRun(maxSessions: Int, leaseMs: EpochMs, nowMs: EpochMs) throws -> AgentPage?
+88-    // ▲REV2: cursor is NOT passed in — it was persisted at claim. Reads the run's own tuple; conditional
+89-    // on status='running' (idempotent no-op otherwise); creates keyed by (runID:opIndex) idem_key UNIQUE.
+90-    // Ignores ops on dismissed/unknown/non-open ids; never-resolve-on-absence; source_refs ⊆ the run's page.
+91:    public func completeAgentRun(runID: String, ops: [AgentOp], nowMs: EpochMs) throws -> AgentRunResult
+92:    public func renewAgentRunLease(runID: String, leaseMs: EpochMs, nowMs: EpochMs) throws  // ▲REV2: extend during a slow call
+93-    public func failAgentRun(runID: String, error: String, nowMs: EpochMs) throws     // status 'failed' (frees the lease)
+94-    // User actions (run_id NULL events):
+95-    public func resolveActionItem(_ id: String, nowMs: EpochMs) throws
+--
+111-    func testClaimCompleteAdvancesKeysetCursorNoSkipAcrossPages() throws {
+112-        try seedSessions(120)                       // 120 summarized sessions
+113-        var runs = 0
+114:        while let page = try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0 + EpochMs(runs)) {
+115:            _ = try store.completeAgentRun(runID: page.runID, ops: [], nowMs: t0 + EpochMs(runs))
+116-            runs += 1; if runs > 10 { break }
+117-        }
+118-        XCTAssertEqual(runs, 3, "120 sessions / 50 per page = 3 runs, none skipped")
+119:        XCTAssertNil(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0+999), "nothing new -> nil")
+120-    }
+121-    func testStaleLeaseRecovered() throws {
+122-        try seedSessions(10)
+123:        let p1 = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 1000, nowMs: t0))
+124-        // crash: never complete p1. After the lease expires, a new claim recovers the SAME window.
+125:        let p2 = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 1000, nowMs: t0 + 5000))
+126-        XCTAssertEqual(p1.summaries, p2.summaries, "stale lease reclaimed, window not lost")
+127-    }
+128-    func testCreateResolveDismissAndTerminalAndIdempotency() throws {
+129-        try seedSessions(2)
+130:        let p = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0))
+131:        let res = try store.completeAgentRun(runID: p.runID,
+132-            ops: [.create(kind:"todo", title:"Reply to Alice", details:"re: deploy", sourceRefs: p.sourceIDs)], nowMs: t0)
+133-        XCTAssertEqual(res.newCount, 1)
+134-        let id = try store.actionItems(status:"open", limit:10)[0].id
+135-        try db.dbQueue.read { d in XCTAssertTrue((try String.fetchOne(d, sql:"SELECT title_ciphertext FROM agent_action_items")!).hasPrefix("enc:v1:")) }
+136-        // re-completing the SAME run must NOT duplicate the create (idempotency)
+137:        let res2 = try store.completeAgentRun(runID: p.runID, ops: [.create(kind:"todo",title:"Reply to Alice",details:nil,sourceRefs:p.sourceIDs)], nowMs: t0+1)
+138-        XCTAssertEqual(res2.newCount, 0, "already-completed run is a no-op")
+139-        try store.dismissActionItem(id, nowMs: t0+10)
+140:        let p2 = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0+100)) // (would be nil if no new sessions; seed more if needed)
+141:        let res3 = try store.completeAgentRun(runID: p2.runID, ops: [.resolve(id: id, evidence:"done")], nowMs: t0+100)
+142-        XCTAssertEqual(res3.resolvedCount, 0, "dismissed is terminal")
+143-    }
+144-    func testNeverResolveOnAbsenceAndUnknownIgnored() throws {
+--
+149-    }
+150-    func testUnexpiredLeaseBlocksSecondClaim() throws {
+151-        try seedSessions(10)
+152:        _ = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0))
+153:        XCTAssertNil(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0+1), "unexpired running lease blocks a second claim")
+154-    }
+155-}
+156-```
+157-- [ ] **Step 2: Run — FAIL.**
+158:- [ ] **Step 3: Implement v5 migration + AgentStore.swift.** `claimNextAgentRun` (one write txn, NO network): recover stale — `UPDATE agent_runs SET status='failed' WHERE status='running' AND lease_expires_at < now`; if an unexpired `running` run still exists → return nil (single-lease, also DB-enforced by idx_one_running); read last COMPLETED cursor `(input_to_at, input_to_session_id)`; keyset-page activity_sessions `WHERE summary_status='summarized' AND (updated_at > curAt OR (updated_at=curAt AND id>curID)) ORDER BY updated_at,id LIMIT maxSessions`; if empty → nil; else insert a `running` run with `lease_expires_at=now+leaseMs` AND persist the page's last-row `(input_to_at, input_to_session_id)` INTO that run row (takes effect only when completed); return AgentPage(runID, decrypted summaries, sourceIDs, decrypted openItems). `completeAgentRun(runID:ops:nowMs:)` (one write txn): `guard` the run is still `status='running'` (else zero result — idempotent); read the run's OWN persisted `(input_to_at, input_to_session_id)` + its page source ids; for each op at index i — create → `INSERT ... ON CONFLICT(idem_key) DO NOTHING` with `idem_key='<runID>:<i>'`, encrypt, validate source_refs ⊆ the run's page (drop invalid) + event; update/resolve → only open items + event; then conditional `UPDATE agent_runs SET status='completed', new_count=?,... WHERE id=? AND status='running'` (the cursor tuple is ALREADY in the row from claim — completing just flips status so it becomes the effective cursor). `renewAgentRunLease`: `UPDATE ... SET lease_expires_at=now+leaseMs WHERE id=? AND status='running'`. `failAgentRun`: status='failed'. `resolveActionItem`/`dismissActionItem`: user transitions (run_id NULL event). `actionItems`: query+decrypt.
+159-- [ ] **Step 4: Run — PASS.** Full suite green.
+160-- [ ] **Step 5: Commit** `feat(store): AgentStore — durable cursor + action-item ID-ops (never-resolve-on-absence, dismissal-terminal)`
+161-
+--
+171-    public let runID: String; public let summaries: [String]; public let sourceIDs: [String]
+172-    public let openItems: [(id: String, title: String)]
+173-}
+174:public struct ReviewSession: Sendable { public let id: String; public let summary: String }
+175:public struct AgentReviewInput: Sendable { public let sessions: [ReviewSession]; public let openItems: [(id: String, title: String)] }
+176-public protocol AgentRepository: Sendable {
+177-    func claimNextPage() async -> AgentLeasedPage?                        // nil = nothing new (recovers stale leases)
+178-    func complete(runID: String, ops: [AgentOpDTO]) async     // cursor was persisted at claim
+--
+185-    public func runIfDue() async     // claim page (no txn held); if nil -> no-op; relay.reviewActivity; repo.complete; on throw -> repo.fail(runID). Loops while more pages remain (drains backfill), bounded per tick.
+186-}
+187-```
+188:- [ ] **Step 1: Failing HourlyAgentTests** — MockRepo (first claim returns a page w/ 2 summaries+1 open item, second returns nil) + MockRelay (returns [create, resolve(open-item-id,"done")]) → repo.complete called with those ops + the page's runID/advanceTo; MockRepo(nothing new) → no complete; relay throws → repo.fail(runID) called (NOT complete). Assert AgentPrompts.hourlyReview FENCES summaries as untrusted, lists open items with ids, and instructs: only resolve with evidence / never invent resolutions / source_refs must be from the provided session ids.
+189-- [ ] **Step 2: Run — FAIL. Step 3: Implement** HourlyAgent (`runIfDue`: loop — `claimNextPage`; nil → stop; build AgentReviewInput; `relay.reviewActivity`; `repo.complete(runID:ops:)`; catch → `repo.fail(runID:)` and stop; cap iterations per tick to bound backfill drain) + AgentPrompts.hourlyReview.
+190-- [ ] **Step 4: Run — PASS. Step 5: Commit** `feat(activity): HourlyAgent review logic over repo/relay protocols`
+191-
+--
+195-
+196-**Files:** Create `Sources/MaxMi/StoreAgentRepository.swift`, `Sources/MaxMi/GeminiAgentRelay.swift`; Modify `Sources/MaxMi/AppWiring.swift`.
+197-
+198:- [ ] **Step 1: StoreAgentRepository** (@unchecked Sendable over Store): `claimNextPage` = `store.claimNextAgentRun(maxSessions:50, leaseMs:120_000, nowMs:)` mapped to AgentLeasedPage; `complete` = validate/map `[AgentOpDTO]`→`[AgentOp]` (▲REV Codex should-fix: reject unknown op strings, require the right fields per op, non-empty bounded title/details/evidence, drop a create+resolve of the same new item, drop source_refs not in the page) then `store.completeAgentRun(runID:ops:)`; `fail` = `store.failAgentRun(runID:error:)`.
+199-- [ ] **Step 2: GeminiAgentRelay** — `reviewActivity` builds AgentPrompts.hourlyReview, calls `geminiClient.generateContent(model: "gemini-2.5-flash-lite", prompt:, responseMimeType: "application/json")`, decodes `[AgentOpDTO]` with strict JSONDecoder (throw on malformed → HourlyAgent calls failRun). Uses the shared throttle (already in generateContent).
+200:- [ ] **Step 3: AgentScheduler actor + schedule in AppWiring (▲REV2 — concrete actor + backoff).** A dedicated `actor AgentScheduler` serializes all in-process triggers (its single entry `tick()` runs `hourlyAgent.runIfDue()` and returns early if already running); cross-process/crash correctness is the DB lease (Task 1). Triggers: `NSBackgroundActivityScheduler` (~1h tolerant) + run-on-launch-if-overdue + the 30s sweep when ≥ a threshold of new summarized sessions exist. **Retry backoff:** a failed run must NOT be immediately re-attempted by the 30s sweep — the scheduler tracks a `nextRetryAt` after a failure (exponential, separate from the immediate lease-recovery path). Gate everything on consent==.granted && enabled. maxSessionsPerTick/maxPagesPerTick are explicit constants (e.g. 50 sessions/page, ≤4 pages/tick) — a large catch-up drains over several ticks, not one burst.
+201-- [ ] **Step 4: Build clean; full suite green. Step 5: Commit** `feat(agent): Store/Gemini agent impls + idle-gated hourly scheduling`
+202-
+203----
+204-
+205-### Task 4: Action Items SwiftUI inbox
+206-
+207:**Files:** Create `Sources/MaxMiUI/ActionItemsViewModel.swift`, `Sources/MaxMiUI/ActionItemsView.swift`; Modify `Sources/MaxMiUI/ActivityView.swift`, **`Sources/MaxMi/ActivityWindow.swift`, `Sources/MaxMi/AppWiring.swift`** (▲REV2 — Codex#4: these construct/inject the ActionItemsViewModel + Store-backed load/resolve/dismiss closures; without them the tab has no view model); Create `Tests/MaxMiUITests/ActionItemsViewModelTests.swift`.
+208-
+209-**Interfaces:**
+210-```swift
+211-public struct ActionItemDTO: Identifiable, Sendable { public let id, title: String; public let details: String?; public let status: String; public let timeAgo: String }
+212:@MainActor @Observable public final class ActionItemsViewModel {
+213-    public private(set) var open: [ActionItemDTO]; public private(set) var archived: [ActionItemDTO]
+214-    public init(load: @escaping @Sendable () async -> (open: [ActionItemDTO], archived: [ActionItemDTO]),
+215-                onResolve: @escaping @Sendable (String) async throws -> Void, onDismiss: @escaping @Sendable (String) async throws -> Void, now: @escaping () -> Int64)
+--
+218-```
+219-▲REV (Codex should-fix): `onResolve`/`onDismiss` are `async throws`; the view model **refreshes from the store on success** (or restores the item on failure) — it does NOT optimistically animate the item away before persistence confirms.
+220-- [ ] **Step 1: Failing ViewModelTests** — inject load returning 2 open + 1 archived; refresh → open.count==2; resolve(id) → calls onResolve + item leaves open list (animated removal); dismiss similar. Pure.
+221:- [ ] **Step 2: Run — FAIL. Step 3: Implement** ActionItemsViewModel + ActionItemsView (SwiftUI: open list with title/details/timeAgo + resolve ✓ / dismiss ✕ buttons, spring removal animation, a segment for archived (resolved/dismissed), empty state, Theme tokens) + wire ActivityView's Action Items tab (was "coming soon") to it. App target provides the load/onResolve/onDismiss closures over Store (actionItems(status:), resolveActionItem, dismissActionItem).
+222-- [ ] **Step 4: Run — PASS; build; full suite green. Step 5: Commit** `feat(ui): Action Items inbox (resolve/dismiss, animated) wired into the activity window`
+223-
+224----
+--
+234-sqlite3 "$DB" "SELECT substr(title_ciphertext,1,10) FROM agent_action_items LIMIT 2;"  # enc:v1:
+235-```
+236-- [ ] **Step 3: Inbox UI** — open the Activity window → Action Items tab lists agent items; resolve one (✓) and dismiss one (✕); confirm they move to archived + persist across reopen; confirm a later agent run does NOT reopen the dismissed one.
+237:- [ ] **Step 4: Cursor + backfill** — confirm agent_runs advances the `(input_to_at, input_to_session_id)` tuple across runs; a run with no new sessions is a no-op; and (unit-covered in Task 1) 120 sessions across 50-row pages process in 3 runs with no skip/dup.
+238-- [ ] **Step 4b: Concurrency (unit-covered in Task 1):** unexpired-lease blocks a 2nd claim; a slow call renews the lease; completion can't advance to a cursor other than the one persisted at claim; two racing triggers → exactly one run.
+239-- [ ] **Step 5: Declare M6b complete** when 1-4 hold. Then M6c (settings + final polish).
+240-
+
+codex
+## No-go
+
+The cursor and single-lease redesign is now close, but two necessary pieces are still absent from the executable interfaces.
+
+## Must-fix
+
+1. **Page source IDs are not persisted or passed to completion, so Store-side provenance validation cannot work.**
+
+   `completeAgentRun(runID:ops:)` promises to validate `source_refs ⊆ the run’s page`, but `agent_runs` does not store the page’s source IDs, and the completion API receives neither `sourceIDs` nor a cursor-from tuple sufficient to reconstruct the exact page.
+
+   `StoreAgentRepository` also cannot validate them at completion: it receives only `runID` and DTO ops after `HourlyAgent` has consumed the leased page.
+
+   Fix by persisting `page_source_ids_json` in `agent_runs` at claim time, then validating against it inside `completeAgentRun`. This is simpler and stronger than reconstructing the page. It also makes the provenance validation durable across process restart.
+
+2. **Lease renewal and scheduler retry-backoff are not expressible in the protocols.**
+
+   `renewAgentRunLease` exists on `Store`, but `AgentRepository` exposes no renewal method, so `HourlyAgent` cannot renew while awaiting Gemini.
+
+   Likewise, `AgentScheduler` is supposed to set `nextRetryAt` after failure, but `HourlyAgent.runIfDue()` returns `Void`; it catches its own error and does not report an outcome to the scheduler.
+
+   Add, for example:
+
+   ```swift
+   func renew(runID: String) async
+   func runIfDue() async -> AgentRunOutcome // noWork, completed, failed
+   ```
+
+   Then have `HourlyAgent` run a bounded renewal heartbeat during `reviewActivity`, cancel it before complete/fail, and let `AgentScheduler` set retry timing based on `.failed`.
+
+3. **One provided Task 1 test cannot pass as written.**
+
+   `testCreateResolveDismissAndTerminalAndIdempotency` seeds two sessions, claims one 50-row page, and completes it—there are then no sessions left for `p2`, yet it calls `XCTUnwrap(claimNextAgentRun(...))`.
+
+   Seed another summarized session after the first completion, or claim the first page with `maxSessions: 1`. Otherwise the dismissal-terminal test never reaches its assertion.
+
+## Should-fix
+
+- In Task 2, make `AgentLeasedPage` directly contain `[ReviewSession]` rather than parallel `summaries` and `sourceIDs`; this prevents accidental mismatching when constructing the prompt.
+
+- State that the scheduler sets its `running` flag before the first suspension and clears it with `defer`; actors are reentrant across `await`.
+
+- Add a test that a slow Gemini call renews its lease and cannot be reclaimed by a competing claim.
+
+- Clean up stale wording that says the page “returns `advanceTo`”; its cursor is now correctly persisted at claim.
+
+After those corrections, **GO for M6b subagent implementation.**
+tokens used
+4,32,966
+## No-go
+
+The cursor and single-lease redesign is now close, but two necessary pieces are still absent from the executable interfaces.
+
+## Must-fix
+
+1. **Page source IDs are not persisted or passed to completion, so Store-side provenance validation cannot work.**
+
+   `completeAgentRun(runID:ops:)` promises to validate `source_refs ⊆ the run’s page`, but `agent_runs` does not store the page’s source IDs, and the completion API receives neither `sourceIDs` nor a cursor-from tuple sufficient to reconstruct the exact page.
+
+   `StoreAgentRepository` also cannot validate them at completion: it receives only `runID` and DTO ops after `HourlyAgent` has consumed the leased page.
+
+   Fix by persisting `page_source_ids_json` in `agent_runs` at claim time, then validating against it inside `completeAgentRun`. This is simpler and stronger than reconstructing the page. It also makes the provenance validation durable across process restart.
+
+2. **Lease renewal and scheduler retry-backoff are not expressible in the protocols.**
+
+   `renewAgentRunLease` exists on `Store`, but `AgentRepository` exposes no renewal method, so `HourlyAgent` cannot renew while awaiting Gemini.
+
+   Likewise, `AgentScheduler` is supposed to set `nextRetryAt` after failure, but `HourlyAgent.runIfDue()` returns `Void`; it catches its own error and does not report an outcome to the scheduler.
+
+   Add, for example:
+
+   ```swift
+   func renew(runID: String) async
+   func runIfDue() async -> AgentRunOutcome // noWork, completed, failed
+   ```
+
+   Then have `HourlyAgent` run a bounded renewal heartbeat during `reviewActivity`, cancel it before complete/fail, and let `AgentScheduler` set retry timing based on `.failed`.
+
+3. **One provided Task 1 test cannot pass as written.**
+
+   `testCreateResolveDismissAndTerminalAndIdempotency` seeds two sessions, claims one 50-row page, and completes it—there are then no sessions left for `p2`, yet it calls `XCTUnwrap(claimNextAgentRun(...))`.
+
+   Seed another summarized session after the first completion, or claim the first page with `maxSessions: 1`. Otherwise the dismissal-terminal test never reaches its assertion.
+
+## Should-fix
+
+- In Task 2, make `AgentLeasedPage` directly contain `[ReviewSession]` rather than parallel `summaries` and `sourceIDs`; this prevents accidental mismatching when constructing the prompt.
+
+- State that the scheduler sets its `running` flag before the first suspension and clears it with `defer`; actors are reentrant across `await`.
+
+- Add a test that a slow Gemini call renews its lease and cannot be reclaimed by a competing claim.
+
+- Clean up stale wording that says the page “returns `advanceTo`”; its cursor is now correctly persisted at claim.
+
+After those corrections, **GO for M6b subagent implementation.**

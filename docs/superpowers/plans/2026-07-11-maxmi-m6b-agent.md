@@ -137,7 +137,8 @@ final class AgentStoreTests: XCTestCase {
         let res2 = try store.completeAgentRun(runID: p.runID, ops: [.create(kind:"todo",title:"Reply to Alice",details:nil,sourceRefs:p.sourceIDs)], nowMs: t0+1)
         XCTAssertEqual(res2.newCount, 0, "already-completed run is a no-op")
         try store.dismissActionItem(id, nowMs: t0+10)
-        let p2 = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0+100)) // (would be nil if no new sessions; seed more if needed)
+        try seedSessions(1)   // need a NEW session so the next claim returns a page (else nil)
+        let p2 = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0+100))
         let res3 = try store.completeAgentRun(runID: p2.runID, ops: [.resolve(id: id, evidence:"done")], nowMs: t0+100)
         XCTAssertEqual(res3.resolvedCount, 0, "dismissed is terminal")
     }
@@ -168,7 +169,7 @@ final class AgentStoreTests: XCTestCase {
 **Interfaces (▲REV — lease flow; over protocols, MaxMiActivity deps MaxMiCore only):**
 ```swift
 public struct AgentLeasedPage: Sendable {   // what the repo hands the agent after claiming
-    public let runID: String; public let summaries: [String]; public let sourceIDs: [String]
+    public let runID: String; public let sessions: [ReviewSession]   // (id,summary) pairs — no parallel arrays
     public let openItems: [(id: String, title: String)]
 }
 public struct ReviewSession: Sendable { public let id: String; public let summary: String }
@@ -197,7 +198,7 @@ public struct HourlyAgent: Sendable {
 
 - [ ] **Step 1: StoreAgentRepository** (@unchecked Sendable over Store): `claimNextPage` = `store.claimNextAgentRun(maxSessions:50, leaseMs:120_000, nowMs:)` mapped to AgentLeasedPage; `complete` = validate/map `[AgentOpDTO]`→`[AgentOp]` (▲REV Codex should-fix: reject unknown op strings, require the right fields per op, non-empty bounded title/details/evidence, drop a create+resolve of the same new item, drop source_refs not in the page) then `store.completeAgentRun(runID:ops:)`; `fail` = `store.failAgentRun(runID:error:)`.
 - [ ] **Step 2: GeminiAgentRelay** — `reviewActivity` builds AgentPrompts.hourlyReview, calls `geminiClient.generateContent(model: "gemini-2.5-flash-lite", prompt:, responseMimeType: "application/json")`, decodes `[AgentOpDTO]` with strict JSONDecoder (throw on malformed → HourlyAgent calls failRun). Uses the shared throttle (already in generateContent).
-- [ ] **Step 3: AgentScheduler actor + schedule in AppWiring (▲REV2 — concrete actor + backoff).** A dedicated `actor AgentScheduler` serializes all in-process triggers (its single entry `tick()` runs `hourlyAgent.runIfDue()` and returns early if already running); cross-process/crash correctness is the DB lease (Task 1). Triggers: `NSBackgroundActivityScheduler` (~1h tolerant) + run-on-launch-if-overdue + the 30s sweep when ≥ a threshold of new summarized sessions exist. **Retry backoff:** a failed run must NOT be immediately re-attempted by the 30s sweep — the scheduler tracks a `nextRetryAt` after a failure (exponential, separate from the immediate lease-recovery path). Gate everything on consent==.granted && enabled. maxSessionsPerTick/maxPagesPerTick are explicit constants (e.g. 50 sessions/page, ≤4 pages/tick) — a large catch-up drains over several ticks, not one burst.
+- [ ] **Step 3: AgentScheduler actor + schedule in AppWiring (▲REV2 — concrete actor + backoff).** A dedicated `actor AgentScheduler` serializes all in-process triggers (its single entry `tick()` sets the `running` flag BEFORE the first `await` and clears it with `defer` — actors are reentrant across `await`, so guard synchronously; returns early if already running); cross-process/crash correctness is the DB lease (Task 1). Triggers: `NSBackgroundActivityScheduler` (~1h tolerant) + run-on-launch-if-overdue + the 30s sweep when ≥ a threshold of new summarized sessions exist. **Retry backoff:** a failed run must NOT be immediately re-attempted by the 30s sweep — the scheduler tracks a `nextRetryAt` after a failure (exponential, separate from the immediate lease-recovery path). Gate everything on consent==.granted && enabled. maxSessionsPerTick/maxPagesPerTick are explicit constants (e.g. 50 sessions/page, ≤4 pages/tick) — a large catch-up drains over several ticks, not one burst.
 - [ ] **Step 4: Build clean; full suite green. Step 5: Commit** `feat(agent): Store/Gemini agent impls + idle-gated hourly scheduling`
 
 ---
@@ -235,7 +236,7 @@ sqlite3 "$DB" "SELECT substr(title_ciphertext,1,10) FROM agent_action_items LIMI
 ```
 - [ ] **Step 3: Inbox UI** — open the Activity window → Action Items tab lists agent items; resolve one (✓) and dismiss one (✕); confirm they move to archived + persist across reopen; confirm a later agent run does NOT reopen the dismissed one.
 - [ ] **Step 4: Cursor + backfill** — confirm agent_runs advances the `(input_to_at, input_to_session_id)` tuple across runs; a run with no new sessions is a no-op; and (unit-covered in Task 1) 120 sessions across 50-row pages process in 3 runs with no skip/dup.
-- [ ] **Step 4b: Concurrency (unit-covered in Task 1):** unexpired-lease blocks a 2nd claim; a slow call renews the lease; completion can't advance to a cursor other than the one persisted at claim; two racing triggers → exactly one run.
+- [ ] **Step 4b: Concurrency (unit-covered in Task 1):** unexpired-lease blocks a 2nd claim; renewAgentRunLease extends a slow call's lease so a competing claim still gets nil; completion uses only the claim-persisted cursor; two racing triggers → exactly one run.
 - [ ] **Step 5: Declare M6b complete** when 1-4 hold. Then M6c (settings + final polish).
 
 ## Self-Review (at plan-writing time)
