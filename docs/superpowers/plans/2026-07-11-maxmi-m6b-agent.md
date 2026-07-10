@@ -47,11 +47,13 @@ Task order: 1 AgentStore (cursor + item ops) → 2 HourlyAgent (review logic + p
 
 **v5 migration (additive):**
 ```sql
-ALTER TABLE agent_runs ADD COLUMN input_to_at INTEGER;          -- cursor tuple: last-included updated_at
-ALTER TABLE agent_runs ADD COLUMN input_to_session_id TEXT;      -- cursor tuple: last-included session id
+ALTER TABLE agent_runs ADD COLUMN input_to_at INTEGER;          -- cursor tuple: last-included updated_at (persisted AT CLAIM)
+ALTER TABLE agent_runs ADD COLUMN input_to_session_id TEXT;      -- cursor tuple: last-included session id (persisted AT CLAIM)
 ALTER TABLE agent_runs ADD COLUMN lease_expires_at INTEGER;      -- for stale-running recovery
 ALTER TABLE agent_action_items ADD COLUMN idem_key TEXT;         -- (runID:opIndex) create idempotency
 CREATE UNIQUE INDEX idx_items_idem ON agent_action_items(idem_key) WHERE idem_key IS NOT NULL;
+-- ▲REV2 (Codex must-fix #2): at most ONE unexpired running lease, enforced at the DB level.
+CREATE UNIQUE INDEX idx_one_running ON agent_runs(status) WHERE status='running';
 ```
 
 **Interfaces (▲REV — lease flow, keyset cursor, idempotency):**
@@ -66,7 +68,7 @@ public struct AgentPage: Sendable {                 // returned by claim, fed to
     public let summaries: [String]                  // this page's session summaries (decrypted)
     public let sourceIDs: [String]                  // the session ids in this page (valid source_refs)
     public let openItems: [(id: String, title: String)]
-    public let advanceTo: SessionCursor?            // cursor tuple of the LAST included row (nil if empty page)
+    // (the page's cursor tuple is persisted into the run row at claim — not passed back to completeAgentRun)
 }
 public enum AgentOp: Sendable {
     case create(kind: String, title: String, details: String?, sourceRefs: [String])
@@ -78,11 +80,16 @@ extension Store {
     // Claim a run BEFORE Gemini: recover stale 'running' leases; if new sessions exist beyond the last
     // completed cursor, insert a 'running' agent_runs row w/ lease, return the page (keyset-paged,
     // maxSessions) + its advanceTo cursor tuple. nil if nothing new. Holds NO txn over the later network call.
+    // ▲REV2: recovers expired leases; returns nil if an UNEXPIRED running lease exists (single-lease,
+    // DB-enforced by idx_one_running); else atomically inserts a 'running' row that PERSISTS the page's
+    // (input_to_at, input_to_session_id) cursor tuple AT CLAIM. The tuple only takes effect once the
+    // run is 'completed'. Returns the page. Holds NO txn over the later network call.
     public func claimNextAgentRun(maxSessions: Int, leaseMs: EpochMs, nowMs: EpochMs) throws -> AgentPage?
-    // Apply ops + advance cursor to page.advanceTo — ONLY if the run is still 'running' (idempotent:
-    // conditional UPDATE; creates keyed by (runID:opIndex) via idem_key UNIQUE so retry can't dup).
-    // Ignores ops on dismissed/unknown/non-open ids; never-resolve-on-absence; validates source_refs ⊆ page.sourceIDs.
-    public func completeAgentRun(runID: String, advanceTo: SessionCursor?, ops: [AgentOp], nowMs: EpochMs) throws -> AgentRunResult
+    // ▲REV2: cursor is NOT passed in — it was persisted at claim. Reads the run's own tuple; conditional
+    // on status='running' (idempotent no-op otherwise); creates keyed by (runID:opIndex) idem_key UNIQUE.
+    // Ignores ops on dismissed/unknown/non-open ids; never-resolve-on-absence; source_refs ⊆ the run's page.
+    public func completeAgentRun(runID: String, ops: [AgentOp], nowMs: EpochMs) throws -> AgentRunResult
+    public func renewAgentRunLease(runID: String, leaseMs: EpochMs, nowMs: EpochMs) throws  // ▲REV2: extend during a slow call
     public func failAgentRun(runID: String, error: String, nowMs: EpochMs) throws     // status 'failed' (frees the lease)
     // User actions (run_id NULL events):
     public func resolveActionItem(_ id: String, nowMs: EpochMs) throws
@@ -105,7 +112,7 @@ final class AgentStoreTests: XCTestCase {
         try seedSessions(120)                       // 120 summarized sessions
         var runs = 0
         while let page = try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0 + EpochMs(runs)) {
-            _ = try store.completeAgentRun(runID: page.runID, advanceTo: page.advanceTo, ops: [], nowMs: t0 + EpochMs(runs))
+            _ = try store.completeAgentRun(runID: page.runID, ops: [], nowMs: t0 + EpochMs(runs))
             runs += 1; if runs > 10 { break }
         }
         XCTAssertEqual(runs, 3, "120 sessions / 50 per page = 3 runs, none skipped")
@@ -121,17 +128,17 @@ final class AgentStoreTests: XCTestCase {
     func testCreateResolveDismissAndTerminalAndIdempotency() throws {
         try seedSessions(2)
         let p = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0))
-        let res = try store.completeAgentRun(runID: p.runID, advanceTo: p.advanceTo,
+        let res = try store.completeAgentRun(runID: p.runID,
             ops: [.create(kind:"todo", title:"Reply to Alice", details:"re: deploy", sourceRefs: p.sourceIDs)], nowMs: t0)
         XCTAssertEqual(res.newCount, 1)
         let id = try store.actionItems(status:"open", limit:10)[0].id
         try db.dbQueue.read { d in XCTAssertTrue((try String.fetchOne(d, sql:"SELECT title_ciphertext FROM agent_action_items")!).hasPrefix("enc:v1:")) }
         // re-completing the SAME run must NOT duplicate the create (idempotency)
-        let res2 = try store.completeAgentRun(runID: p.runID, advanceTo: p.advanceTo, ops: [.create(kind:"todo",title:"Reply to Alice",details:nil,sourceRefs:p.sourceIDs)], nowMs: t0+1)
+        let res2 = try store.completeAgentRun(runID: p.runID, ops: [.create(kind:"todo",title:"Reply to Alice",details:nil,sourceRefs:p.sourceIDs)], nowMs: t0+1)
         XCTAssertEqual(res2.newCount, 0, "already-completed run is a no-op")
         try store.dismissActionItem(id, nowMs: t0+10)
         let p2 = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0+100)) // (would be nil if no new sessions; seed more if needed)
-        let res3 = try store.completeAgentRun(runID: p2.runID, advanceTo: p2.advanceTo, ops: [.resolve(id: id, evidence:"done")], nowMs: t0+100)
+        let res3 = try store.completeAgentRun(runID: p2.runID, ops: [.resolve(id: id, evidence:"done")], nowMs: t0+100)
         XCTAssertEqual(res3.resolvedCount, 0, "dismissed is terminal")
     }
     func testNeverResolveOnAbsenceAndUnknownIgnored() throws {
@@ -140,10 +147,15 @@ final class AgentStoreTests: XCTestCase {
     func testSourceRefsMustBelongToPage() throws {
         // a create with source_refs NOT in page.sourceIDs -> the invalid refs dropped (or op rejected)
     }
+    func testUnexpiredLeaseBlocksSecondClaim() throws {
+        try seedSessions(10)
+        _ = try XCTUnwrap(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0))
+        XCTAssertNil(try store.claimNextAgentRun(maxSessions: 50, leaseMs: 60_000, nowMs: t0+1), "unexpired running lease blocks a second claim")
+    }
 }
 ```
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement v5 migration + AgentStore.swift.** `claimNextAgentRun` (one write txn, but NO network): recover stale — `UPDATE agent_runs SET status='failed' WHERE status='running' AND lease_expires_at < now`; read last completed cursor `(input_to_at, input_to_session_id)` from the newest completed run; keyset-page activity_sessions `WHERE summary_status='summarized' AND (updated_at > curAt OR (updated_at=curAt AND id>curID)) ORDER BY updated_at,id LIMIT maxSessions`; if empty → return nil; else insert a `running` run with `lease_expires_at=now+leaseMs`, decrypt the page summaries, return AgentPage(runID, summaries, sourceIDs, openItems (decrypted), advanceTo = last row's (updated_at,id)). `completeAgentRun` (one write txn): `guard` the run is still `status='running'` (else return zero result — idempotent); for each op at index i — create → `INSERT ... ON CONFLICT(idem_key) DO NOTHING` with `idem_key='<runID>:<i>'` (dup-safe), encrypt, validate source_refs ⊆ page (drop invalid) + event; update/resolve → only open items + event; then conditional `UPDATE agent_runs SET status='completed', input_to_at=?, input_to_session_id=?, counts... WHERE id=? AND status='running'`. `failAgentRun`: status='failed'. `resolveActionItem`/`dismissActionItem`: user transitions (run_id NULL event). `actionItems`: query+decrypt.
+- [ ] **Step 3: Implement v5 migration + AgentStore.swift.** `claimNextAgentRun` (one write txn, NO network): recover stale — `UPDATE agent_runs SET status='failed' WHERE status='running' AND lease_expires_at < now`; if an unexpired `running` run still exists → return nil (single-lease, also DB-enforced by idx_one_running); read last COMPLETED cursor `(input_to_at, input_to_session_id)`; keyset-page activity_sessions `WHERE summary_status='summarized' AND (updated_at > curAt OR (updated_at=curAt AND id>curID)) ORDER BY updated_at,id LIMIT maxSessions`; if empty → nil; else insert a `running` run with `lease_expires_at=now+leaseMs` AND persist the page's last-row `(input_to_at, input_to_session_id)` INTO that run row (takes effect only when completed); return AgentPage(runID, decrypted summaries, sourceIDs, decrypted openItems). `completeAgentRun(runID:ops:nowMs:)` (one write txn): `guard` the run is still `status='running'` (else zero result — idempotent); read the run's OWN persisted `(input_to_at, input_to_session_id)` + its page source ids; for each op at index i — create → `INSERT ... ON CONFLICT(idem_key) DO NOTHING` with `idem_key='<runID>:<i>'`, encrypt, validate source_refs ⊆ the run's page (drop invalid) + event; update/resolve → only open items + event; then conditional `UPDATE agent_runs SET status='completed', new_count=?,... WHERE id=? AND status='running'` (the cursor tuple is ALREADY in the row from claim — completing just flips status so it becomes the effective cursor). `renewAgentRunLease`: `UPDATE ... SET lease_expires_at=now+leaseMs WHERE id=? AND status='running'`. `failAgentRun`: status='failed'. `resolveActionItem`/`dismissActionItem`: user transitions (run_id NULL event). `actionItems`: query+decrypt.
 - [ ] **Step 4: Run — PASS.** Full suite green.
 - [ ] **Step 5: Commit** `feat(store): AgentStore — durable cursor + action-item ID-ops (never-resolve-on-absence, dismissal-terminal)`
 
@@ -157,12 +169,13 @@ final class AgentStoreTests: XCTestCase {
 ```swift
 public struct AgentLeasedPage: Sendable {   // what the repo hands the agent after claiming
     public let runID: String; public let summaries: [String]; public let sourceIDs: [String]
-    public let openItems: [(id: String, title: String)]; public let advanceToAt: Int64?; public let advanceToID: String?
+    public let openItems: [(id: String, title: String)]
 }
-public struct AgentReviewInput: Sendable { public let sessionSummaries: [String]; public let sourceIDs: [String]; public let openItems: [(id: String, title: String)] }
+public struct ReviewSession: Sendable { public let id: String; public let summary: String }
+public struct AgentReviewInput: Sendable { public let sessions: [ReviewSession]; public let openItems: [(id: String, title: String)] }
 public protocol AgentRepository: Sendable {
     func claimNextPage() async -> AgentLeasedPage?                        // nil = nothing new (recovers stale leases)
-    func complete(runID: String, advanceToAt: Int64?, advanceToID: String?, ops: [AgentOpDTO]) async
+    func complete(runID: String, ops: [AgentOpDTO]) async     // cursor was persisted at claim
     func fail(runID: String, error: String) async
 }
 public struct AgentOpDTO: Sendable, Codable { public let op: String; public let id, kind, title, details, evidence: String?; public let sourceRefs: [String]? }
@@ -173,7 +186,7 @@ public struct HourlyAgent: Sendable {
 }
 ```
 - [ ] **Step 1: Failing HourlyAgentTests** — MockRepo (first claim returns a page w/ 2 summaries+1 open item, second returns nil) + MockRelay (returns [create, resolve(open-item-id,"done")]) → repo.complete called with those ops + the page's runID/advanceTo; MockRepo(nothing new) → no complete; relay throws → repo.fail(runID) called (NOT complete). Assert AgentPrompts.hourlyReview FENCES summaries as untrusted, lists open items with ids, and instructs: only resolve with evidence / never invent resolutions / source_refs must be from the provided session ids.
-- [ ] **Step 2: Run — FAIL. Step 3: Implement** HourlyAgent (`runIfDue`: loop — `claimNextPage`; nil → stop; build AgentReviewInput; `relay.reviewActivity`; `repo.complete(runID:advanceTo:ops:)`; catch → `repo.fail(runID:)` and stop; cap iterations per tick to bound backfill drain) + AgentPrompts.hourlyReview.
+- [ ] **Step 2: Run — FAIL. Step 3: Implement** HourlyAgent (`runIfDue`: loop — `claimNextPage`; nil → stop; build AgentReviewInput; `relay.reviewActivity`; `repo.complete(runID:ops:)`; catch → `repo.fail(runID:)` and stop; cap iterations per tick to bound backfill drain) + AgentPrompts.hourlyReview.
 - [ ] **Step 4: Run — PASS. Step 5: Commit** `feat(activity): HourlyAgent review logic over repo/relay protocols`
 
 ---
@@ -182,16 +195,16 @@ public struct HourlyAgent: Sendable {
 
 **Files:** Create `Sources/MaxMi/StoreAgentRepository.swift`, `Sources/MaxMi/GeminiAgentRelay.swift`; Modify `Sources/MaxMi/AppWiring.swift`.
 
-- [ ] **Step 1: StoreAgentRepository** (@unchecked Sendable over Store): `claimNextPage` = `store.claimNextAgentRun(maxSessions:50, leaseMs:120_000, nowMs:)` mapped to AgentLeasedPage; `complete` = validate/map `[AgentOpDTO]`→`[AgentOp]` (▲REV Codex should-fix: reject unknown op strings, require the right fields per op, non-empty bounded title/details/evidence, drop a create+resolve of the same new item, drop source_refs not in the page) then `store.completeAgentRun(runID:advanceTo:ops:)`; `fail` = `store.failAgentRun(runID:error:)`.
+- [ ] **Step 1: StoreAgentRepository** (@unchecked Sendable over Store): `claimNextPage` = `store.claimNextAgentRun(maxSessions:50, leaseMs:120_000, nowMs:)` mapped to AgentLeasedPage; `complete` = validate/map `[AgentOpDTO]`→`[AgentOp]` (▲REV Codex should-fix: reject unknown op strings, require the right fields per op, non-empty bounded title/details/evidence, drop a create+resolve of the same new item, drop source_refs not in the page) then `store.completeAgentRun(runID:ops:)`; `fail` = `store.failAgentRun(runID:error:)`.
 - [ ] **Step 2: GeminiAgentRelay** — `reviewActivity` builds AgentPrompts.hourlyReview, calls `geminiClient.generateContent(model: "gemini-2.5-flash-lite", prompt:, responseMimeType: "application/json")`, decodes `[AgentOpDTO]` with strict JSONDecoder (throw on malformed → HourlyAgent calls failRun). Uses the shared throttle (already in generateContent).
-- [ ] **Step 3: Schedule in AppWiring** — an `NSBackgroundActivityScheduler` (interval ~1h, tolerant) + run-on-launch-if-overdue + a foreground/idle trigger on the existing 30s sweep when enough new sessions accumulated; all call `hourlyAgent.runIfDue()`; **serialized** (a simple `isAgentRunning` flag / actor so no concurrent runs). Gate on consent==.granted && enabled.
+- [ ] **Step 3: AgentScheduler actor + schedule in AppWiring (▲REV2 — concrete actor + backoff).** A dedicated `actor AgentScheduler` serializes all in-process triggers (its single entry `tick()` runs `hourlyAgent.runIfDue()` and returns early if already running); cross-process/crash correctness is the DB lease (Task 1). Triggers: `NSBackgroundActivityScheduler` (~1h tolerant) + run-on-launch-if-overdue + the 30s sweep when ≥ a threshold of new summarized sessions exist. **Retry backoff:** a failed run must NOT be immediately re-attempted by the 30s sweep — the scheduler tracks a `nextRetryAt` after a failure (exponential, separate from the immediate lease-recovery path). Gate everything on consent==.granted && enabled. maxSessionsPerTick/maxPagesPerTick are explicit constants (e.g. 50 sessions/page, ≤4 pages/tick) — a large catch-up drains over several ticks, not one burst.
 - [ ] **Step 4: Build clean; full suite green. Step 5: Commit** `feat(agent): Store/Gemini agent impls + idle-gated hourly scheduling`
 
 ---
 
 ### Task 4: Action Items SwiftUI inbox
 
-**Files:** Create `Sources/MaxMiUI/ActionItemsViewModel.swift`, `Sources/MaxMiUI/ActionItemsView.swift`; Modify `Sources/MaxMiUI/ActivityView.swift`; Create `Tests/MaxMiUITests/ActionItemsViewModelTests.swift`.
+**Files:** Create `Sources/MaxMiUI/ActionItemsViewModel.swift`, `Sources/MaxMiUI/ActionItemsView.swift`; Modify `Sources/MaxMiUI/ActivityView.swift`, **`Sources/MaxMi/ActivityWindow.swift`, `Sources/MaxMi/AppWiring.swift`** (▲REV2 — Codex#4: these construct/inject the ActionItemsViewModel + Store-backed load/resolve/dismiss closures; without them the tab has no view model); Create `Tests/MaxMiUITests/ActionItemsViewModelTests.swift`.
 
 **Interfaces:**
 ```swift
@@ -222,6 +235,7 @@ sqlite3 "$DB" "SELECT substr(title_ciphertext,1,10) FROM agent_action_items LIMI
 ```
 - [ ] **Step 3: Inbox UI** — open the Activity window → Action Items tab lists agent items; resolve one (✓) and dismiss one (✕); confirm they move to archived + persist across reopen; confirm a later agent run does NOT reopen the dismissed one.
 - [ ] **Step 4: Cursor + backfill** — confirm agent_runs advances the `(input_to_at, input_to_session_id)` tuple across runs; a run with no new sessions is a no-op; and (unit-covered in Task 1) 120 sessions across 50-row pages process in 3 runs with no skip/dup.
+- [ ] **Step 4b: Concurrency (unit-covered in Task 1):** unexpired-lease blocks a 2nd claim; a slow call renews the lease; completion can't advance to a cursor other than the one persisted at claim; two racing triggers → exactly one run.
 - [ ] **Step 5: Declare M6b complete** when 1-4 hold. Then M6c (settings + final polish).
 
 ## Self-Review (at plan-writing time)
