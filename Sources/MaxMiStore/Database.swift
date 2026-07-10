@@ -9,6 +9,7 @@ public final class MaxMiDatabase {
         var config = Configuration()
         config.readonly = readOnly
         config.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA foreign_keys = ON")
             var err: UnsafeMutablePointer<CChar>? = nil
             let rc = sqlite3_vec_init(db.sqliteConnection, &err, nil)
             if rc != SQLITE_OK {
