@@ -85,4 +85,12 @@ final class MigrationTests: XCTestCase {
 
         try? FileManager.default.removeItem(atPath: dir.path)
     }
+    func testV2AddsMessageFingerprintsTable() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.read { d in
+            let n = try Int.fetchOne(d, sql:
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='message_fingerprints'")
+            XCTAssertEqual(n, 1, "v2 migration must create message_fingerprints")
+        }
+    }
 }

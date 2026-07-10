@@ -50,10 +50,12 @@ public enum CaptureDispatch {
     }
 
     /// Pure decision: should this parsed capture commit or be skipped?
-    /// Checks native denylist and per-thread pause set.
-    public static func shouldCommit(parsed: ParsedCapture, pausedThreads: Set<String>) -> Bool {
+    /// Checks native denylist (on raw key) and per-thread pause set (on clean key + compat raw key).
+    public static func shouldCommit(parsed: ParsedCapture, cleanKey: String, pausedThreads: Set<String>) -> Bool {
+        // Denylist: match on raw key (adult-URL denylist must match raw URLs)
         if Denylist.isBlocked(parsed.sourceKey) { return false }
-        if pausedThreads.contains(parsed.sourceKey) { return false }
+        // Pause: match on clean key (new pauses) OR raw key (compat: pre-existing pauses from before this branch)
+        if pausedThreads.contains(cleanKey) || pausedThreads.contains(parsed.sourceKey) { return false }
         return true
     }
 }

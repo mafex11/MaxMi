@@ -30,6 +30,33 @@ public final class Store {
         (try? cipher.decrypt(stored)) ?? "[unreadable memory]"
     }
 
+    /// Split content into items, fingerprint each (normalized), record novel ones.
+    /// Returns true if ANY item was novel (=> commit). Fails OPEN (true) on error (spec §7).
+    private func recordNovelFingerprints(_ content: String, threadID: String, nowMs: EpochMs,
+                                         _ d: Database) -> Bool {
+        // Items = non-empty lines (chat/mail/terminal); a single-line/document is one item.
+        let items = content.split(separator: "\n").map {
+            $0.trimmingCharacters(in: .whitespaces).lowercased()
+        }.filter { !$0.isEmpty }
+        guard !items.isEmpty else { return true }
+        var anyNovel = false
+        for item in items {
+            let fp = ContentHash.sha256Hex("\(threadID)\n\(item)")   // thread-scoped fingerprint
+            do {
+                let exists = try Int.fetchOne(d, sql:
+                    "SELECT 1 FROM message_fingerprints WHERE fingerprint=? LIMIT 1", arguments: [fp]) != nil
+                if !exists {
+                    anyNovel = true
+                    try d.execute(sql: "INSERT OR IGNORE INTO message_fingerprints (fingerprint, thread_id, seen_at) VALUES (?,?,?)",
+                                  arguments: [fp, threadID, nowMs])
+                }
+            } catch {
+                return true   // fail open: never lose a capture over a dedup error
+            }
+        }
+        return anyNovel
+    }
+
     public func commitCapture(_ input: CaptureInput, nowMs: EpochMs) throws -> CommitResult {
         let hash = ContentHash.sha256Hex(input.content)
         let bucket = HourBucket.bucket(forMs: nowMs)
@@ -53,6 +80,13 @@ public final class Store {
                     INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
                     VALUES (?,?,?,?,?,?,?)
                     """, arguments: [threadID, input.sourceApp, input.sourceKey, input.sourceTitle, hash, nowMs, nowMs])
+            }
+
+            // Per-item fingerprint dedup: if no line is novel for this thread, skip (spec §3b).
+            // Complements last_tree_hash (which catches identical whole trees) by catching
+            // recaptures where only order/chrome changed but no new message appeared.
+            if !recordNovelFingerprints(input.content, threadID: threadID, nowMs: nowMs, d) {
+                return .deduplicated
             }
 
             // 2. Freeze-then-create: seal mutable versions from past hours.
