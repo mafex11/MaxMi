@@ -9,6 +9,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/MaxMi "$APP/Contents/MacOS/MaxMi"
 cp .build/release/MaxMiMCP "$APP/Contents/MacOS/maxmi-mcp"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
+# Brand assets: dog app icon (.icns) + monochrome template tray icons (M6a).
+cp packaging/assets/icon.icns "$APP/Contents/Resources/icon.icns"
+cp packaging/assets/tray/tray-dog.png "$APP/Contents/Resources/tray-dog.png"
+cp packaging/assets/tray/tray-dog@2x.png "$APP/Contents/Resources/tray-dog@2x.png"
 
 # Sign with a real identity so TCC grants and Keychain ACLs survive rebuilds (spec §7).
 # Inner binary first, then the bundle. Falls back to ad-hoc with a loud warning.

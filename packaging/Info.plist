@@ -30,5 +30,7 @@
 	<string>MaxMi captures system audio from meeting applications you choose to record.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>MaxMi transcribes recorded meetings using on-device speech recognition.</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
 </dict>
 </plist>

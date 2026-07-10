@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MaxMi app icon: white sitting-dog silhouette on a black squircle (Minimi-style).
+     Built from unioned primitives so the silhouette is always a clean solid shape. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2b2e"/>
+      <stop offset="1" stop-color="#0e0e10"/>
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="196" ry="196" fill="url(#bg)"/>
+
+  <!-- WHITE DOG (side profile, facing right, sitting). All white parts share one group;
+       overlapping primitives merge visually into a single silhouette. -->
+  <g fill="#ffffff">
+    <!-- haunch / rear body (big rounded sitting mass, left) -->
+    <ellipse cx="430" cy="600" rx="180" ry="185"/>
+    <!-- chest / front, rising toward the neck (right of haunch) -->
+    <ellipse cx="560" cy="560" rx="150" ry="200"/>
+    <!-- flat sitting base so the bottom reads as "seated" -->
+    <rect x="300" y="700" width="360" height="90" rx="45"/>
+    <!-- neck bridging chest to head -->
+    <rect x="560" y="360" width="130" height="230" rx="60" transform="rotate(12 625 470)"/>
+    <!-- head (round) -->
+    <circle cx="690" cy="360" r="120"/>
+    <!-- muzzle projecting right -->
+    <rect x="760" y="360" width="150" height="90" rx="45"/>
+    <!-- front leg dropping from chest to base -->
+    <rect x="600" y="560" width="80" height="230" rx="40"/>
+    <!-- upright pricked ear (dog ear, angled) — overlaps the head top so it connects cleanly -->
+    <path d="M648 300 l -30 -120 c -4 -14 8 -26 22 -22 l 96 44 c 12 6 12 22 0 30 l -66 66 z"/>
+    <!-- tail curving up behind, left -->
+    <path d="M262 610
+             c -46 -6 -84 22 -90 66
+             c -4 30 8 56 32 70
+             c 8 -12 10 -26 4 -42
+             c -8 -24 0 -46 22 -56
+             c 14 -6 28 -20 30 -38 z"/>
+  </g>
+
+  <!-- eye + nose as negative space -->
+  <g fill="#0e0e10">
+    <circle cx="700" cy="340" r="17"/>
+    <circle cx="890" cy="398" r="14"/>
+  </g>
+</svg>
