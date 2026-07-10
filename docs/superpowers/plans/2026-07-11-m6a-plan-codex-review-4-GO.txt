@@ -1,0 +1,144 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4e1a-ef66-7851-87f6-cfd079f15197
+--------
+user
+Fixed the last blocker — Task 3 now explicitly contains the focus-generation design (not just the top-of-plan note):
+1. AppWiring holds focusGeneration (@MainActor), bumped on EVERY focus transition.
+2. On transition: bump gen, immediately store.closeActiveSession + close prior visit, then open a new visit only if the new app is eligible. No session opened on focus change.
+3. captureFrontmost/attemptCapture capture `let gen = focusGeneration` and thread it through Task.detached -> finishCapture(captureGeneration: gen).
+4. finishCapture: normal .committed capture unconditional (unchanged); activity evidence written via store.recordActivityCapture ONLY if captureGeneration == focusGeneration AND app eligible.
+5. Mismatch (focus moved during async capture): discard ONLY the activity evidence; memory capture still committed. Kills the late-A-after-switch-to-B race.
+6. Idle finalize/crash-repair/sleep close paths as before.
+Plus: MANDATORY race test (not "if feasible") — start capture under gen N, advance to N+1 before completion, assert memory version committed but NO activity session/evidence written; via a pure shouldRecordActivity(captureGen:currentGen:eligible:)->Bool seam since AppWiring is glue.
+
+GO for M6a subagent implementation, or anything remaining?
+
+2026-07-10T22:39:04.955877Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll make one final direct check of Task 3’s executable instructions and the required race test.
+exec
+/bin/zsh -lc "sed -n '215,258p' docs/superpowers/plans/2026-07-11-maxmi-m6a-activity.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+- [ ] **Step 3: Run — FAIL. Step 4: Implement** the pure decision. **Step 5: Run — PASS.**
+- [ ] **Step 6: Commit** `feat(activity): SessionSegmenter deterministic finalization policy`
+
+---
+
+### Task 3: FocusObserver onFocusChanged + wire activity capture
+
+**Files:** Modify `Sources/MaxMiCapture/FocusObserver.swift`, `Sources/MaxMi/AppWiring.swift`.
+
+**Interfaces:** FocusObserver gains `var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?` fired on every frontmost change (before the capturable gate). AppWiring uses it + the existing commit path to drive ActivityStore + SessionSegmenter.
+
+- [ ] **Step 1: Add the callback** to FocusObserver: in `frontmostChanged`, after computing the app, call `onFocusChanged?(appInfo, isCapturable(bid), pid)` regardless of capturability (so visits are tracked; the existing onCapture still gates content capture).
+- [ ] **Step 2: Wire in AppWiring — the focus-generation mechanism (▲REV3 — Codex #2, spelled out explicitly; this IS the correctness core, not optional):**
+  1. AppWiring holds `var focusGeneration: Int = 0` (@MainActor).
+  2. On **every** focus transition (`onFocusChanged`): `focusGeneration += 1`; immediately `store.closeActiveSession(nowMs:)` + close the prior visit; then, if the NEW app is eligible (activity `consent==.granted && enabled`, not sensitive, not excluded) open a new visit. Do NOT open a session here.
+  3. In `captureFrontmost`/`attemptCapture`, **capture `let gen = focusGeneration`** and thread it through `Task.detached` → `finishCapture(..., captureGeneration: gen)`.
+  4. In `finishCapture`, after the normal capture `.committed` write (which is unconditional, unchanged): **only if `captureGeneration == focusGeneration`** AND the app is eligible, call `store.recordActivityCapture(appBundle: capApp.bundle, appLabel: capApp.label, versionID: vid, content: parsed.content, nowMs:)` (opens the session on first valid capture of the span, appends evidence).
+  5. On **mismatch** (`captureGeneration != focusGeneration` — focus moved during the async capture): **discard only the activity evidence** (skip `recordActivityCapture`); the normal memory capture still committed. This kills the late-app-A-after-switch-to-B race.
+  6. **Idle finalize + summary** on the 30s sweep: `store.closeIdleSessions(idleGapMs:5min, nowMs:)` then (Task 4) summarize. **Startup crash-repair:** `closeOpenVisits` + `closeOpenSessions`. **Sleep/lock** (`NSWorkspace.willSleepNotification`, screen-lock): close open visit + `closeActiveSession`.
+- [ ] **Step 3: MANDATORY race test (▲REV3 — Codex, not "if feasible").** Unit-test the attribution rule with a seam: start a capture under `gen=N`, advance `focusGeneration` to `N+1` before the capture completes, assert the normal memory capture DID commit (a version exists) but NO activity session/evidence was written (mismatch discarded). Structure `finishCapture`'s activity-gate as a testable pure check `shouldRecordActivity(captureGen:currentGen:eligible:) -> Bool` if AppWiring itself is untestable glue. Build clean; full suite green.
+- [ ] **Step 4: Commit** `feat(activity): FocusObserver onFocusChanged -> visits/sessions/evidence wiring`
+
+---
+
+### Task 4: DisplaySummarizer (Gemini summary of closed sessions)
+
+**Files:** Create `Sources/MaxMiActivity/ActivityGenerationRelay.swift`, `Sources/MaxMiActivity/DisplaySummarizer.swift`, `Sources/MaxMiActivity/AgentPrompts.swift`; Create `Tests/MaxMiActivityTests/DisplaySummarizerTests.swift`; wire the run loop in AppWiring.
+
+**▲REV (Codex #4,#5): add the `MaxMiActivity` target here (deps MaxMiCore only) in this task. MaxMiActivity must NOT depend on `Store` (module cycle/Sendability). It works over protocols; the app target provides the concrete impls.**
+
+**Interfaces:**
+```swift
+// In MaxMiActivity (deps MaxMiCore only):
+public struct PendingSession: Sendable { public let id, appLabel: String; public let evidence: [String]; public let expectedSourceHash: String }
+public protocol ActivitySummaryRepository: Sendable {   // implemented in the app target over Store
+    func sessionsNeedingSummary(nowMs: EpochMs) async -> [PendingSession]
+    func saveSummary(sessionID: String, summary: String, expectedSourceHash: String, nowMs: EpochMs) async
+    func markFailed(sessionID: String, error: String, nowMs: EpochMs) async
+}
+public protocol ActivityGenerationRelay: Sendable {
+    func summarizeSession(appLabel: String, evidence: [String]) async throws -> String
+}
+public struct DisplaySummarizer: Sendable {
+    public init(repo: any ActivitySummaryRepository, relay: any ActivityGenerationRelay,
+
+codex
+**One trivial but real compile blocker remains.**
+
+Task 3 calls:
+
+```swift
+capApp.bundle
+capApp.label
+```
+
+But the existing `AppInfo` fields are:
+
+```swift
+bundleID
+name
+windowTitle
+```
+
+Change the call to:
+
+```swift
+store.recordActivityCapture(
+    appBundle: capApp.bundleID,
+    appLabel: capApp.name,
+    versionID: vid,
+    content: parsed.content,
+    nowMs: nowMs
+)
+```
+
+After that correction, **GO for M6a subagent implementation.**
+tokens used
+1,90,744
+**One trivial but real compile blocker remains.**
+
+Task 3 calls:
+
+```swift
+capApp.bundle
+capApp.label
+```
+
+But the existing `AppInfo` fields are:
+
+```swift
+bundleID
+name
+windowTitle
+```
+
+Change the call to:
+
+```swift
+store.recordActivityCapture(
+    appBundle: capApp.bundleID,
+    appLabel: capApp.name,
+    versionID: vid,
+    content: parsed.content,
+    nowMs: nowMs
+)
+```
+
+After that correction, **GO for M6a subagent implementation.**
