@@ -114,7 +114,8 @@ public protocol Transcribing: Actor {
     func showFinishing()                        // saving spinner
     func showError(_ message: String)
     func hidePanel()
-    func updateLevel(_ level: Float)
+    func updateLevel(_ level: Float)       // 10Hz live meter (polled, not tied to transcription windows)
+    func updateTranscript(_ text: String)  // running stitched transcript (~30s cadence)
 }
 public protocol MeetingPersisting: Sendable {   // adapter over Store; actor or audited @unchecked Sendable
     func persist(app: String, title: String?, transcript: String, startedAtMs: Int64,
@@ -495,10 +496,11 @@ public struct WhisperModelStore {
     public func ensureModel(download: (URL) async throws -> URL) async throws  // atomic install
     public var modelURL: URL { get }
     public static let modelName = "ggml-base.bin"   // multilingual base
-    // ▲REV3 — PINNED (real immutable values, verified):
-    public static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/f049fff95a089aa9969deb009cdd4892b3e74916/ggml-base.bin")!
+    // ▲REV4 — PINNED (verified; NOTE: the HF MODEL repo revision differs from the whisper.cpp
+    // SOURCE-CODE commit — Codex caught this; f049... is source, the model repo revision is 535986...):
+    public static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin")!
     public static let sha256 = "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe"
-    // (whisper.cpp pinned to tag v1.9.1 = commit f049fff95a089aa9969deb009cdd4892b3e74916)
+    // (whisper.cpp SOURCE CODE pinned separately to tag v1.9.1 = commit f049fff95a089aa9969deb009cdd4892b3e74916)
 }
 ```
 Implementer sanity-check before Task 4's first commit: `curl -L <modelURL> -o /tmp/m.bin && shasum -a 256 /tmp/m.bin` must equal the sha256 above (fail build otherwise).
@@ -598,11 +600,16 @@ All capture/transcriber objects are created inside the actor via the `@Sendable`
 - [ ] **Step 3: Implement** the actor state machine; `userAcceptedRecord`: `authorizer.requestMicrophone()` (deny → `panel.showError` + hidePanel, no capture); then screen-rec: if `!screenRecordingAuthorized()` call `requestScreenRecordingAccess()` and only degrade to `captureSystem:false` (mic-only) if STILL denied (▲REV3 Codex#1 — actually request, don't silently mic-only); build `CaptureRequest(bundleID:pid:title:captureSystem:)`. **Wire audio→text (▲REV3 — Codex#1, the core path, was missing):**
 ```swift
 try await transcriber.start()
-await transcriber.setOnPartial { text in Task { @MainActor in panel.updateLevel(await capture.level()) } } // + live text
+await transcriber.setOnPartial { text in Task { @MainActor in panel.updateTranscript(text) } }  // 30s-window text
 await capture.setFrameHandler { frame in Task { await transcriber.feed(frame) } }   // audio -> transcriber
 let mode = try await capture.start(request)
 if let frame = await capture.resolvedWindowFrame() { /* @MainActor: panel reposition to that screen */ }
+// ▲REV4 (Codex#level): live meter must NOT ride onPartial (fires ~every 30s). Poll at 10Hz while recording:
+levelTask = Task { while !Task.isCancelled { let l = await capture.level();
+                    await MainActor.run { panel.updateLevel(l) }; try? await clock.sleep(ms: 100) } }
+// userStopped/userSkipped: levelTask?.cancel()
 ```
+(Add `panel.updateTranscript(_:)` to `MeetingPanelPresenting` alongside `updateLevel(_:)`.)
 `userStopped` → `await capture.stop()`, `let transcript = await transcriber.finish()`, then `persister.persist(...)`; `inputStopped` → `clock` debounce → `panel.showEndSuggestion()` (never auto-finalizes); `userKeptRecording` → `.recording`. Panel calls hop to `@MainActor`.
 - **Panel placement contract (▲REV3 — Codex#5):** the nudge fires at `candidateDetected` (before capture), when the meeting-window frame isn't resolved yet → the nudge uses **cursor-screen** placement (explicitly accepted). Once recording starts, `AudioCapture.resolvedWindowFrame()` is available → the recording panel repositions to the **meeting window's screen**. This is the defined path (not "callback TBD").
 - [ ] **Step 4: Run — PASS.**
