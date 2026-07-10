@@ -130,12 +130,24 @@ final class MemoryQueriesTests: XCTestCase {
         XCTAssertTrue(r.text.contains("hasn't captured anything yet"))
     }
 
-    func testMeetingMemoryStubAllActions() {
+    func testMeetingMemoryEmptyListReturnsStub() async {
         let q = queries(MockRelay(.success(unit(1))))
-        for action in ["list", "get_context", "search"] {
-            let r = q.meetingMemory(action: action)
-            XCTAssertFalse(r.isError)
-            XCTAssertTrue(r.text.contains("No meetings captured yet"))
-        }
+        let r = await q.meetingMemory(action: "list", query: nil)
+        XCTAssertFalse(r.isError)
+        XCTAssertTrue(r.text.contains("No meetings captured yet"))
+    }
+
+    func testMeetingMemoryGetContextRequiresQuery() async {
+        let q = queries(MockRelay(.success(unit(1))))
+        let r = await q.meetingMemory(action: "get_context", query: nil)
+        XCTAssertTrue(r.isError)
+        XCTAssertTrue(r.text.contains("requires a meeting ID"))
+    }
+
+    func testMeetingMemorySearchRequiresQuery() async {
+        let q = queries(MockRelay(.success(unit(1))))
+        let r = await q.meetingMemory(action: "search", query: nil)
+        XCTAssertTrue(r.isError)
+        XCTAssertTrue(r.text.contains("requires a query"))
     }
 }
