@@ -21,4 +21,7 @@ final class ParserRegistryTests: XCTestCase {
         XCTAssertTrue(r.parser(for: "dev.warp.Warp-Stable") is TerminalParser)
         XCTAssertTrue(r.parser(for: "com.googlecode.iterm2") is TerminalParser)
     }
+    func testDiscordRegistered() {
+        XCTAssertTrue(ParserRegistry().parser(for: "com.hnc.Discord") is DiscordParser)
+    }
 }
