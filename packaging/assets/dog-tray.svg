@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MaxMi tray template icon: solid black dog silhouette on transparent (macOS template image;
+     the system tints it for light/dark menu bars). No gradient, no eye/nose cutouts — pure shape. -->
+<svg width="44" height="44" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <g fill="#000000">
+    <ellipse cx="430" cy="600" rx="180" ry="185"/>
+    <ellipse cx="560" cy="560" rx="150" ry="200"/>
+    <rect x="300" y="700" width="360" height="90" rx="45"/>
+    <rect x="560" y="360" width="130" height="230" rx="60" transform="rotate(12 625 470)"/>
+    <circle cx="690" cy="360" r="120"/>
+    <rect x="760" y="360" width="150" height="90" rx="45"/>
+    <rect x="600" y="560" width="80" height="230" rx="40"/>
+    <path d="M648 300 l -30 -120 c -4 -14 8 -26 22 -22 l 96 44 c 12 6 12 22 0 30 l -66 66 z"/>
+    <path d="M262 610 c -46 -6 -84 22 -90 66 c -4 30 8 56 32 70 c 8 -12 10 -26 4 -42 c -8 -24 0 -46 22 -56 c 14 -6 28 -20 30 -38 z"/>
+  </g>
+</svg>

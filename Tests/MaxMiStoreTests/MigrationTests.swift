@@ -101,4 +101,13 @@ final class MigrationTests: XCTestCase {
             XCTAssertTrue(cols.contains("metadata"), "versions.metadata column must exist")
         }
     }
+    func testV4AddsActivityTables() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.read { d in
+            for t in ["activity_app_visits","activity_sessions","activity_session_evidence","agent_runs","agent_action_items","agent_action_item_events"] {
+                XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", arguments: [t]), 1, "missing \(t)")
+            }
+            XCTAssertEqual(try Int.fetchOne(d, sql: "PRAGMA foreign_keys"), 1, "FK must be ON")
+        }
+    }
 }

@@ -1,0 +1,243 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4e1a-ef66-7851-87f6-cfd079f15197
+--------
+user
+Applied all 3 must-fixes + the FK requirement to the M6 spec — re-read §5, §8, §9, §13:
+#1 Immutable evidence: replaced activity_session_versions with activity_session_evidence (id, session_id, version_id soft-link, captured_at, content_hash, content_ciphertext = immutable encrypted snapshot at capture time). Summaries + "expand to detail" read the snapshots, NOT the mutable versions rows, so a same-hour revisit can't corrupt an earlier session. source_hash now hashes over the evidence snapshots.
+#2 Privacy: M6a privacy SHEET (menu command "Activity Privacy…", small SwiftUI sheet, before first synthesis) — not deferred to M6c Settings. Semantics stated: excluded/globally-disabled app => NO visits, NO sessions, NO evidence (not merely no Gemini summary); toggling an app to excluded DELETES its existing activity rows; sensitive-denylist always excluded.
+#3 Fixed contradictions: §5 data-flow now uses SessionSegmenter/activity_sessions/evidence/idle-gated durable-cursor agent (no more ConversationDetector/activity_conversations/hourly-timer); §13 exit criteria: per-app disable is M6a, always-dark Theme (removed light/dark).
++ PRAGMA foreign_keys = ON added to MaxMiDatabase setup (was off).
+
+Is the spec now ready for the M6a implementation plan? GO or remaining must-fixes.
+
+2026-07-10T22:24:00.474484Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll verify the revised implementation-facing sections against the existing storage and app wiring one final time, looking only for blockers to an M6a plan.
+exec
+/bin/zsh -lc "sed -n '78,230p' docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md && sed -n '1,110p' Sources/MaxMiStore/Database.swift" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+Sources/MaxMi/ActivityWindow.swift            NEW: NSWindow hosting SwiftUI ActivityView
+Sources/MaxMiUI/                               NEW module (SwiftUI views, testable view-models)
+  ActivityView.swift          timeline: sessions grouped by day/app, animated
+  ActionItemsView.swift       inbox: open/resolved/dismissed, resolve/dismiss actions
+  ActivityViewModel.swift     @Observable; loads from Store; pure-ish, testable
+  Theme.swift                 colors/spacing/animations (Minimi-like dark, smooth)
+Sources/MaxMiMCP/...                           MODIFY: optional activity_timeline MCP tool (stretch)
+packaging/assets/                              NEW: dog app icon (icon.icns) + tray templates
+packaging/make-app.sh                          MODIFY: install icon.icns + tray assets
+```
+
+Data flow (▲REV2 — consistent with the revised model): FocusObserver `onFocusChanged` → `ActivityStore` opens/closes `activity_app_visits` (skipping sensitive + user-excluded apps) and snapshots attributed content into `activity_session_evidence`. On session close/idle → `SessionSegmenter` (deterministic: app-change + gap) finalizes `activity_sessions` + evidence → `DisplaySummarizer` (Gemini) writes the encrypted `summary_ciphertext` for closed sessions (guarded by `source_hash`). Idle-gated/overdue trigger (`NSBackgroundActivityScheduler` + launch/foreground catch-up, durable cursor) → `HourlyAgent` (actor) reviews new evidence since `agent_runs.input_to` → Gemini structured-output ID-ops → `AgentStore` applies create/update/resolve transactionally + events audit. Menu-bar dog left-click → `ActivityWindow` (SwiftUI) loads `ActivityViewModel` → renders timeline + action items.
+
+## 6. UI/UX spec (SwiftUI, Minimi-style — clean/animated/smooth)
+
+**Activity window** (main): a dark, rounded, ~380×560 window. Top: a search field + "Activity / Action Items" segmented tabs. Body = a **timeline** grouped by **Today / Yesterday / earlier** (day_bucket), each group a list of **session rows**: app glyph + `app_label` + one-line **summary** + relative time ("20m ago"). Rows animate in (fade+slide), hover highlight, tap → expands to show the underlying captured detail / opens the thread. Empty state: friendly "Nothing captured yet".
+**Action Items tab:** list of open items (title + details + time), each with resolve ✓ / dismiss ✕ (swipe or hover buttons), animated removal; a segment to view resolved/dismissed.
+**Interaction quality (the "polish" bar):** smooth (60fps *target*, measured in Instruments — not an acceptance gate) list scrolling via `List`/`LazyVStack` with **stable session IDs** (no full-collection rebuild on refetch; no date-formatting or decryption in `body` — precompute in the view model), spring animations on insert/resolve, subtle vibrancy/blur, 8pt grid, SF Symbols. **Branding decision (▲REV — Codex):** MaxMi's surface is an **intentional always-dark branded palette** (matching Minimi's dark aesthetic) defined via **semantic Theme tokens** — NOT default system colors and NOT auto-light/dark (avoids the "dark Minimi-style" vs "respects light/dark" contradiction). The tray *template* icon still adapts to the menu bar. **"Why am I seeing this?"** disclosure on each session/item reveals its source version-ids (provenance). Opens from the menu-bar dog — **left mouse-up opens the window** (via `NSStatusBarButton` action + event type), **right mouse-up calls `popUpMenu`** (don't assign `NSStatusItem.menu`, which would hijack left-click).
+**Menu (right-click / status menu):** Open MaxMi, Pause/Resume Capture (+ per-app submenu, already exists), Settings…, Check for Updates…, Quit. (M6c expands Settings.)
+
+## 7. Logo / brand (dog, Minimi-style)
+
+- **App icon** (`icon.icns`): a **white dog silhouette** (simple, friendly, lying or sitting — same minimalist weight as Minimi's cat) centered on a **black rounded-square** with a subtle top-down light gradient. Same visual language as `minimi_appicon.png`, dog instead of cat. Generated at all required sizes (16–1024).
+- **Tray icon:** monochrome white dog silhouette **template image** (so macOS tints it for light/dark menu bars), with default + recording (audio, M5) + error variants, matching Minimi's tray-state set.
+- **How produced:** an SVG dog silhouette → rendered to PNGs (iconset) → `iconutil` to `.icns`; tray PNGs marked template. The SVG lives in `packaging/assets/` so it's regenerable. (Implementation plan pins how the dog art is created — hand-authored SVG path, not an AI image, so it's crisp/vector.)
+
+## 8. Storage & schema (v4 migration, additive) — ▲REV (proper session model)
+
+Original draft copied Minimi's `activity_conversations` verbatim; Codex correctly flagged it can't work over MaxMi's **hour-bucketed, mutable** version store (versions overwrite within an hour — NOT an event stream) and lacks provenance. Replaced with a real **`activity_sessions` + membership** model, deterministic segmentation, and processing state.
+
+```sql
+-- Raw focus telemetry (from FocusObserver transitions). One row per app foreground span.
+CREATE TABLE activity_app_visits (
+  id TEXT PRIMARY KEY, app_bundle TEXT NOT NULL, app_label TEXT NOT NULL,
+  started_at INTEGER NOT NULL, ended_at INTEGER, day_bucket INTEGER NOT NULL);
+CREATE INDEX idx_visits_day ON activity_app_visits(day_bucket DESC, started_at DESC);
+CREATE INDEX idx_visits_open ON activity_app_visits(ended_at) WHERE ended_at IS NULL;
+
+-- A coherent work session: deterministically segmented (app change + inactivity gap), summarized
+-- from its member versions. NOT keyed by url/title (avoids overwrite-on-revisit + cleartext leak).
+CREATE TABLE activity_sessions (
+  id TEXT PRIMARY KEY, app_bundle TEXT NOT NULL, app_label TEXT NOT NULL,
+  started_at INTEGER NOT NULL, ended_at INTEGER, last_activity_at INTEGER NOT NULL,
+  day_bucket INTEGER NOT NULL,
+  summary_ciphertext TEXT,                 -- encrypted display summary (enc:v1:), null until summarized
+  summary_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK(summary_status IN ('pending','summarized','failed','skipped')),
+  source_hash TEXT,                        -- hash of the exact member-version set summarized (stale-guard)
+  model_id TEXT, prompt_version TEXT,      -- provenance: which model/prompt produced the summary
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX idx_sessions_day ON activity_sessions(day_bucket DESC, started_at DESC);
+CREATE INDEX idx_sessions_summ ON activity_sessions(summary_status) WHERE summary_status='pending';
+
+-- Immutable per-session EVIDENCE snapshot (▲REV2 — Codex critical): a `versions` row is
+-- overwritten throughout its hour, so pointing at version_id alone can lose/misattribute the
+-- earlier session's content when an app is revisited within the hour. So we snapshot the
+-- attributed content at capture time into an immutable, encrypted row PER SESSION.
+CREATE TABLE activity_session_evidence (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES activity_sessions(id),
+  version_id TEXT REFERENCES versions(id),     -- soft provenance link (may later mutate)
+  captured_at INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,                   -- hash of the snapshot at capture time
+  content_ciphertext TEXT NOT NULL);            -- immutable encrypted snapshot (enc:v1:)
+CREATE INDEX idx_evidence_session ON activity_session_evidence(session_id, captured_at);
+
+-- One row per agent review, with a DURABLE CURSOR (source of truth, survives restart/sleep).
+CREATE TABLE agent_runs (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
+  input_from INTEGER, input_to INTEGER,   -- the committed_at window this run covered (the cursor)
+  model_id TEXT, prompt_version TEXT,
+  started_at INTEGER NOT NULL, ended_at INTEGER, day_bucket INTEGER NOT NULL,
+  new_count INTEGER, resolved_count INTEGER, updated_count INTEGER,
+  new_item_ids TEXT, resolved_item_ids TEXT, updated_item_ids TEXT,   -- JSON arrays (observability)
+  error TEXT);
+CREATE INDEX idx_runs_started ON agent_runs(started_at DESC);
+
+CREATE TABLE agent_action_items (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+  title_ciphertext TEXT NOT NULL,          -- encrypted
+  details_ciphertext TEXT,                  -- encrypted
+  source_refs TEXT,                          -- JSON version-ids provenance ("why am I seeing this")
+  detected_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  resolved_at INTEGER, resolution_evidence_ciphertext TEXT);   -- encrypted (Codex: was plaintext)
+CREATE INDEX idx_items_status ON agent_action_items(status, detected_at DESC);
+
+-- Audit trail of item changes (create/update/resolve/dismiss) — bounded, for "auditable updates".
+CREATE TABLE agent_action_item_events (
+  id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES agent_action_items(id),
+  event TEXT NOT NULL, run_id TEXT, at INTEGER NOT NULL);
+```
+
+**Encryption:** all derived text — `summary_ciphertext`, item `title/details/resolution_evidence` — is **encrypted at rest** (`enc:v1:`). Cleartext-for-indexing: `app_bundle`, `app_label`, timestamps, buckets, status. NOTE (▲REV, honest): unlike the original draft there is NO `sub_key`/url/title column — that removes a cleartext leak *and* the overwrite-on-revisit bug. `app_label` is the only human-ish cleartext (an app name, low-sensitivity), documented.
+
+**Session identity & staleness (▲REV):** sessions are identified by their own UUID (never by app+url), so revisiting a page next week creates a NEW session. `source_hash` = hash over the session's `activity_session_evidence` snapshots; a session is (re)summarized only when it's closed/idle AND its `source_hash` changed — never while a current-hour version is still mutating. Summaries + "expand to detail" read the **immutable evidence snapshots**, not the mutable `versions` rows (▲REV2), so a same-hour revisit can't corrupt an earlier session's content.
+
+**FK enforcement (▲REV2 — Codex):** `MaxMiDatabase` must enable `PRAGMA foreign_keys = ON` in its GRDB connection setup for the `REFERENCES` constraints above to actually enforce; the v4 migration/task adds this (it's currently off).
+
+## 9. Privacy / consent / cost (▲REV)
+- All summaries/action-items encrypted at rest (`enc:v1:`), including `resolution_evidence`.
+- **Explicit Gemini consent** (Codex critical): activity synthesis sends summaries + open-item history to Google's Gemini API. A first-run/Settings disclosure states this clearly; if declined, capture still works but no activity synthesis runs. Not "unchanged trust model."
+- **Activity privacy controls in M6a** (▲REV2 — with a concrete surface + semantics): a lightweight **M6a privacy sheet** (a menu command "Activity Privacy…" opening a small SwiftUI sheet — NOT the full M6c Settings window) shown before synthesis first runs. It offers a **global activity-synthesis toggle** + **per-app exclusion** (`activity.disabled_app_bundle_ids`). Semantics: an excluded/globally-disabled app produces **NO visits, NO sessions, NO evidence snapshots** (not merely "no Gemini summary") — so the cleartext SQLite timeline never reveals excluded app use. Toggling an app to excluded **deletes that app's existing activity rows** (visits/sessions/evidence). Sensitive-denylist apps are always excluded regardless.
+- **Cost (real numbers, Codex):** pin an explicit model ID (e.g. `gemini-2.5-flash-lite`, $0.10/M in, $0.40/M out — NOT the moving `-latest` alias). ~24 reviews/day @ 8k in + 500 out ≈ **$0.72/mo**; @ 50k in ≈ **$3.75/mo** before display summaries. Settings shows an estimated-usage note.
+- **Rate limits (Codex):** Gemini is limited per project across RPM/TPM/RPD; a 429 on any dimension. M6 shares one throttle with extraction/embedding + exponential backoff with jitter.
+- **Timezone:** store epoch-ms UTC; derive `day_bucket` from one documented local-timezone policy (avoids DST/travel grouping surprises).
+- Nothing new leaves the Mac beyond the existing Gemini relay.
+
+## 10. Error handling
+- Detector/summarizer/agent failures are logged + retried (reuse the existing retry_queue pattern); a failed summary leaves the session with a null summary (UI shows a neutral fallback), never crashes.
+- Hourly agent never blocks capture; runs off-main; a failed run is recorded `status='failed'` in agent_runs and retried next tick.
+- UI loads defensively: missing summary → "…"; empty DB → empty state.
+
+## 11. Non-goals (M6)
+- No accounts/sign-in/billing (Minimi has them; MaxMi is single-user local).
+- No team features (M7 dropped — see [[project_maxmi_roadmap]]).
+- No new capture modality (capture is M1-M5; M6 only synthesizes + presents).
+- No cloud activity backend (local pipeline calling the existing Gemini relay).
+
+## 12. Testing
+- **ActivityStore/AgentStore/migration v4:** visit open/close (+ crash-repair of dangling opens); session create + member-version links; summary set with `source_hash` stale-guard (re-summarize only on hash change); action-item ID-op transitions (create/update/resolve/dismiss) + CHECK-constraint enforcement + events audit; encrypted round-trip for summary/title/details/evidence; MigrationTests asserts all 6 tables.
+- **SessionSegmenter:** deterministic grouping (app change + inactivity gap) over synthetic visit+version sets — pure/testable; revisiting same app later = NEW session (no overwrite).
+- **HourlyAgent:** cursor advance only after commit; ID-based ops applied transactionally; **never-resolve-on-absence** (item absent from a later response stays open); dismissal terminal; backfill batching caps input. Mock relay returns canned structured-output ops; delta math + cursor asserted.
+- **DisplaySummarizer:** prompt-building + provenance (version-ids) with a mock relay.
+- **ActivityViewModel:** loads Store rows → view state (grouping by day, time-ago formatting) — pure/testable.
+- SwiftUI views + windows + the icon are manual/live (UI glue, per precedent); view-models + logic are CI-tested.
+
+## 13. Exit criteria (M6 = M6a+M6b+M6c)
+1. App-visit timeline recorded; sessions grouped with Gemini summaries ("what you did in <app>").
+2. Menu-bar **dog** icon; clicking opens the SwiftUI Activity window showing the timeline, grouped by day/app, animated + smooth.
+3. Hourly agent runs on schedule, surfaces action items; Action Items inbox lists them; resolve/dismiss works + persists.
+4. Derived text (summaries, action items, evidence, resolution_evidence) encrypted at rest; **per-app exclusion + global toggle work in M6a** (excluded apps produce no visits/sessions/evidence; toggling deletes existing rows); Gemini-consent disclosure shown before first synthesis.
+5. Full Settings window (Launch at Login, pause, per-app disable UI, Check for Updates, model/key status) — M6c.
+6. UI is clean/animated/smooth (spring insert/resolve, measured-60fps target, vibrancy, **intentional always-dark branded palette via Theme tokens** — not auto light/dark) — the ship-readiness bar.
+7. Full fixture suite green; no regressions; synthesis logic isolated in MaxMiActivity, views in MaxMiUI.
+
+## 14. Rollout
+Per user goal: **spec → Codex gpt-5.6-terra review → revise → implementation plan → Codex review (same chat) → revise → implement subagent-driven → Codex review of the IMPLEMENTATION (same chat) → revise.** Order: M6a (activity + summaries + window + dog logo + privacy controls), then M6b (hourly agent + action items), then M6c (settings + final ship polish: clean/animated/smooth pass, Launch-at-Login, Check-for-Updates, per-app disable UI). Dog logo lands in M6a. End state: MaxMi ~99% ship-ready.
+import Foundation
+import GRDB
+import CSQLiteVec
+
+public final class MaxMiDatabase {
+    public let dbQueue: DatabaseQueue
+
+    public init(path: String, readOnly: Bool = false) throws {
+        var config = Configuration()
+        config.readonly = readOnly
+        config.prepareDatabase { db in
+            var err: UnsafeMutablePointer<CChar>? = nil
+            let rc = sqlite3_vec_init(db.sqliteConnection, &err, nil)
+            if rc != SQLITE_OK {
+                let msg = err.map { String(cString: $0) } ?? "sqlite3_vec_init failed"
+                sqlite3_free(err)
+                throw DatabaseError(resultCode: ResultCode(rawValue: rc), message: msg)
+            }
+        }
+        let isFile = path != ":memory:"
+        if isFile && !readOnly {
+            try FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+        }
+        dbQueue = try DatabaseQueue(path: path, configuration: config)
+        if isFile && !readOnly {
+            // Must be outside transaction (GRDB starts a deferred transaction in .write).
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "PRAGMA journal_mode = WAL")
+            }
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600], ofItemAtPath: path + suffix)
+            }
+        }
+        if !readOnly {
+            try Migrations.migrator.migrate(dbQueue)
+        }
+    }
+
+    public static func inMemory() throws -> MaxMiDatabase {
+        try MaxMiDatabase(path: ":memory:")
+    }
+}
+
+codex
+**Not quite — one design-critical lifecycle gap remains, plus its delete semantics.**
+
+- **Define when a session exists before evidence is written.** The data flow says `ActivityStore` snapshots content into `activity_session_evidence`, but that table requires `session_id`, while it also says `SessionSegmenter` creates/finalizes sessions only on close/idle. Those two statements cannot both hold without buffering evidence in memory—which loses it on a crash.
+
+  Specify this lifecycle for M6a: create an open/provisional `activity_sessions` row atomically on the first eligible capture/focus span; append immutable evidence only after a successful non-deduplicated capture commit; update `last_activity_at`; then close/finalize it on app switch or inactivity. `SessionSegmenter` should be described as the deterministic lifecycle/finalization policy, not as creating a session after evidence already exists. Coalesce duplicate evidence by `(session_id, content_hash)` (or equivalent) to avoid repeated 45-second snapshots.
+
+- **Make privacy deletion valid with enforced FKs.** With `foreign_keys = ON`, deleting an excluded app’s sessions will fail while evidence rows reference them. Add `ON DELETE CASCADE` to `activity_session_evidence.session_id` (and `agent_action_item_events.item_id`), or specify ordered deletion inside one transaction. For M6b, decide whether excluding an app also removes/rewrites action items derived from its evidence; otherwise derived plaintext-equivalent content remains despite the exclusion.
+
+Also update §12’s stale “member-version links” test wording to test evidence snapshots, not mutable version membership.
+
+Once those are made explicit, **GO for the M6a implementation plan.**
+tokens used
+1,24,869
+**Not quite — one design-critical lifecycle gap remains, plus its delete semantics.**
+
+- **Define when a session exists before evidence is written.** The data flow says `ActivityStore` snapshots content into `activity_session_evidence`, but that table requires `session_id`, while it also says `SessionSegmenter` creates/finalizes sessions only on close/idle. Those two statements cannot both hold without buffering evidence in memory—which loses it on a crash.
+
+  Specify this lifecycle for M6a: create an open/provisional `activity_sessions` row atomically on the first eligible capture/focus span; append immutable evidence only after a successful non-deduplicated capture commit; update `last_activity_at`; then close/finalize it on app switch or inactivity. `SessionSegmenter` should be described as the deterministic lifecycle/finalization policy, not as creating a session after evidence already exists. Coalesce duplicate evidence by `(session_id, content_hash)` (or equivalent) to avoid repeated 45-second snapshots.
+
+- **Make privacy deletion valid with enforced FKs.** With `foreign_keys = ON`, deleting an excluded app’s sessions will fail while evidence rows reference them. Add `ON DELETE CASCADE` to `activity_session_evidence.session_id` (and `agent_action_item_events.item_id`), or specify ordered deletion inside one transaction. For M6b, decide whether excluding an app also removes/rewrites action items derived from its evidence; otherwise derived plaintext-equivalent content remains despite the exclusion.
+
+Also update §12’s stale “member-version links” test wording to test evidence snapshots, not mutable version membership.
+
+Once those are made explicit, **GO for the M6a implementation plan.**

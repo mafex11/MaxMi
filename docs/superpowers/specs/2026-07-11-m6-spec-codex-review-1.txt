@@ -1,0 +1,2498 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4e1a-ef66-7851-87f6-cfd079f15197
+--------
+user
+You are a senior macOS/Swift + product architect reviewing a design spec for MaxMi's M6 milestone. Read docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md fully.
+
+Context: MaxMi is an all-Swift, local-first Mac ambient-memory app (menu-bar). It captures on-screen text via Accessibility + meetings via audio (M1-M5 done), stores versioned content in encrypted SQLite (GRDB + sqlite-vec), extracts facts via Gemini (a MemoryRelay), serves memory over MCP to Claude. M6 adds: (a) an activity layer that sessionizes captures into per-app summaries + an app-visit timeline, (b) an hourly agent surfacing action items, (c) the FIRST real user-facing UI (SwiftUI Activity window + Action Items inbox, opened from the menu bar) modeled on the competitor Minimi's React views, (d) a dog brand logo (Minimi has a white cat on black; MaxMi = white dog on black). It's split M6a/M6b/M6c.
+
+Review critically and concretely. Focus:
+1. ARCHITECTURE: Is the activity/agent SQLite schema (v4 migration) sound? Are activity_conversations (sessionized summaries) and activity_app_visits the right model, or is there a simpler/better shape? Is deriving sessions from existing threads/versions/derivatives + a Gemini "detect-conversation"/"rewrite-for-display" pass reasonable, or redundant with what's already extracted?
+2. THE HOURLY AGENT: is "review new versions since last run, produce action-item deltas (new/resolved/updated)" a sound design? Failure modes (duplicate items, missed resolutions, unbounded growth)? Should it be hourly-timer or idle-triggered?
+3. SwiftUI IN A MENU-BAR APP: MaxMi is currently AppKit (NSStatusItem/NSPanel). Introducing SwiftUI for the Activity window — real integration concerns on macOS 14/15? NSHostingController/NSWindow lifecycle, @Observable, light/dark, the "60fps smooth animated" bar — achievable, and any gotchas? Is a new MaxMiUI module the right boundary?
+4. SCOPE: is the M6a/M6b/M6c split right? Is M6a (activity+summaries+window+logo) genuinely shippable alone? Anything mis-sequenced?
+5. PRIVACY/COST: sessionizing + hourly Gemini calls over all activity — cost/rate concerns? encryption of summaries/action-items correct?
+6. GAPS / RISKS / over- or under-specification. Concrete failure modes.
+
+Be specific and technical — real API names, real macOS behaviors, real costs. Structure: Feasibility verdict → Critical issues → Should-fix → Nice-to-have → Overall recommendation (ready for M6a implementation plan or not).
+
+2026-07-10T22:16:57.342422Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll read the full design spec and trace its assumptions against the existing repository architecture where useful, then give a concrete go/no-go review for M6a.
+exec
+/bin/zsh -lc "wc -l docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md && sed -n '1,260p' docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+     156 docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md
+# MaxMi — M6: Activity Timeline + Hourly Agent + Minimi-style UI (+ Dog Logo)
+
+**Date:** 2026-07-11
+**Status:** Draft for review (Codex gpt-5.6-terra)
+**Milestone:** M6 — the synthesis + presentation milestone. M1-M5 captured raw content; M6 turns it into a **sessionized, summarized activity timeline**, an **hourly agent that surfaces action items**, and the **first real user-facing UI** (a proper window, not just a menu), plus MaxMi's **dog brand icon**. This is the milestone that makes MaxMi feel like a finished ambient-memory app.
+**North star:** match Minimi's behaviour + UI/UX (reverse-engineered from the installed app: activity/agent SQLite schema in `main.jsc`, the `index.html`/`inbox.html`/`actionItems.html` React views, the tray/menu, and the white-cat-on-black logo). MaxMi adapts React→**SwiftUI** (native, animated, smooth). See [[project_minimi_reverse_engineering]], [[project_maxmi]], [[project_maxmi_roadmap]], [[project_maxmi_m5_meetings]].
+
+## 1. What we're building
+
+1. **Activity layer** — group raw captures into time-bucketed, per-app **sessions** each with a human **summary** ("what you did in this app"), plus an **app-visit timeline**.
+2. **Hourly agent** — a scheduled job that reviews the last window's memory and produces/updates **action items** (open / resolved / dismissed), recording each run.
+3. **Rewrite-for-display** — turn raw Gemini `derivatives` into clean, presentable per-session summaries.
+4. **UI (SwiftUI, Minimi-style)** — a main **Activity window** (timeline grouped by app/time, each row = app + summary + time-ago), an **Action Items inbox**, opened from the menu-bar icon; clean, animated, smooth.
+5. **Dog logo** — app icon (white dog silhouette on black squircle, Minimi-style) + monochrome template tray icon.
+
+**Success test:** after using the Mac for a while, clicking the menu-bar dog opens a window showing a scrollable timeline — "Cursor · *worked on the MaxMi meeting parser* · 20m ago", "Chrome · *researched whisper.cpp streaming* · 1h ago" — grouped sensibly; an Action Items tab lists agent-surfaced to-dos you can resolve/dismiss; the hourly agent runs on schedule and adds items; the app icon and menu-bar icon are the MaxMi dog.
+
+## 2. How Minimi does it (reverse-engineered evidence — the reference to match)
+
+**Schema (from `main.jsc`):**
+- `activity_app_visits` (`id, user_id, app_bundle, app_label, started_at, ended_at, day_bucket`) — raw app-visit timeline.
+- `activity_conversations` (`id, user_id, app_bundle, app_label, sub_kind, sub_key, sub_label, summary, started_at, detected_at, day_bucket`) — sessionized activity with a **summary**; keyed by `(user_id, app_bundle, sub_key)`, queried `ORDER BY detected_at DESC` and by `day_bucket`.
+- `agent_runs` (`id, kind, status, started_at, ended_at, day_bucket, new_chars, before_chars, versions_in_snapshot, new_count, resolved_count, updated_count, new_item_ids, resolved_item_ids, updated_item_ids`) — one row per hourly review.
+- `agent_action_items` (`id, user_id, kind, status, title, details, detected_at, resolved_at, resolution_evidence`); `status IN ('open','resolved','dismissed')`, indexed `(user_id, status, detected_at DESC)`.
+
+**Agent (from strings):** `[Agent] next hourly fire in …`, `/api/activity/hourly-review`, `/api/activity/detect-conversation`, `/api/memory/rewrite-for-display`. So: a periodic (hourly) timer fires a review over the window's new versions (`new_chars`/`before_chars` track delta), which detect-conversation groups into sessions + hourly-review produces action-item deltas (new/resolved/updated), stored in `agent_action_items` with the run recorded in `agent_runs`.
+
+**UI (React views):** `index.html` (main window — recent activity timeline), `inbox.html`, `actionItems.html` (`action-items:open-window`, `actionItems.pinned`), plus `rightLane`/`voiceNote`/`claudeOverlay` (M5-adjacent). Tray/menu has: Pause/Resume ("Capture Paused", `capture.paused_until`), Launch at Login (`[LaunchAtLogin] reconciling`), Check for Updates, per-app conversation disable (`conversations.disabled_app_bundle_ids`), account/sign-in (we skip — no accounts in MaxMi).
+
+**Logo:** `assets/minimi_appicon.png` = white cat (lying, tail curled) on a black rounded-square with a subtle top-light gradient; `assets/tray/tray-icon-*-{light,dark}-mode.png` = monochrome white silhouette template, with default/audio/error states.
+
+## 3. MaxMi adaptation (what differs, and why)
+
+- **SwiftUI, not React/Electron.** MaxMi is all-Swift. The Activity window + Action Items are **SwiftUI** in the app target (rendered in an `NSWindow`/`NSPanel`), giving native, GPU-smooth animations. This is the "clean/animated/smooth" the goal wants, done the native way.
+- **Local Gemini, not a cloud `/api/activity/*` backend.** MaxMi already relays to Gemini for extraction (M1). M6's `detect-conversation`/`hourly-review`/`rewrite-for-display` become **local pipeline steps that call Gemini** with purpose-built prompts, reusing the existing `MemoryRelay`. No new backend.
+- **No accounts / sign-in / billing.** Minimi has auth+billing; MaxMi is single-user local — those menu items are dropped.
+- **Reuse existing capture.** `activity_app_visits` is fed by the **FocusObserver** MaxMi already has (it already knows frontmost app + transitions); we just persist visits. `activity_conversations` summaries are derived from the `threads`/`versions`/`derivatives` MaxMi already stores.
+- **Dog logo** replaces the cat, same visual language (white silhouette, black squircle, subtle gradient; monochrome template tray icon).
+
+## 4. Scope split (M6 is big — three sub-projects, shipped in order)
+
+Per brainstorming discipline, M6 is decomposed into three sub-specs, each independently shippable, in this order (value-first — the user wants to SEE activity):
+
+- **M6a — Activity layer + summaries + Activity window UI + dog logo.** Tables (`activity_app_visits`, `activity_conversations`), detect-conversation + rewrite-for-display pipeline, the SwiftUI Activity window, the dog app/tray icons. This alone delivers the "menu shows what I did per app" the user asked for.
+- **M6b — Hourly agent + Action Items.** `agent_runs`, `agent_action_items`, the hourly review job, the Action Items SwiftUI inbox (resolve/dismiss).
+- **M6c — Menu/Settings polish + ship-readiness.** Settings window (Launch at Login, pause controls, per-app disable, Check for Updates, model/keys status), animation/interaction polish across all windows, final ship pass.
+
+This spec covers all three at design level; each gets its own implementation plan. (M6c = the "after M6, polish" phase from the goal.)
+
+## 5. Architecture / components
+
+```
+Sources/MaxMiStore/Migrations.swift        MODIFY: v4 — activity_app_visits, activity_conversations,
+                                                        agent_runs, agent_action_items
+Sources/MaxMiStore/ActivityStore.swift      NEW: record app-visits, upsert conversations, query timeline
+Sources/MaxMiStore/AgentStore.swift          NEW: agent_runs + agent_action_items CRUD + status transitions
+Sources/MaxMiActivity/                        NEW module (synthesis logic, non-UI)
+  ConversationDetector.swift  group recent versions -> sessions (per app, time-gap heuristic)
+  DisplaySummarizer.swift     Gemini rewrite-for-display: derivatives -> clean session summary
+  HourlyAgent.swift           scheduled review: new-version delta -> action-item new/resolved/updated
+  AgentPrompts.swift          the Gemini prompts (detect-conversation, hourly-review, rewrite)
+Sources/MaxMi/AppWiring.swift                 MODIFY: feed FocusObserver visits -> ActivityStore;
+                                                       schedule HourlyAgent; own the windows
+Sources/MaxMi/ActivityWindow.swift            NEW: NSWindow hosting SwiftUI ActivityView
+Sources/MaxMiUI/                               NEW module (SwiftUI views, testable view-models)
+  ActivityView.swift          timeline: sessions grouped by day/app, animated
+  ActionItemsView.swift       inbox: open/resolved/dismissed, resolve/dismiss actions
+  ActivityViewModel.swift     @Observable; loads from Store; pure-ish, testable
+  Theme.swift                 colors/spacing/animations (Minimi-like dark, smooth)
+Sources/MaxMiMCP/...                           MODIFY: optional activity_timeline MCP tool (stretch)
+packaging/assets/                              NEW: dog app icon (icon.icns) + tray templates
+packaging/make-app.sh                          MODIFY: install icon.icns + tray assets
+```
+
+Data flow: FocusObserver app-switch → `ActivityStore.recordVisit` (timeline). Idle/periodic → `ConversationDetector` groups new versions into sessions → `DisplaySummarizer` (Gemini) writes each session `summary` → `activity_conversations`. Hourly timer → `HourlyAgent` reviews the window's new versions → Gemini hourly-review → action-item deltas → `AgentStore`. Menu-bar dog click → `ActivityWindow` (SwiftUI) loads `ActivityViewModel` → renders timeline + action items.
+
+## 6. UI/UX spec (SwiftUI, Minimi-style — clean/animated/smooth)
+
+**Activity window** (main): a dark, rounded, ~380×560 window. Top: a search field + "Activity / Action Items" segmented tabs. Body = a **timeline** grouped by **Today / Yesterday / earlier** (day_bucket), each group a list of **session rows**: app glyph + `app_label` + one-line **summary** + relative time ("20m ago"). Rows animate in (fade+slide), hover highlight, tap → expands to show the underlying captured detail / opens the thread. Empty state: friendly "Nothing captured yet".
+**Action Items tab:** list of open items (title + details + time), each with resolve ✓ / dismiss ✕ (swipe or hover buttons), animated removal; a segment to view resolved/dismissed.
+**Interaction quality (the "polish" bar):** 60fps list scrolling, spring animations on insert/resolve, subtle vibrancy/blur background, consistent 8pt spacing grid, SF Symbols, respects light/dark mode, no jank. Opens from the menu-bar dog (left-click opens window; right-click = the menu).
+**Menu (right-click / status menu):** Open MaxMi, Pause/Resume Capture (+ per-app submenu, already exists), Settings…, Check for Updates…, Quit. (M6c expands Settings.)
+
+## 7. Logo / brand (dog, Minimi-style)
+
+- **App icon** (`icon.icns`): a **white dog silhouette** (simple, friendly, lying or sitting — same minimalist weight as Minimi's cat) centered on a **black rounded-square** with a subtle top-down light gradient. Same visual language as `minimi_appicon.png`, dog instead of cat. Generated at all required sizes (16–1024).
+- **Tray icon:** monochrome white dog silhouette **template image** (so macOS tints it for light/dark menu bars), with default + recording (audio, M5) + error variants, matching Minimi's tray-state set.
+- **How produced:** an SVG dog silhouette → rendered to PNGs (iconset) → `iconutil` to `.icns`; tray PNGs marked template. The SVG lives in `packaging/assets/` so it's regenerable. (Implementation plan pins how the dog art is created — hand-authored SVG path, not an AI image, so it's crisp/vector.)
+
+## 8. Storage & schema (v4 migration, additive)
+
+```sql
+CREATE TABLE activity_app_visits (
+  id TEXT PRIMARY KEY, app_bundle TEXT NOT NULL, app_label TEXT NOT NULL,
+  started_at INTEGER NOT NULL, ended_at INTEGER, day_bucket INTEGER NOT NULL);
+CREATE INDEX idx_visits_day ON activity_app_visits(day_bucket DESC, started_at DESC);
+
+CREATE TABLE activity_conversations (
+  id TEXT PRIMARY KEY, app_bundle TEXT NOT NULL, app_label TEXT NOT NULL,
+  sub_kind TEXT, sub_key TEXT, sub_label TEXT,
+  summary TEXT,                       -- encrypted (it's derived content)
+  started_at INTEGER NOT NULL, detected_at INTEGER NOT NULL, day_bucket INTEGER NOT NULL);
+CREATE INDEX idx_conv_day ON activity_conversations(day_bucket DESC, detected_at DESC);
+CREATE UNIQUE INDEX idx_conv_key ON activity_conversations(app_bundle, sub_key);
+
+CREATE TABLE agent_runs (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
+  started_at INTEGER NOT NULL, ended_at INTEGER, day_bucket INTEGER NOT NULL,
+  new_chars INTEGER, before_chars INTEGER, versions_in_snapshot INTEGER,
+  new_count INTEGER, resolved_count INTEGER, updated_count INTEGER,
+  new_item_ids TEXT, resolved_item_ids TEXT, updated_item_ids TEXT);
+
+CREATE TABLE agent_action_items (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+  title TEXT NOT NULL,               -- encrypted
+  details TEXT,                       -- encrypted
+  detected_at INTEGER NOT NULL, resolved_at INTEGER, resolution_evidence TEXT);
+CREATE INDEX idx_items_status ON agent_action_items(status, detected_at DESC);
+```
+Derived text (`summary`, item `title`/`details`) is **encrypted at rest** like all content (they can quote what you did). Metadata (app_bundle, times, buckets, status) cleartext for indexing — consistent with the existing policy.
+
+## 9. Privacy / consent
+- All summaries/action-items are derived from already-captured, already-consented content; encrypted at rest.
+- Gemini sees the same plaintext it already sees for extraction (unchanged trust model).
+- Per-app conversation disable (`conversations.disabled_app_bundle_ids`, M6c) lets the user exclude apps from the activity timeline without disabling capture.
+- Nothing new leaves the Mac beyond the existing Gemini relay.
+
+## 10. Error handling
+- Detector/summarizer/agent failures are logged + retried (reuse the existing retry_queue pattern); a failed summary leaves the session with a null summary (UI shows a neutral fallback), never crashes.
+- Hourly agent never blocks capture; runs off-main; a failed run is recorded `status='failed'` in agent_runs and retried next tick.
+- UI loads defensively: missing summary → "…"; empty DB → empty state.
+
+## 11. Non-goals (M6)
+- No accounts/sign-in/billing (Minimi has them; MaxMi is single-user local).
+- No team features (M7 dropped — see [[project_maxmi_roadmap]]).
+- No new capture modality (capture is M1-M5; M6 only synthesizes + presents).
+- No cloud activity backend (local pipeline calling the existing Gemini relay).
+
+## 12. Testing
+- **ActivityStore/AgentStore/migration v4:** CRUD + status transitions (open→resolved/dismissed); visit open/close; conversation upsert-by-key; encrypted summary round-trip; MigrationTests asserts the 4 tables.
+- **ConversationDetector:** grouping logic (time-gap + per-app) over synthetic version sets — pure/testable.
+- **DisplaySummarizer / HourlyAgent:** prompt-building + delta logic (new/resolved/updated) with a mock relay returning canned JSON — the Gemini call is mocked; delta math is asserted.
+- **ActivityViewModel:** loads Store rows → view state (grouping by day, time-ago formatting) — pure/testable.
+- SwiftUI views + windows + the icon are manual/live (UI glue, per precedent); view-models + logic are CI-tested.
+
+## 13. Exit criteria (M6 = M6a+M6b+M6c)
+1. App-visit timeline recorded; sessions grouped with Gemini summaries ("what you did in <app>").
+2. Menu-bar **dog** icon; clicking opens the SwiftUI Activity window showing the timeline, grouped by day/app, animated + smooth.
+3. Hourly agent runs on schedule, surfaces action items; Action Items inbox lists them; resolve/dismiss works + persists.
+4. Derived text encrypted at rest; per-app disable works (M6c).
+5. Settings window (Launch at Login, pause, per-app disable, Check for Updates, status) — M6c.
+6. UI is clean/animated/smooth (spring insert/resolve, 60fps, vibrancy, light/dark) — the ship-readiness bar.
+7. Full fixture suite green; no regressions; synthesis logic isolated in MaxMiActivity, views in MaxMiUI.
+
+## 14. Rollout
+M6a spec-section → **Codex gpt-5.6-terra review** → revise → M6a plan → **Codex review (same chat)** → revise → subagent build → **Codex review of the implementation (same chat)** → revise → live. Then M6b, then M6c (settings + final polish). Dog logo lands in M6a (it's the brand the UI ships with). End state: MaxMi ~99% ship-ready.
+
+exec
+/bin/zsh -lc 'rg -n "CREATE TABLE|threads|versions|derivatives|FocusObserver|retry_queue|MemoryRelay|NSStatusItem|NSPanel|SQLite|GRDB|encrypted|encrypt" Sources Tests Package.swift 2>/dev/null' in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+Package.swift:8:        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+Package.swift:12:            name: "CSQLiteVec",
+Package.swift:43:            "MaxMiCore", "CSQLiteVec",
+Package.swift:44:            .product(name: "GRDB", package: "GRDB.swift"),
+Tests/MaxMiMCPTests/ToolsTests.swift:15:                       ["search_memory", "list_active_threads", "meeting_memory"])
+Sources/MaxMiCore/CapturePipeline.swift:5:    let relay: any MemoryRelay
+Sources/MaxMiCore/CapturePipeline.swift:9:    public init(store: any MemoryStore, relay: any MemoryRelay,
+Sources/MaxMiCore/CapturePipeline.swift:19:        // Retry queue is a wake-up list: clear due rows; their versions re-qualify via pendingWork.
+Tests/MaxMiMCPTests/MemoryQueriesTests.swift:6:final class MockRelay: MemoryRelay, @unchecked Sendable {
+Tests/MaxMiStoreTests/FingerprintDedupTests.swift:2:import GRDB
+Tests/MaxMiMCPTests/LazyToolsTests.swift:26:            try String.fetchOne(d, sql: "SELECT thread_id FROM versions WHERE id=?", arguments: [versionID])!
+Tests/MaxMiMCPTests/LazyToolsTests.swift:38:        let result2 = await lazyTools.call(name: "list_active_threads", arguments: [:])
+Tests/MaxMiMCPTests/LazyToolsTests.swift:55:        let result = await lazyTools.call(name: "list_active_threads", arguments: [:])
+Tests/MaxMiMCPTests/LazyToolsTests.swift:113:            try String.fetchOne(d, sql: "SELECT thread_id FROM versions WHERE id=?", arguments: [versionID])!
+Tests/MaxMiMCPTests/LazyToolsTests.swift:131:        let result1 = await lazyTools.call(name: "list_active_threads", arguments: [:])
+Tests/MaxMiMCPTests/LazyToolsTests.swift:139:        let result2 = await lazyTools.call(name: "list_active_threads", arguments: [:])
+Tests/MaxMiCoreTests/FieldCipherTests.swift:8:        XCTAssertThrowsError(try UnavailableCipher().encrypt("secret")) {
+Tests/MaxMiCoreTests/FieldCipherTests.swift:22:        let ct = try cipher.encrypt(pt)
+Tests/MaxMiCoreTests/FieldCipherTests.swift:26:        let ct = try cipher.encrypt("hello")
+Tests/MaxMiCoreTests/FieldCipherTests.swift:33:        XCTAssertNotEqual(try cipher.encrypt("same"), try cipher.encrypt("same"),
+Tests/MaxMiCoreTests/FieldCipherTests.swift:34:                          "fresh nonce per encryption")
+Tests/MaxMiCoreTests/FieldCipherTests.swift:41:        let ct = try cipher.encrypt("secret")
+Tests/MaxMiCoreTests/FieldCipherTests.swift:51:        let ct = try cipher.encrypt("secret")
+Tests/MaxMiCoreTests/FieldCipherTests.swift:65:        XCTAssertEqual(try cipher.decrypt(try cipher.encrypt("")), "")
+Tests/MaxMiCoreTests/FieldCipherTests.swift:67:        XCTAssertEqual(try cipher.decrypt(try cipher.encrypt(uni)), uni)
+Sources/MaxMi/KeychainKeyStore.swift:8:// LOGIN KEYCHAIN SHARING: Both binaries (MaxMi.app + maxmi-mcp) share the encryption
+Tests/MaxMiMCPTests/MCPServerTests.swift:7:         ["name": "list_active_threads", "description": "d", "inputSchema": ["type": "object"]],
+Tests/MaxMiMCPTests/MCPServerTests.swift:42:                       ["search_memory", "list_active_threads", "meeting_memory"])
+Sources/MaxMiCore/FieldCipher.swift:7:    case keyUnavailable         // no encryption key (Keychain locked/denied); refuse to read/write
+Sources/MaxMiCore/FieldCipher.swift:13:    func encrypt(_ plaintext: String) throws -> String
+Sources/MaxMiCore/FieldCipher.swift:26:    public func encrypt(_ plaintext: String) throws -> String {
+Sources/MaxMiCore/FieldCipher.swift:52:/// encryption key is unavailable (Keychain locked/denied): every write throws
+Sources/MaxMiCore/FieldCipher.swift:59:    public func encrypt(_ plaintext: String) throws -> String { throw CipherError.keyUnavailable }
+Sources/MaxMiCore/FieldCipher.swift:62:        // pretend we can read anything that claims to be encrypted.
+Sources/MaxMi/StoreMeetingPersister.swift:13:/// 2. GRDB's DatabaseQueue serializes all DB access internally
+Sources/MaxMi/AppWiring.swift:10:final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is internally serialized by GRDB's DatabaseQueue
+Sources/MaxMi/AppWiring.swift:49:    var observer: FocusObserver?
+Sources/MaxMi/AppWiring.swift:54:    let encryptionAvailable: Bool
+Sources/MaxMi/AppWiring.swift:82:        var encryptionAvailable = true
+Sources/MaxMi/AppWiring.swift:86:            NSLog("MaxMi: encryption key unavailable: \(error)")
+Sources/MaxMi/AppWiring.swift:91:            encryptionAvailable = false
+Sources/MaxMi/AppWiring.swift:94:        self.encryptionAvailable = encryptionAvailable
+Sources/MaxMi/AppWiring.swift:118:        menuBar.encryptionAvailable = encryptionAvailable
+Sources/MaxMi/AppWiring.swift:119:        guard encryptionAvailable else { return }          // capture paused per §9
+Sources/MaxMi/AppWiring.swift:120:        do { try store.encryptExistingContent(nowMs: epochNowMs()) }   // §6: backfill before capture
+Sources/MaxMi/AppWiring.swift:124:        let observer = FocusObserver(
+Sources/MaxMi/AppWiring.swift:139:        // Pipeline sweep every 30s: picks up idle/frozen versions and due retries (spec §3a sweeper).
+Sources/MaxMi/AppWiring.swift:154:        guard encryptionAvailable else { return }  // meetings also require encryption
+Sources/MaxMi/AppWiring.swift:296:                // tracking params, doc tabs) doesn't fracture one page into many threads.
+Tests/MaxMiStoreTests/MigrationTests.swift:2:import GRDB
+Tests/MaxMiStoreTests/MigrationTests.swift:10:            for t in ["threads", "versions", "derivatives", "retry_queue", "settings", "schema_migrations"] {
+Tests/MaxMiStoreTests/MigrationTests.swift:25:            try d.execute(sql: "INSERT INTO threads VALUES ('t1','Web','https://x.com','X',NULL,1,1)")
+Tests/MaxMiStoreTests/MigrationTests.swift:27:                INSERT INTO versions (id,thread_id,hour_bucket,content,content_hash,word_count,is_frozen,committed_at,extract_status)
+Tests/MaxMiStoreTests/MigrationTests.swift:31:                INSERT INTO versions (id,thread_id,hour_bucket,content,content_hash,word_count,is_frozen,committed_at,extract_status)
+Tests/MaxMiStoreTests/MigrationTests.swift:52:            XCTAssertTrue(try d.tableExists("threads"))
+Tests/MaxMiStoreTests/MigrationTests.swift:82:        let threads = try readonlyStore.recentThreads(limit: 10)
+Tests/MaxMiStoreTests/MigrationTests.swift:83:        XCTAssertEqual(threads.count, 1, "Read-only handle should see committed write via WAL")
+Tests/MaxMiStoreTests/MigrationTests.swift:84:        XCTAssertEqual(threads[0].sourceTitle, "Concurrent Test")
+Tests/MaxMiStoreTests/MigrationTests.swift:100:            let cols = try Row.fetchAll(d, sql: "PRAGMA table_info(versions)").map { $0["name"] as String }
+Tests/MaxMiStoreTests/MigrationTests.swift:101:            XCTAssertTrue(cols.contains("metadata"), "versions.metadata column must exist")
+Tests/MaxMiCoreTests/PipelineTests.swift:36:final class MockRelay: MemoryRelay, @unchecked Sendable {
+Tests/MaxMiCoreTests/PipelineTests.swift:105:        XCTAssertTrue(s.extractedOK.isEmpty, "version stays pending until derivatives embed")
+Sources/MaxMi/MenuBarController.swift:5:    private var statusItem: NSStatusItem?
+Sources/MaxMi/MenuBarController.swift:9:    private let encryptionItem = NSMenuItem(title: "⚠ Memory encryption unavailable", action: nil, keyEquivalent: "")
+Sources/MaxMi/MenuBarController.swift:17:    var encryptionAvailable: Bool = true { didSet { encryptionItem.isHidden = encryptionAvailable } }
+Sources/MaxMi/MenuBarController.swift:29:        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+Sources/MaxMi/MenuBarController.swift:34:        encryptionItem.isHidden = encryptionAvailable
+Sources/MaxMi/MenuBarController.swift:41:        menu.addItem(encryptionItem)
+Sources/MaxMiCore/Protocols.swift:3:public protocol MemoryRelay: Sendable {
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:2:import GRDB
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:23:            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM threads"), 1)
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:24:            let row = try Row.fetchOne(d, sql: "SELECT * FROM versions WHERE id=?", arguments: [vid])!
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:35:            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM versions"), 1)
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:41:        try db.dbQueue.write { try $0.execute(sql: "UPDATE versions SET extract_status='completed'") }
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:45:            let row = try Row.fetchOne(d, sql: "SELECT * FROM versions")!
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:55:            let rows = try Row.fetchAll(d, sql: "SELECT * FROM versions ORDER BY hour_bucket")
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:66:            let row = try Row.fetchOne(d, sql: "SELECT * FROM versions WHERE hour_bucket=?",
+Tests/MaxMiStoreTests/CommitCaptureTests.swift:77:            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM threads"), 2)
+Tests/MaxMiStoreTests/MeetingStoreTests.swift:2:import GRDB
+Tests/MaxMiStoreTests/MeetingStoreTests.swift:20:            // transcript stored encrypted in the linked version
+Tests/MaxMiStoreTests/MeetingStoreTests.swift:22:            let content = try String.fetchOne(d, sql: "SELECT content FROM versions WHERE id=?", arguments: [vid])!
+Tests/MaxMiStoreTests/MeetingStoreTests.swift:23:            XCTAssertTrue(content.hasPrefix("enc:v1:"), "transcript must be encrypted at rest")
+Tests/MaxMiStoreTests/MeetingStoreTests.swift:25:            let meta = try String.fetchOne(d, sql: "SELECT metadata FROM versions WHERE id=?", arguments: [vid])!
+Sources/MaxMiMeetings/WhisperBridge.swift:46:        params.n_threads = 4
+Tests/MaxMiStoreTests/BackfillTests.swift:2:import GRDB
+Tests/MaxMiStoreTests/BackfillTests.swift:16:    /// Seed pre-M3 state: plaintext rows written with raw SQL (bypassing the encrypting Store).
+Tests/MaxMiStoreTests/BackfillTests.swift:19:            try d.execute(sql: "INSERT INTO threads VALUES ('t1','Web','https://e.com','T',NULL,?,?)",
+Tests/MaxMiStoreTests/BackfillTests.swift:22:                INSERT INTO versions (id,thread_id,hour_bucket,content,content_hash,word_count,is_frozen,committed_at,extract_status)
+Tests/MaxMiStoreTests/BackfillTests.swift:27:                    INSERT INTO derivatives (id,thread_id,version_id,content,content_hash,committed_at,embedding_status)
+Tests/MaxMiStoreTests/BackfillTests.swift:37:        let n = try store.encryptExistingContent(nowMs: t0)
+Tests/MaxMiStoreTests/BackfillTests.swift:38:        XCTAssertEqual(n, 451)         // 450 derivatives + 1 version
+Tests/MaxMiStoreTests/BackfillTests.swift:41:                "SELECT count(*) FROM derivatives WHERE content NOT LIKE 'enc:v1:%'"), 0)
+Tests/MaxMiStoreTests/BackfillTests.swift:43:                "SELECT count(*) FROM versions WHERE content NOT LIKE 'enc:v1:%'"), 0)
+Tests/MaxMiStoreTests/BackfillTests.swift:50:        _ = try store.encryptExistingContent(nowMs: t0)
+Tests/MaxMiStoreTests/BackfillTests.swift:51:        let threads = try store.recentThreads(limit: 5)
+Tests/MaxMiStoreTests/BackfillTests.swift:52:        XCTAssertTrue(threads.first!.recentFacts.contains("Plain fact 2."))
+Tests/MaxMiStoreTests/BackfillTests.swift:57:        _ = try store.encryptExistingContent(nowMs: t0)
+Tests/MaxMiStoreTests/BackfillTests.swift:58:        XCTAssertEqual(try store.encryptExistingContent(nowMs: t0), 0, "flag short-circuits")
+Tests/MaxMiStoreTests/BackfillTests.swift:63:        // encrypt only some rows manually to simulate a crash mid-run (flag unset)
+Tests/MaxMiStoreTests/BackfillTests.swift:66:            let enc = try c.encrypt("Plain fact 0.")
+Tests/MaxMiStoreTests/BackfillTests.swift:67:            try d.execute(sql: "UPDATE derivatives SET content=? WHERE id='d0'", arguments: [enc])
+Tests/MaxMiStoreTests/BackfillTests.swift:69:        let n = try store.encryptExistingContent(nowMs: t0)
+Tests/MaxMiStoreTests/BackfillTests.swift:70:        XCTAssertEqual(n, 10, "9 remaining derivatives + 1 version; d0 skipped by prefix check")
+Tests/MaxMiStoreTests/BackfillTests.swift:76:        _ = try store.encryptExistingContent(nowMs: t0)
+Tests/MaxMiStoreTests/BackfillTests.swift:78:            XCTAssertEqual(try String.fetchOne(d, sql: "SELECT content_hash FROM versions"), "h1",
+Sources/MaxMiRelay/GeminiClient.swift:4:public final class GeminiClient: MemoryRelay {
+Sources/MaxMi/RightLanePanel.swift:4:/// NSPanel-based right-lane meeting recorder UI conforming to MeetingPanelPresenting.
+Sources/MaxMi/RightLanePanel.swift:8:    private let panel: NSPanel
+Sources/MaxMi/RightLanePanel.swift:31:        self.panel = NSPanel(
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:2:import GRDB
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:26:        let raw = try db.dbQueue.read { try String.fetchOne($0, sql: "SELECT content FROM versions")! }
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:34:        let raw = try db.dbQueue.read { try String.fetchOne($0, sql: "SELECT content FROM derivatives")! }
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:42:            let row = try Row.fetchOne(d, sql: "SELECT content_hash, word_count FROM versions")!
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:62:        let threads = try store.recentThreads(limit: 5)
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:63:        XCTAssertEqual(threads.first?.recentFacts.first, "Readable fact.")
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:67:        // simulate a pre-M3 plaintext row next to an encrypted one
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:68:        let (vid, tid) = try commit("encrypted era")
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:72:                INSERT INTO derivatives (id, thread_id, version_id, content, content_hash, committed_at, embedding_status)
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:76:        let threads = try store.recentThreads(limit: 5)
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:77:        XCTAssertTrue(threads.first!.recentFacts.contains("New fact."))
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:78:        XCTAssertTrue(threads.first!.recentFacts.contains("Legacy plaintext fact."), "passthrough decrypt")
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:86:                INSERT INTO derivatives (id, thread_id, version_id, content, content_hash, committed_at, embedding_status)
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:90:        let threads = try store.recentThreads(limit: 5)
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:91:        XCTAssertTrue(threads.first!.recentFacts.contains("[unreadable memory]"))
+Tests/MaxMiStoreTests/EncryptionAtRestTests.swift:92:        XCTAssertTrue(threads.first!.recentFacts.contains("Good fact."), "query continues past corrupt row")
+Tests/MaxMiStoreTests/QueryAPITests.swift:2:import GRDB
+Tests/MaxMiStoreTests/QueryAPITests.swift:26:            sql: "SELECT thread_id FROM versions WHERE id=?", arguments: [vid])! }
+Tests/MaxMiStoreTests/QueryAPITests.swift:56:        let threads = try store.recentThreads(limit: 10)
+Tests/MaxMiStoreTests/QueryAPITests.swift:57:        XCTAssertEqual(threads.map(\.sourceKey), ["https://new.com", "https://old.com"])
+Tests/MaxMiStoreTests/QueryAPITests.swift:58:        XCTAssertEqual(threads[1].recentFacts, ["O4.", "O3.", "O2."], "own 3 latest, newest first")
+Tests/MaxMiStoreTests/QueryAPITests.swift:59:        XCTAssertEqual(threads[0].recentFacts, ["N1."])
+Tests/MaxMiStoreTests/QueryAPITests.swift:65:        let threads = try store.recentThreads(limit: 10)
+Tests/MaxMiStoreTests/QueryAPITests.swift:66:        XCTAssertEqual(threads.count, 1)
+Tests/MaxMiStoreTests/QueryAPITests.swift:67:        XCTAssertTrue(threads[0].recentFacts.isEmpty)
+Tests/MaxMiStoreTests/MarkExtractedTests.swift:2:import GRDB
+Tests/MaxMiStoreTests/MarkExtractedTests.swift:59:            XCTAssertEqual(try String.fetchOne(d, sql: "SELECT extract_status FROM versions"), "pending")
+Tests/MaxMiStoreTests/MarkExtractedTests.swift:67:        let tid = try db.dbQueue.read { try String.fetchOne($0, sql: "SELECT id FROM threads")! }
+Tests/MaxMiStoreTests/MarkExtractedTests.swift:75:            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM derivatives"), 3)
+Tests/MaxMiCaptureTests/Fixtures/chrome-article.json:2:  "role": "AXWindow", "value": null, "title": "How SQLite Works", "url": null, "frame": {"x":0,"y":0,"width":1440,"height":900}, "focused": false,
+Tests/MaxMiCaptureTests/Fixtures/chrome-article.json:8:      {"role": "AXStaticText", "value": "Architecture of SQLite", "title": null, "url": null, "frame": {"x":40,"y":80,"width":400,"height":28}, "focused": false, "children": []},
+Sources/MaxMiStore/MeetingStore.swift:2:import GRDB
+Sources/MaxMiStore/MeetingStore.swift:32:        let storedContent = try cipher.encrypt(transcript)
+Sources/MaxMiStore/MeetingStore.swift:37:                INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
+Sources/MaxMiStore/MeetingStore.swift:42:                INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status, metadata)
+Sources/MaxMiStore/MeetingStore.swift:69:            if let vid = rec.versionID, let enc = try String.fetchOne(d, sql: "SELECT content FROM versions WHERE id=?", arguments: [vid]) {
+Sources/MaxMiStore/MeetingStore.swift:72:            let facts = try String.fetchAll(d, sql: "SELECT content FROM derivatives WHERE thread_id=?", arguments: [rec.threadID])
+Sources/MaxMiStore/MeetingStore.swift:84:                JOIN derivatives dv ON dv.id = e.derivative_id
+Sources/MaxMiStore/QueryAPI.swift:2:import GRDB
+Sources/MaxMiStore/QueryAPI.swift:30:                JOIN derivatives dv ON dv.id = e.derivative_id
+Sources/MaxMiStore/QueryAPI.swift:31:                JOIN threads t ON t.id = dv.thread_id
+Sources/MaxMiStore/QueryAPI.swift:50:            let threads = try Row.fetchAll(d, sql: """
+Sources/MaxMiStore/QueryAPI.swift:52:                FROM threads ORDER BY updated_at DESC LIMIT ?
+Sources/MaxMiStore/QueryAPI.swift:54:            return try threads.map { t in
+Sources/MaxMiStore/QueryAPI.swift:56:                    SELECT content FROM derivatives WHERE thread_id = ?
+Sources/MaxMiStore/QueryAPI.swift:66:        try db.dbQueue.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM derivatives") ?? 0 }
+Sources/MaxMiStore/QueryAPI.swift:72:            guard let tid = try String.fetchOne($0, sql: "SELECT id FROM threads WHERE source_key = ?", arguments: [key]) else {
+Sources/MaxMiMCP/Tools.swift:12:            ["name": "list_active_threads",
+Sources/MaxMiMCP/Tools.swift:13:             "description": "Recently viewed pages/threads with their latest memory facts, as markdown.",
+Sources/MaxMiMCP/Tools.swift:15:                             "properties": ["limit": ["type": "number", "description": "Max threads (default 10, max 20)"]],
+Sources/MaxMiMCP/Tools.swift:42:        case "list_active_threads":
+Sources/MaxMiStore/StoreAPI.swift:2:import GRDB
+Sources/MaxMiStore/StoreAPI.swift:64:        let storedContent = try cipher.encrypt(input.content)
+Sources/MaxMiStore/StoreAPI.swift:69:                sql: "SELECT id, last_tree_hash FROM threads WHERE source_app=? AND source_key=?",
+Sources/MaxMiStore/StoreAPI.swift:75:                try d.execute(sql: "UPDATE threads SET source_title=?, last_tree_hash=?, updated_at=? WHERE id=?",
+Sources/MaxMiStore/StoreAPI.swift:80:                    INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
+Sources/MaxMiStore/StoreAPI.swift:92:            // 2. Freeze-then-create: seal mutable versions from past hours.
+Sources/MaxMiStore/StoreAPI.swift:93:            try d.execute(sql: "UPDATE versions SET is_frozen=1 WHERE thread_id=? AND is_frozen=0 AND hour_bucket<>?",
+Sources/MaxMiStore/StoreAPI.swift:97:            if let vid = try String.fetchOne(d, sql: "SELECT id FROM versions WHERE thread_id=? AND hour_bucket=?",
+Sources/MaxMiStore/StoreAPI.swift:100:                    UPDATE versions SET content=?, content_hash=?, word_count=?, committed_at=?,
+Sources/MaxMiStore/StoreAPI.swift:107:                    INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status)
+Sources/MaxMiStore/StoreAPI.swift:125:                       (SELECT p.content FROM versions p
+Sources/MaxMiStore/StoreAPI.swift:128:                FROM versions v JOIN threads t ON t.id = v.thread_id
+Sources/MaxMiStore/StoreAPI.swift:132:                    SELECT 1 FROM retry_queue r
+Sources/MaxMiStore/StoreAPI.swift:148:            try d.execute(sql: "UPDATE versions SET extract_status='completed' WHERE id=? AND content_hash=?",
+Sources/MaxMiStore/StoreAPI.swift:156:            try d.execute(sql: "UPDATE versions SET extract_status='failed' WHERE id=?", arguments: [versionID])
+Sources/MaxMiStore/StoreAPI.swift:166:                let storedContent = try cipher.encrypt(fact)
+Sources/MaxMiStore/StoreAPI.swift:168:                    INSERT OR IGNORE INTO derivatives (id, thread_id, version_id, content, content_hash, committed_at, embedding_status)
+Sources/MaxMiStore/StoreAPI.swift:179:            try d.execute(sql: "UPDATE derivatives SET embedding_status='completed' WHERE id=?", arguments: [derivativeID])
+Sources/MaxMiStore/StoreAPI.swift:185:            try Row.fetchAll(d, sql: "SELECT id, content FROM derivatives WHERE version_id=? AND embedding_status='pending'",
+Sources/MaxMiStore/StoreAPI.swift:194:                SELECT id, attempts FROM retry_queue
+Sources/MaxMiStore/StoreAPI.swift:200:                try d.execute(sql: "UPDATE retry_queue SET attempts=?, next_attempt_at=?, last_error=? WHERE id=?",
+Sources/MaxMiStore/StoreAPI.swift:204:                    INSERT INTO retry_queue (id, kind, version_id, derivative_id, attempts, next_attempt_at, last_error)
+Sources/MaxMiStore/StoreAPI.swift:213:            try Row.fetchAll(d, sql: "SELECT * FROM retry_queue WHERE next_attempt_at <= ? ORDER BY next_attempt_at",
+Sources/MaxMiStore/StoreAPI.swift:220:        try db.dbQueue.write { try $0.execute(sql: "DELETE FROM retry_queue WHERE id=?", arguments: [id]) }
+Sources/MaxMiStore/PauseSettings.swift:2:import GRDB
+Sources/MaxMiStore/PauseSettings.swift:7:    public func pausedThreads() throws -> Set<String> { try readSet("paused_threads") }
+Sources/MaxMiStore/PauseSettings.swift:13:        try mutateSet("paused_threads", element: sourceKey, insert: paused, nowMs: nowMs)
+Sources/MaxMiMCP/KeychainKeyStore.swift:8:// LOGIN KEYCHAIN SHARING: Both binaries (MaxMi.app + maxmi-mcp) share the encryption
+Sources/MaxMiStore/VectorIndex.swift:2:import GRDB
+Sources/MaxMiStore/Backfill.swift:2:import GRDB
+Sources/MaxMiStore/Backfill.swift:8:            try String.fetchOne($0, sql: "SELECT value FROM settings WHERE key='content_encrypted'") == "true"
+Sources/MaxMiStore/Backfill.swift:16:    public func encryptExistingContent(batchSize: Int = 200, nowMs: EpochMs) throws -> Int {
+Sources/MaxMiStore/Backfill.swift:19:        for table in ["versions", "derivatives"] {
+Sources/MaxMiStore/Backfill.swift:21:                let encrypted: Int = try db.dbQueue.write { d in
+Sources/MaxMiStore/Backfill.swift:26:                        let enc = try cipher.encrypt(r["content"])
+Sources/MaxMiStore/Backfill.swift:32:                total += encrypted
+Sources/MaxMiStore/Backfill.swift:33:                FileHandle.standardError.write(Data("MaxMi backfill: \(table) +\(encrypted)\n".utf8))
+Sources/MaxMiStore/Backfill.swift:34:                if encrypted < batchSize { break }
+Sources/MaxMiStore/Backfill.swift:38:            try d.execute(sql: "INSERT OR REPLACE INTO settings VALUES ('content_encrypted','true',?)",
+Sources/CWhisper/ggml-backend.c:729:    int n_threads;
+Sources/CWhisper/ggml-backend.c:766:    cpu_plan->cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads);
+Sources/CWhisper/ggml-backend.c:803:    struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads);
+Sources/CWhisper/ggml-backend.c:871:    ctx->n_threads           = GGML_DEFAULT_N_THREADS;
+Sources/CWhisper/ggml-backend.c:895:void ggml_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads) {
+Sources/CWhisper/ggml-backend.c:899:    ctx->n_threads = n_threads;
+Sources/MaxMiStore/Database.swift:2:import GRDB
+Sources/MaxMiStore/Database.swift:3:import CSQLiteVec
+Sources/MaxMiStore/Database.swift:28:            // Must be outside transaction (GRDB starts a deferred transaction in .write).
+Sources/MaxMiStore/Migrations.swift:1:import GRDB
+Sources/MaxMiStore/Migrations.swift:8:            CREATE TABLE threads (
+Sources/MaxMiStore/Migrations.swift:18:            CREATE TABLE versions (
+Sources/MaxMiStore/Migrations.swift:20:              thread_id      TEXT NOT NULL REFERENCES threads(id),
+Sources/MaxMiStore/Migrations.swift:30:            CREATE INDEX idx_versions_thread ON versions(thread_id);
+Sources/MaxMiStore/Migrations.swift:31:            CREATE TABLE derivatives (
+Sources/MaxMiStore/Migrations.swift:33:              thread_id        TEXT NOT NULL REFERENCES threads(id),
+Sources/MaxMiStore/Migrations.swift:34:              version_id       TEXT NOT NULL REFERENCES versions(id),
+Sources/MaxMiStore/Migrations.swift:41:            CREATE INDEX idx_derivatives_version ON derivatives(version_id);
+Sources/MaxMiStore/Migrations.swift:42:            CREATE TABLE retry_queue (
+Sources/MaxMiStore/Migrations.swift:51:            CREATE INDEX idx_retry_due ON retry_queue(next_attempt_at);
+Sources/MaxMiStore/Migrations.swift:52:            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+Sources/MaxMiStore/Migrations.swift:53:            CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL);
+Sources/MaxMiStore/Migrations.swift:64:            CREATE TABLE message_fingerprints (
+Sources/MaxMiStore/Migrations.swift:66:              thread_id    TEXT NOT NULL REFERENCES threads(id),
+Sources/MaxMiStore/Migrations.swift:73:            try db.execute(sql: "ALTER TABLE versions ADD COLUMN metadata TEXT;")
+Sources/MaxMiStore/Migrations.swift:75:            CREATE TABLE meetings (
+Sources/MaxMiStore/Migrations.swift:77:              thread_id    TEXT NOT NULL REFERENCES threads(id),
+Sources/MaxMiStore/Migrations.swift:78:              version_id   TEXT REFERENCES versions(id),
+Sources/MaxMiMCP/MemoryQueries.swift:19:    let relay: any MemoryRelay
+Sources/MaxMiMCP/MemoryQueries.swift:25:    public init(store: Store, relay: any MemoryRelay,
+Sources/MaxMiMCP/MemoryQueries.swift:53:                    ? "Nothing sufficiently similar. Try different wording, or list_active_threads for recent activity."
+Sources/MaxMiMCP/MemoryQueries.swift:94:            let threads = try store.recentThreads(limit: k)
+Sources/MaxMiMCP/MemoryQueries.swift:95:            guard !threads.isEmpty else { return ToolResult(text: Self.noDBText) }
+Sources/MaxMiMCP/MemoryQueries.swift:96:            var md = "## Recently active threads\n"
+Sources/MaxMiMCP/MemoryQueries.swift:97:            for t in threads {
+Sources/MaxMiCapture/DiscordParser.swift:10:/// acceptable best-effort (the ThreadKeyDeriver + fingerprint dedup keep threads clean regardless).
+Sources/MaxMiCapture/FocusObserver.swift:19:public final class FocusObserver {
+Sources/MaxMiCapture/FocusObserver.swift:103:            let me = Unmanaged<FocusObserver>.fromOpaque(refcon).takeUnretainedValue()
+Sources/CWhisper/whisper.cpp:162:                         int   n_threads,
+Sources/CWhisper/whisper.cpp:165:    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
+Sources/CWhisper/whisper.cpp:181:                       int   n_threads) {
+Sources/CWhisper/whisper.cpp:183:        ggml_backend_cpu_set_n_threads(backend, n_threads);
+Sources/CWhisper/whisper.cpp:187:        ggml_backend_metal_set_n_cb(backend, n_threads);
+Sources/CWhisper/whisper.cpp:2215://   - n_threads:  number of threads to use
+Sources/CWhisper/whisper.cpp:2222:              const int   n_threads,
+Sources/CWhisper/whisper.cpp:2266:            if (!ggml_graph_compute_helper(wstate.backend, gf, n_threads)) {
+Sources/CWhisper/whisper.cpp:2289:        if (!ggml_graph_compute_helper(wstate.backend, gf, n_threads)) {
+Sources/CWhisper/whisper.cpp:2305:        if (!ggml_graph_compute_helper(wstate.backend, gf, n_threads)) {
+Sources/CWhisper/whisper.cpp:2705://   - n_threads:  number of threads to use
+Sources/CWhisper/whisper.cpp:2714:              const int   n_threads,
+Sources/CWhisper/whisper.cpp:2806:        if (!ggml_graph_compute_helper(wstate.backend, gf, n_threads)) {
+Sources/CWhisper/whisper.cpp:2973:                                              int n_samples, int frame_size, int frame_step, int n_threads,
+Sources/CWhisper/whisper.cpp:2984:    for (; i < std::min(n_samples / frame_step + 1, mel.n_len); i += n_threads) {
+Sources/CWhisper/whisper.cpp:3032:    for (; i < mel.n_len; i += n_threads) {
+Sources/CWhisper/whisper.cpp:3048:              const int   n_threads,
+Sources/CWhisper/whisper.cpp:3086:        std::vector<std::thread> workers(n_threads - 1);
+Sources/CWhisper/whisper.cpp:3087:        for (int iw = 0; iw < n_threads - 1; ++iw) {
+Sources/CWhisper/whisper.cpp:3090:                    n_samples + stage_2_pad, frame_size, frame_step, n_threads,
+Sources/CWhisper/whisper.cpp:3095:        log_mel_spectrogram_worker_thread(0, hann, samples_padded, n_samples + stage_2_pad, frame_size, frame_step, n_threads, filters, mel);
+Sources/CWhisper/whisper.cpp:3097:        for (int iw = 0; iw < n_threads - 1; ++iw) {
+Sources/CWhisper/whisper.cpp:3731:int whisper_pcm_to_mel_with_state(struct whisper_context * ctx, struct whisper_state * state, const float * samples, int n_samples, int n_threads) {
+Sources/CWhisper/whisper.cpp:3732:    if (!log_mel_spectrogram(*state, samples, n_samples, WHISPER_SAMPLE_RATE, WHISPER_N_FFT, WHISPER_HOP_LENGTH, ctx->model.filters.n_mel, n_threads, ctx->model.filters, false, state->mel)) {
+Sources/CWhisper/whisper.cpp:3740:int whisper_pcm_to_mel(struct whisper_context * ctx, const float * samples, int n_samples, int n_threads) {
+Sources/CWhisper/whisper.cpp:3741:    return whisper_pcm_to_mel_with_state(ctx, ctx->state, samples, n_samples, n_threads);
+Sources/CWhisper/whisper.cpp:3745:int whisper_pcm_to_mel_phase_vocoder_with_state(struct whisper_context * ctx, struct whisper_state * state, const float * samples, int n_samples, int n_threads) {
+Sources/CWhisper/whisper.cpp:3746:    if (!log_mel_spectrogram(*state, samples, n_samples, WHISPER_SAMPLE_RATE, 2 * WHISPER_N_FFT, 2 * WHISPER_HOP_LENGTH, ctx->model.filters.n_mel, n_threads, ctx->model.filters, false, state->mel)) {
+Sources/CWhisper/whisper.cpp:3755:int whisper_pcm_to_mel_phase_vocoder(struct whisper_context * ctx, const float * samples, int n_samples, int n_threads) {
+Sources/CWhisper/whisper.cpp:3756:    return whisper_pcm_to_mel_phase_vocoder_with_state(ctx, ctx->state, samples, n_samples, n_threads);
+Sources/CWhisper/whisper.cpp:3797:int whisper_encode_with_state(struct whisper_context * ctx, struct whisper_state * state, int offset, int n_threads) {
+Sources/CWhisper/whisper.cpp:3798:    if (!whisper_encode_internal(*ctx, *state, offset, n_threads, nullptr, nullptr)) {
+Sources/CWhisper/whisper.cpp:3806:int whisper_encode(struct whisper_context * ctx, int offset, int n_threads) {
+Sources/CWhisper/whisper.cpp:3807:    if (!whisper_encode_internal(*ctx, *ctx->state, offset, n_threads, nullptr, nullptr)) {
+Sources/CWhisper/whisper.cpp:3815:int whisper_decode_with_state(struct whisper_context * ctx, struct whisper_state * state, const whisper_token * tokens, int n_tokens, int n_past, int n_threads) {
+Sources/CWhisper/whisper.cpp:3820:    if (!whisper_decode_internal(*ctx, *state, state->batch, n_threads, false, nullptr, nullptr)) {
+Sources/CWhisper/whisper.cpp:3828:int whisper_decode(struct whisper_context * ctx, const whisper_token * tokens, int n_tokens, int n_past, int n_threads) {
+Sources/CWhisper/whisper.cpp:3834:    return whisper_decode_with_state(ctx, ctx->state, tokens, n_tokens, n_past, n_threads);
+Sources/CWhisper/whisper.cpp:3905:                           int   n_threads,
+Sources/CWhisper/whisper.cpp:3920:    if (whisper_encode_with_state(ctx, state, seek, n_threads) != 0) {
+Sources/CWhisper/whisper.cpp:3927:    if (whisper_decode_with_state(ctx, state, prompt.data(), prompt.size(), 0, n_threads) != 0) {
+Sources/CWhisper/whisper.cpp:3979:                           int   n_threads,
+Sources/CWhisper/whisper.cpp:3981:    return whisper_lang_auto_detect_with_state(ctx, ctx->state, offset_ms, n_threads, lang_probs);
+Sources/CWhisper/whisper.cpp:4647:        /*.n_threads         =*/ std::min(4, (int32_t) std::thread::hardware_concurrency()),
+Sources/CWhisper/whisper.cpp:4770:                               int   n_threads);
+Sources/CWhisper/whisper.cpp:5347:            if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
+Sources/CWhisper/whisper.cpp:5358:        const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
+Sources/CWhisper/whisper.cpp:5545:        if (!whisper_encode_internal(*ctx, *state, seek, params.n_threads, params.abort_callback, params.abort_callback_user_data)) {
+Sources/CWhisper/whisper.cpp:5636:                if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
+Sources/CWhisper/whisper.cpp:5672:                // TODO: avoid memory allocations, optimize, avoid threads?
+Sources/CWhisper/whisper.cpp:5715:                    const int n_threads = std::min(params.n_threads, n_decoders_cur);
+Sources/CWhisper/whisper.cpp:5717:                    if (n_threads == 1) {
+Sources/CWhisper/whisper.cpp:5720:                        std::vector<std::thread> threads(n_threads - 1);
+Sources/CWhisper/whisper.cpp:5722:                        for (int t = 0; t < n_threads - 1; ++t) {
+Sources/CWhisper/whisper.cpp:5723:                            threads[t] = std::thread(process);
+Sources/CWhisper/whisper.cpp:5728:                        for (int t = 0; t < n_threads - 1; ++t) {
+Sources/CWhisper/whisper.cpp:5729:                            threads[t].join();
+Sources/CWhisper/whisper.cpp:5936:                    if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
+Sources/CWhisper/whisper.cpp:5943:                    // TODO: avoid memory allocations, optimize, avoid threads?
+Sources/CWhisper/whisper.cpp:5965:                        const int n_threads = std::min(params.n_threads, n_decoders_cur);
+Sources/CWhisper/whisper.cpp:5967:                        if (n_threads == 1) {
+Sources/CWhisper/whisper.cpp:5970:                            std::vector<std::thread> threads(n_threads - 1);
+Sources/CWhisper/whisper.cpp:5972:                            for (int t = 0; t < n_threads - 1; ++t) {
+Sources/CWhisper/whisper.cpp:5973:                                threads[t] = std::thread(process);
+Sources/CWhisper/whisper.cpp:5978:                            for (int t = 0; t < n_threads - 1; ++t) {
+Sources/CWhisper/whisper.cpp:5979:                                threads[t].join();
+Sources/CWhisper/whisper.cpp:6186:                            ctx, state, params, result_all.size() - n_segments, n_segments, seek, n_frames, 7, params.n_threads);
+Sources/CWhisper/whisper.cpp:6226:    // while the other threads will process the remaining chunks
+Sources/CWhisper/whisper.cpp:6418:WHISPER_API int whisper_bench_memcpy(int n_threads) {
+Sources/CWhisper/whisper.cpp:6419:    fputs(whisper_bench_memcpy_str(n_threads), stderr);
+Sources/CWhisper/whisper.cpp:6423:WHISPER_API const char * whisper_bench_memcpy_str(int n_threads) {
+Sources/CWhisper/whisper.cpp:6431:    size_t arr  = n_threads > 0 ? 1024llu : n_threads; // trick to avoid compiler optimizations
+Sources/CWhisper/whisper.cpp:6510:    for (int32_t k = 1; k <= n_threads; k++) {
+Sources/CWhisper/whisper.cpp:6533:        std::vector<std::thread> threads(k - 1);
+Sources/CWhisper/whisper.cpp:6535:            threads[th] = std::thread(helper, th);
+Sources/CWhisper/whisper.cpp:6541:            threads[th].join();
+Sources/CWhisper/whisper.cpp:6566:WHISPER_API int whisper_bench_ggml_mul_mat(int n_threads) {
+Sources/CWhisper/whisper.cpp:6567:    fputs(whisper_bench_ggml_mul_mat_str(n_threads), stderr);
+Sources/CWhisper/whisper.cpp:6571:WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
+Sources/CWhisper/whisper.cpp:6648:            ggml_graph_compute_helper(gf, work, n_threads, nullptr, nullptr);
+Sources/CWhisper/whisper.cpp:6653:                ggml_graph_compute_helper(gf, work, n_threads, nullptr, nullptr);
+Sources/CWhisper/whisper.cpp:7155:                               int   n_threads)
+Sources/CWhisper/whisper.cpp:7200:    if (!whisper_decode_internal(*ctx, *state, state->batch, n_threads, true, nullptr, nullptr)) {
+Sources/CWhisper/whisper.cpp:7261:    ggml_graph_compute_with_ctx(gctx, gf, n_threads);
+Sources/MaxMiCapture/URLKeyNormalizer.swift:4:/// doesn't fracture into dozens of threads when volatile state lives in the URL.
+Sources/MaxMiCapture/URLKeyNormalizer.swift:7:///   - Google Maps: /maps/@13.00,77.71,2550m/data=... changes every pan → 18 threads for one map
+Sources/MaxMiCapture/URLKeyNormalizer.swift:9:///   - Google Docs:  /document/d/<id>/edit?tab=t.abc → same doc, different tab → separate threads
+Sources/CWhisper/ggml-backend.h:102:    GGML_API           void ggml_backend_cpu_set_n_threads     (ggml_backend_t backend_cpu, int n_threads);
+Sources/CWhisper/coreml/whisper-decoder-impl.m:139:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/CWhisper/coreml/whisper-decoder-impl.m:154:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/CWhisper/include/ggml.h:69://       ggml_graph_compute_with_ctx(ctx, &gf, n_threads);
+Sources/CWhisper/include/ggml.h:619:        int n_threads;
+Sources/CWhisper/include/ggml.h:685:        // ith = thread index, nth = number of threads
+Sources/CWhisper/include/ggml.h:688:        // work buffer for all threads
+Sources/CWhisper/include/ggml.h:2006:    GGML_API struct ggml_cplan ggml_graph_plan            (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);
+Sources/CWhisper/include/ggml.h:2010:    GGML_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
+Sources/CWhisper/include/ggml.h:2080:        int n_threads;
+Sources/CWhisper/include/whisper.h:44:    // The following interface is thread-safe as long as the sample whisper_context is not used by multiple threads
+Sources/CWhisper/include/whisper.h:260:                               int   n_threads);
+Sources/CWhisper/include/whisper.h:267:                               int   n_threads);
+Sources/CWhisper/include/whisper.h:276:                           int   n_threads);
+Sources/CWhisper/include/whisper.h:283:                           int   n_threads);
+Sources/CWhisper/include/whisper.h:309:                               int   n_threads);
+Sources/CWhisper/include/whisper.h:315:                               int   n_threads);
+Sources/CWhisper/include/whisper.h:328:                               int   n_threads);
+Sources/CWhisper/include/whisper.h:336:                               int   n_threads);
+Sources/CWhisper/include/whisper.h:377:                               int   n_threads,
+Sources/CWhisper/include/whisper.h:384:                               int   n_threads,
+Sources/CWhisper/include/whisper.h:478:        int n_threads;
+Sources/CWhisper/include/whisper.h:659:    WHISPER_API int          whisper_bench_memcpy          (int n_threads);
+Sources/CWhisper/include/whisper.h:660:    WHISPER_API const char * whisper_bench_memcpy_str      (int n_threads);
+Sources/CWhisper/include/whisper.h:661:    WHISPER_API int          whisper_bench_ggml_mul_mat    (int n_threads);
+Sources/CWhisper/include/whisper.h:662:    WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads);
+Sources/CWhisper/ggml-metal.metal:54:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:103:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:152:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:380:        uint    ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:483:        uint    ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:632:        uint   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:686:        uint   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:740:        uint   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:1671:        uint3 tptg[[threads_per_threadgroup]],
+Sources/CWhisper/ggml-metal.metal:1706:        uint3 tptg[[threads_per_threadgroup]],
+Sources/CWhisper/ggml-metal.metal:1795:        uint3   ntg[[threads_per_threadgroup]]);
+Sources/CWhisper/ggml-metal.metal:1815:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:1858:    uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:1897:    uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:1934:    uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:1951:    uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:2078:        uint3    ntg[[threads_per_threadgroup]],
+Sources/CWhisper/ggml-metal.metal:2116:        uint3    ntg[[threads_per_threadgroup]],
+Sources/CWhisper/ggml-metal.metal:2449:        uint3    ntg[[threads_per_threadgroup]],
+Sources/CWhisper/ggml-metal.metal:2571:                    // reduce the results from the threads in the simdgroup
+Sources/CWhisper/ggml-metal.metal:2715:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:2756:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:2797:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:2840:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:2882:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:2940:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:3007:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:3073:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:3146:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:3233:        uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:3318:    uint3   ntg[[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:6043:        uint3                tptg [[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:6076:        uint3                tptg [[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:6104:        uint3                tptg [[threads_per_threadgroup]]) {
+Sources/CWhisper/ggml-metal.metal:6132:        uint3                tptg [[threads_per_threadgroup]]) {
+Sources/CWhisper/coreml/whisper-encoder-impl.h:89:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/CWhisper/coreml/whisper-encoder-impl.h:99:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/CWhisper/coreml/whisper-encoder-impl.m:135:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/CWhisper/coreml/whisper-encoder-impl.m:150:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/CWhisper/coreml/whisper-decoder-impl.h:92:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/CWhisper/coreml/whisper-decoder-impl.h:102:    Model loading may take time when the model content is not immediately available (e.g. encrypted model). Use this factory method especially when the caller is on the main thread.
+Sources/MaxMiCapture/GenericAXParser.swift:11:        guard !content.isEmpty else { return nil }   // no empty threads
+Sources/CWhisper/ggml-quants.c:6508:    // write vectorized versions for AVX, ARM_NEON, etc.
+Sources/CWhisper/ggml-metal.m:1009:                        [encoder dispatchThreadgroups:MTLSizeMake(ne1, ne2, ne3) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1081:                            [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1085:                            [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1133:                            [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1170:                        [encoder dispatchThreadgroups:MTLSizeMake(ne11, ne12, ne13) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1195:                        [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1214:                        [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1231:                                [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1243:                                [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1255:                                [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1274:                                [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1293:                                [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1312:                                [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1332:                        [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1368:                        [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1433:                        [encoder dispatchThreadgroups:MTLSizeMake(ne01*ne02*ne03, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1455:                            [encoder dispatchThreadgroups:MTLSizeMake(ne00*ne01*ne02/8, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1458:                            [encoder dispatchThreadgroups:MTLSizeMake(ne00, ne01, ne02) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1560:                            [encoder dispatchThreadgroups:MTLSizeMake( (ne11 + 31)/32, (ne01 + 63)/64, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+Sources/CWhisper/ggml-metal.m:1745:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1750:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1755:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1760:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1763:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1767:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 1)/2, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1769:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1773:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1776:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 1)/2, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1779:                                [encoder dispatchThreadgroups:MTLSizeMake(ne01, ny, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:1886:                            [encoder dispatchThreadgroups:MTLSizeMake((ne21 + 31)/32, (ne01 + 63)/64, n_as) threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2070:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2075:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2080:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2085:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2088:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2092:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 1)/2, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2094:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2098:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 3)/4, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2101:                                [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 1)/2, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2104:                                [encoder dispatchThreadgroups:MTLSizeMake(ne01, ny, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
+Sources/CWhisper/ggml-metal.m:2151:                        [encoder dispatchThreadgroups:MTLSizeMake(ne10, ne11, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2178:                        [encoder dispatchThreadgroups:MTLSizeMake(nrows, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2212:                        [encoder dispatchThreadgroups:MTLSizeMake(n_groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2233:                        [encoder dispatchThreadgroups:MTLSizeMake(nrows, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2294:                        [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2350:                        [encoder dispatchThreadgroups:MTLSizeMake(IC, OH, OW) threadsPerThreadgroup:MTLSizeMake(N, KH, KW)];
+Sources/CWhisper/ggml-metal.m:2383:                        [encoder dispatchThreadgroups:MTLSizeMake(ne1, ne2, ne3) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2413:                        [encoder dispatchThreadgroups:MTLSizeMake(ne1, ne2, ne3) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2435:                        [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2457:                        [encoder dispatchThreadgroups:MTLSizeMake(ne00, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2493:                        [encoder dispatchThreadgroups:MTLSizeMake(1, nrows, 1) threadsPerThreadgroup:MTLSizeMake(ne00_padded, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2511:                        [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+Sources/CWhisper/ggml-metal.m:2659:                            [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+Sources/CWhisper/ggml-metal.m:2684:                            [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+Sources/CWhisper/ggml-metal.m:2745:                        [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+Sources/CWhisper/ggml.c:2422:    uint32_t cpus[GGML_NUMA_MAX_CPUS]; // hardware threads on this node
+Sources/CWhisper/ggml.c:2430:    uint32_t total_cpus; // hardware threads on system
+Sources/CWhisper/ggml.c:2457:        // wait for other threads to finish
+Sources/CWhisper/ggml.c:2530:#       define SYS_getcpu SYS_get_cpu // some older glibc versions use this name
+Sources/CWhisper/ggml.c:7387:    const int nth = params->nth; // number of threads
+Sources/CWhisper/ggml.c:7418:    const int nth = params->nth; // number of threads
+Sources/CWhisper/ggml.c:7691:    const int nth = params->nth; // number of threads
+Sources/CWhisper/ggml.c:8051:    const int nth = params->nth; // number of threads
+Sources/CWhisper/ggml.c:8380:    const int nth = params->nth; // number of threads
+Sources/CWhisper/ggml.c:9475:        // memcpy needs to be synchronized across threads to avoid race conditions.
+Sources/CWhisper/ggml.c:12003:    // threads with no work simply yield (not sure if it helps)
+Sources/CWhisper/ggml.c:12200:        // threads with no work simply yield (not sure if it helps)
+Sources/CWhisper/ggml.c:12319:        if (params->ith != 0) { // All threads other than the first do no work.
+Sources/CWhisper/ggml.c:12697:        // memcpy needs to be synchronized across threads to avoid race conditions.
+Sources/CWhisper/ggml.c:13294:        // memcpy needs to be synchronized across threads to avoid race conditions.
+Sources/CWhisper/ggml.c:19082:            // run thread on node_num thread_n / (threads per node)
+Sources/CWhisper/ggml.c:19150:    const int n_threads;
+Sources/CWhisper/ggml.c:19153:    atomic_int n_active;  // num active threads
+Sources/CWhisper/ggml.c:19177:static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads, int n_cur_threads) {
+Sources/CWhisper/ggml.c:19193:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19219:                case GGML_UNARY_OP_HARDSWISH: // to opt for multiple threads
+Sources/CWhisper/ggml.c:19220:                case GGML_UNARY_OP_HARDSIGMOID: // to opt for multiple threads
+Sources/CWhisper/ggml.c:19229:                        n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19244:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19248:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19254:                //n_tasks = MIN(n_threads, MAX(1, nr0/128));
+Sources/CWhisper/ggml.c:19259:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19263:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19267:                // FIXME: the cost of launching additional threads decreases performance with GPU offloading
+Sources/CWhisper/ggml.c:19268:                //n_tasks = MIN(n_threads, ggml_nelements(node->src[1]));
+Sources/CWhisper/ggml.c:19269:                n_tasks = MIN(n_cur_threads, ggml_nelements(node->src[1]));
+Sources/CWhisper/ggml.c:19290:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19298:                n_tasks = MIN(n_threads, ggml_nrows(node->src[0]));
+Sources/CWhisper/ggml.c:19302:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19306:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19310:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19319:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19323:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19327:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19331:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19335:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19340:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19344:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19348:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19353:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19371:                    n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19373:                    n_tasks = MIN(p.n_tasks, n_threads);
+Sources/CWhisper/ggml.c:19381:                    n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19383:                    n_tasks = MIN(p.n_tasks, n_threads);
+Sources/CWhisper/ggml.c:19391:                    n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19393:                    n_tasks = MIN(p.n_tasks, n_threads);
+Sources/CWhisper/ggml.c:19398:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19402:                n_tasks = n_threads;
+Sources/CWhisper/ggml.c:19430:    // wait for other threads to finish
+Sources/CWhisper/ggml.c:19444:    // wait for other threads to finish
+Sources/CWhisper/ggml.c:19463:    const int   n_threads   = state->shared->n_threads;
+Sources/CWhisper/ggml.c:19478:            // all other threads are finished and spinning
+Sources/CWhisper/ggml.c:19492:                    params.nth = ggml_get_n_tasks(node, n_threads, state->shared->n_threads);
+Sources/CWhisper/ggml.c:19502:                const int n_tasks = ggml_get_n_tasks(node, n_threads, state->shared->n_threads);
+Sources/CWhisper/ggml.c:19516:                    // TODO: maybe push node_n to the atomic but if other threads see n_tasks is 1,
+Sources/CWhisper/ggml.c:19537:            atomic_store(&state->shared->n_active,  n_threads);
+Sources/CWhisper/ggml.c:19550:        const int n_tasks = ggml_get_n_tasks(node, n_threads, state->shared->n_threads);
+Sources/CWhisper/ggml.c:19568:            atomic_store(&state->shared->n_active,  n_threads);
+Sources/CWhisper/ggml.c:19588:            atomic_store(&state->shared->n_active,  n_threads);
+Sources/CWhisper/ggml.c:19599:struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threads) {
+Sources/CWhisper/ggml.c:19600:    if (n_threads <= 0) {
+Sources/CWhisper/ggml.c:19601:        n_threads = GGML_DEFAULT_N_THREADS;
+Sources/CWhisper/ggml.c:19615:        const int n_tasks = ggml_get_n_tasks(node, n_threads, 1);
+Sources/CWhisper/ggml.c:19801:        work_size += CACHE_LINE_SIZE*(n_threads - 1);
+Sources/CWhisper/ggml.c:19804:    cplan.n_threads = MIN(max_tasks, n_threads);
+Sources/CWhisper/ggml.c:19814:        GGML_ASSERT(cplan->n_threads > 0);
+Sources/CWhisper/ggml.c:19821:    const int n_threads = cplan->n_threads;
+Sources/CWhisper/ggml.c:19828:        /*.n_threads               =*/ n_threads,
+Sources/CWhisper/ggml.c:19829:        /*.n_active                =*/ n_threads,
+Sources/CWhisper/ggml.c:19835:    struct ggml_compute_state * workers = alloca(sizeof(struct ggml_compute_state)*n_threads);
+Sources/CWhisper/ggml.c:19838:    if (n_threads > 1) {
+Sources/CWhisper/ggml.c:19839:        for (int j = 1; j < n_threads; ++j) {
+Sources/CWhisper/ggml.c:19868:    if (n_threads > 1) {
+Sources/CWhisper/ggml.c:19869:        for (int j = 1; j < n_threads; j++) {
+Sources/CWhisper/ggml.c:19897:enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
+Sources/CWhisper/ggml.c:19898:    struct ggml_cplan cplan = ggml_graph_plan(cgraph, n_threads);
+Sources/CWhisper/ggml.c:20709:    struct ggml_cplan cplan = ggml_graph_plan(gb, params.n_threads);
+Sources/CWhisper/ggml.c:21056:    struct ggml_cplan cplan = ggml_graph_plan(gb, params.n_threads);
+Sources/CWhisper/ggml.c:21295:                    .n_threads  = 1, // FIXME: GGML_DEFAULT_N_THREADS ?
+Sources/CWhisper/ggml.c:21326:                    .n_threads  = 1,
+
+exec
+/bin/zsh -lc "sed -n '1,260p' Sources/MaxMiStore/Migrations.swift && sed -n '1,220p' Sources/MaxMi/AppWiring.swift && sed -n '1,180p' Sources/MaxMi/FocusObserver.swift 2>/dev/null || true && sed -n '1,160p' Sources/MaxMiCore/Protocols.swift && sed -n '1,240p' Sources/MaxMiRelay/GeminiClient.swift && sed -n '1,180p' Sources/MaxMi/MenuBarController.swift" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+import GRDB
+
+enum Migrations {
+    static var migrator: DatabaseMigrator {
+        var m = DatabaseMigrator()
+        m.registerMigration("v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE threads (
+              id             TEXT PRIMARY KEY,
+              source_app     TEXT NOT NULL,
+              source_key     TEXT NOT NULL,
+              source_title   TEXT,
+              last_tree_hash TEXT,
+              created_at     INTEGER NOT NULL,
+              updated_at     INTEGER NOT NULL,
+              UNIQUE(source_app, source_key)
+            );
+            CREATE TABLE versions (
+              id             TEXT PRIMARY KEY,
+              thread_id      TEXT NOT NULL REFERENCES threads(id),
+              hour_bucket    INTEGER NOT NULL,
+              content        TEXT NOT NULL,
+              content_hash   TEXT NOT NULL,
+              word_count     INTEGER NOT NULL DEFAULT 0,
+              is_frozen      INTEGER NOT NULL DEFAULT 0,
+              committed_at   INTEGER NOT NULL,
+              extract_status TEXT NOT NULL DEFAULT 'pending',
+              UNIQUE(thread_id, hour_bucket)
+            );
+            CREATE INDEX idx_versions_thread ON versions(thread_id);
+            CREATE TABLE derivatives (
+              id               TEXT PRIMARY KEY,
+              thread_id        TEXT NOT NULL REFERENCES threads(id),
+              version_id       TEXT NOT NULL REFERENCES versions(id),
+              content          TEXT NOT NULL,
+              content_hash     TEXT NOT NULL,
+              committed_at     INTEGER NOT NULL,
+              embedding_status TEXT NOT NULL DEFAULT 'pending',
+              UNIQUE(thread_id, content_hash)
+            );
+            CREATE INDEX idx_derivatives_version ON derivatives(version_id);
+            CREATE TABLE retry_queue (
+              id              TEXT PRIMARY KEY,
+              kind            TEXT NOT NULL,
+              version_id      TEXT,
+              derivative_id   TEXT,
+              attempts        INTEGER NOT NULL DEFAULT 0,
+              next_attempt_at INTEGER NOT NULL,
+              last_error      TEXT
+            );
+            CREATE INDEX idx_retry_due ON retry_queue(next_attempt_at);
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+            CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL);
+            """)
+            try db.execute(sql: """
+            CREATE VIRTUAL TABLE derivative_embeddings USING vec0(
+              derivative_id TEXT PRIMARY KEY,
+              embedding     FLOAT[1536]
+            );
+            """)
+        }
+        m.registerMigration("v2") { db in
+            try db.execute(sql: """
+            CREATE TABLE message_fingerprints (
+              fingerprint  TEXT PRIMARY KEY,
+              thread_id    TEXT NOT NULL REFERENCES threads(id),
+              seen_at      INTEGER NOT NULL
+            );
+            CREATE INDEX idx_fingerprints_thread ON message_fingerprints(thread_id);
+            """)
+        }
+        m.registerMigration("v3") { db in
+            try db.execute(sql: "ALTER TABLE versions ADD COLUMN metadata TEXT;")
+            try db.execute(sql: """
+            CREATE TABLE meetings (
+              id           TEXT PRIMARY KEY,
+              thread_id    TEXT NOT NULL REFERENCES threads(id),
+              version_id   TEXT REFERENCES versions(id),
+              app          TEXT NOT NULL,
+              title        TEXT,
+              started_at   INTEGER NOT NULL,
+              ended_at     INTEGER,
+              state        TEXT NOT NULL,
+              capture_mode TEXT NOT NULL,
+              transcription_status TEXT NOT NULL DEFAULT 'pending',
+              UNIQUE(version_id),
+              UNIQUE(thread_id)
+            );
+            CREATE INDEX idx_meetings_started ON meetings(started_at DESC);
+            """)
+        }
+        return m
+    }
+}
+import Foundation
+import AppKit
+import MaxMiCore
+import MaxMiStore
+import MaxMiCapture
+import MaxMiRelay
+import MaxMiMeetings
+
+/// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
+final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is internally serialized by GRDB's DatabaseQueue
+    let store: Store
+    init(store: Store) { self.store = store }
+
+    func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PipelineVersion] {
+        try store.pendingWork(nowMs: nowMs, idleThresholdMs: idleThresholdMs).map {
+            PipelineVersion(id: $0.id, threadID: $0.threadID, content: $0.content,
+                            contentHash: $0.contentHash, sourceApp: $0.sourceApp,
+                            sourceKey: $0.sourceKey, previousFrozenContent: $0.previousFrozenContent)
+        }
+    }
+    func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative] {
+        try store.insertDerivatives(versionID: versionID, threadID: threadID, facts: facts, nowMs: nowMs)
+            .map { PipelineDerivative(id: $0.id, content: $0.content) }
+    }
+    func pendingDerivatives(versionID: String) throws -> [PipelineDerivative] {
+        try store.pendingDerivatives(versionID: versionID).map { PipelineDerivative(id: $0.id, content: $0.content) }
+    }
+    func markExtracted(versionID: String, contentHashRead: String) throws -> Bool {
+        try store.markExtracted(versionID: versionID, contentHashRead: contentHashRead)
+    }
+    func markExtractFailed(versionID: String) throws { try store.markExtractFailed(versionID: versionID) }
+    func markEmbedded(derivativeID: String) throws { try store.markEmbedded(derivativeID: derivativeID) }
+    func insertEmbedding(derivativeID: String, vector: [Float]) throws {
+        try store.insertEmbedding(derivativeID: derivativeID, vector: vector)
+    }
+    func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws {
+        try store.enqueueRetry(kind: kind, versionID: versionID, derivativeID: derivativeID, error: error, nowMs: nowMs)
+    }
+    func dueRetries(nowMs: EpochMs) throws -> [(id: String, kind: String, versionID: String?, derivativeID: String?)] {
+        try store.dueRetries(nowMs: nowMs)
+    }
+    func clearRetry(id: String) throws { try store.clearRetry(id: id) }
+}
+
+@MainActor
+final class AppWiring {
+    let store: Store
+    let pipeline: CapturePipeline
+    var observer: FocusObserver?
+    let menuBar: MenuBarController
+    var pipelineTimer: Timer?
+    var paused = false
+    private(set) var captureCount = 0
+    let encryptionAvailable: Bool
+    let registry = ParserRegistry()
+    var recentApps: [(bundleID: String, name: String)] = []
+    var lastSourceKey: String?
+
+    // Meeting capture components
+    var meetingDetector: MeetingDetector?
+    var meetingSession: MeetingSession?
+    var rightLanePanel: RightLanePanel?
+    var modelStore: WhisperModelStore?
+
+    init() throws {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MaxMi", isDirectory: true)
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        // Spec §6/§9: keep plaintext memories out of Time Machine.
+        var dir = appSupport
+        var rv = URLResourceValues(); rv.isExcludedFromBackup = true
+        try? dir.setResourceValues(rv)
+
+        let config = EnvConfig.load(searchPaths: [
+            appSupport.appendingPathComponent(".env"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
+        ])
+        let db = try MaxMiDatabase(path: appSupport.appendingPathComponent("maxmi.db").path)
+        // Spec §6 ordering: key -> backfill -> capture. No key => capture stays paused
+        // and we never write plaintext post-M3 (spec §9).
+        let cipher: any FieldCipher
+        var encryptionAvailable = true
+        do {
+            cipher = AESGCMFieldCipher(keyData: try KeychainKeyStore.getOrCreate())
+        } catch {
+            NSLog("MaxMi: encryption key unavailable: \(error)")
+            // A cipher that throws on every operation: capture is paused below, but
+            // even a future write path that slips past the guard fails loudly and
+            // rolls back rather than writing plaintext-equivalent data (spec §9).
+            cipher = UnavailableCipher()
+            encryptionAvailable = false
+        }
+        store = Store(db: db, cipher: cipher)
+        self.encryptionAvailable = encryptionAvailable
+        let relay = GeminiClient(config: config)
+        pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
+        menuBar = MenuBarController()
+        menuBar.hasAPIKey = config.geminiAPIKey != nil
+    }
+
+    func start() {
+        menuBar.install(
+            onTogglePause: { [weak self] in self?.paused.toggle(); self?.menuBar.paused = self?.paused ?? false },
+            onQuit: { NSApp.terminate(nil) },
+            recentApps: { [weak self] in self?.recentApps ?? [] },
+            pausedApps: { [weak self] in (try? self?.store.pausedApps()) ?? [] },
+            onToggleAppPause: { [weak self] bundleID in
+                guard let self else { return }
+                let paused = (try? self.store.pausedApps().contains(bundleID)) ?? false
+                try? self.store.setAppPaused(bundleID, paused: !paused, nowMs: epochNowMs())
+            },
+            lastSourceKey: { [weak self] in self?.lastSourceKey },
+            onPauseCurrentThread: { [weak self] in
+                guard let self, let key = self.lastSourceKey else { return }
+                try? self.store.setThreadPaused(key, paused: true, nowMs: epochNowMs())
+            }
+        )
+        menuBar.encryptionAvailable = encryptionAvailable
+        guard encryptionAvailable else { return }          // capture paused per §9
+        do { try store.encryptExistingContent(nowMs: epochNowMs()) }   // §6: backfill before capture
+        catch { NSLog("MaxMi: backfill failed, will retry next launch: \(error)") }
+        guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
+        guard self.observer == nil else { return }  // prevent double-start
+        let observer = FocusObserver(
+            isCapturable: { [registry] bid in
+                // Capture-by-default: every app is capturable EXCEPT sensitive ones (System
+                // Settings, password managers, keychain, banking). Browsers and registered
+                // parsers always pass; everything else rides the generic fallback unless it's
+                // on the sensitive-app denylist. (Was an allowlist — too narrow, missed Cursor/etc.)
+                if Browser(rawValue: bid) != nil || registry.parser(for: bid) != nil { return true }
+                return !Denylist.isSensitiveApp(bid)
+            },
+            onCapture: { [weak self] app, pid in
+                self?.captureFrontmost(app: app, pid: pid)
+            }
+        )
+        observer.start()
+        self.observer = observer
+        // Pipeline sweep every 30s: picks up idle/frozen versions and due retries (spec §3a sweeper).
+        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.paused else { return }
+                await self.pipeline.tick()
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        pipelineTimer = t
+
+        // Meeting capture wiring — guarded by same availability as regular capture
+        wireMeetingCapture()
+    }
+
+    private func wireMeetingCapture() {
+        guard encryptionAvailable else { return }  // meetings also require encryption
+        guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }
+
+        // Create model store
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MaxMi", isDirectory: true)
+        let modelsDir = appSupport.appendingPathComponent("models", isDirectory: true)
+        let modelStore = WhisperModelStore(dir: modelsDir)
+        self.modelStore = modelStore
+
+        // Create right-lane panel
+        let panel = RightLanePanel()
+        self.rightLanePanel = panel
+
+        // Create persister
+        let persister = StoreMeetingPersister(store: store)
+
+        // Create session with all dependencies
+        let session = MeetingSession(
+            panel: panel,
+            persister: persister,
+            authorizer: MeetingPermissions(),
+            makeCapture: { AudioCapture(mixer: AudioMixer()) },
+            makeTranscriber: { WhisperTranscriber(modelURL: modelStore.modelURL) },
+            clock: SystemMeetingClock()
+        )
+        self.meetingSession = session
+
+        // Wire panel button callbacks
+        panel.onRecord = { [weak session] in
+            Task {
+                await session?.userAcceptedRecord()
+            }
+        }
+        panel.onSkip = { [weak session] in
+            Task {
+                await session?.userSkipped()
+            }
+        }
+        panel.onStop = { [weak session] in
+            Task {
+                await session?.userStopped()
+            }
+        }
+        panel.onKeep = { [weak session] in
+            Task {
+                await session?.userKeptRecording()
+            }
+        }
+        panel.onFinish = { [weak session] in
+            Task {
+                await session?.userStopped()
+            }
+        }
+
+        // Ensure whisper model before arming detector
+        Task { @MainActor in
+            panel.showPreparing()
+            do {
+                try await modelStore.ensureModel { @Sendable remoteURL in
+                    let (tempURL, _) = try await URLSession.shared.download(from: remoteURL)
+                    return tempURL
+                }
+                panel.hidePanel()  // Model ready, hide preparing UI
+
+                // Now start the detector
+                let detector = MeetingDetector()
+import Foundation
+
+public protocol MemoryRelay: Sendable {
+    func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String]
+    func embed(text: String) async throws -> [Float]
+}
+
+public enum RelayError: Error {
+    case notConfigured          // no API key
+    case network(underlying: Error)
+    case httpStatus(Int)        // 429/5xx -> retryable
+    case malformedResponse(String)
+
+    public var kind: String {
+        switch self {
+        case .notConfigured: return "notConfigured"
+        case .network: return "network"
+        case .httpStatus(let code): return "httpStatus(\(code))"
+        case .malformedResponse: return "malformedResponse"
+        }
+    }
+}
+
+public struct PipelineVersion: Sendable, Equatable {
+    public let id: String, threadID: String, content: String, contentHash: String
+    public let sourceApp: String, sourceKey: String
+    public let previousFrozenContent: String?
+    public init(id: String, threadID: String, content: String, contentHash: String,
+                sourceApp: String, sourceKey: String, previousFrozenContent: String?) {
+        self.id = id
+        self.threadID = threadID
+        self.content = content
+        self.contentHash = contentHash
+        self.sourceApp = sourceApp
+        self.sourceKey = sourceKey
+        self.previousFrozenContent = previousFrozenContent
+    }
+}
+
+public struct PipelineDerivative: Sendable, Equatable {
+    public let id: String, content: String
+    public init(id: String, content: String) {
+        self.id = id
+        self.content = content
+    }
+}
+
+public protocol MemoryStore: Sendable {
+    func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PipelineVersion]
+    func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative]
+    func pendingDerivatives(versionID: String) throws -> [PipelineDerivative]
+    func markExtracted(versionID: String, contentHashRead: String) throws -> Bool
+    func markExtractFailed(versionID: String) throws
+    func markEmbedded(derivativeID: String) throws
+    func insertEmbedding(derivativeID: String, vector: [Float]) throws
+    func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws
+    func dueRetries(nowMs: EpochMs) throws -> [(id: String, kind: String, versionID: String?, derivativeID: String?)]
+    func clearRetry(id: String) throws
+}
+import Foundation
+import MaxMiCore
+
+public final class GeminiClient: MemoryRelay {
+    let config: EnvConfig
+    let session: URLSession
+    let baseURL: URL
+
+    public init(config: EnvConfig, session: URLSession = .shared,
+                baseURL: URL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!) {
+        self.config = config; self.session = session; self.baseURL = baseURL
+    }
+
+    public func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String] {
+        let prompt = ExtractPrompt.build(newContent: newContent, previousContent: previousContent,
+                                         sourceApp: sourceApp, sourceKey: sourceKey)
+        let body: [String: Any] = [
+            "contents": [["parts": [["text": prompt]]]],
+            "generationConfig": ["temperature": 0.2, "responseMimeType": "application/json"],
+        ]
+        let data = try await post(path: "models/\(config.extractModel):generateContent", body: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let candidates = obj["candidates"] as? [[String: Any]],
+              let content = candidates.first?["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let text = parts.first?["text"] as? String else {
+            throw RelayError.malformedResponse(String(data: data.prefix(200), encoding: .utf8) ?? "")
+        }
+        return try JSONArrayParser.parse(text)
+    }
+
+    public func embed(text: String) async throws -> [Float] {
+        let body: [String: Any] = [
+            "model": "models/\(config.embedModel)",
+            "content": ["parts": [["text": text]]],
+            "outputDimensionality": config.embedDims,
+        ]
+        let data = try await post(path: "models/\(config.embedModel):embedContent", body: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let emb = obj["embedding"] as? [String: Any],
+              let values = emb["values"] as? [Double] else {
+            throw RelayError.malformedResponse(String(data: data.prefix(200), encoding: .utf8) ?? "")
+        }
+        return normalize(values.map(Float.init))
+    }
+
+    /// Spec §7: only 3072-dim output is pre-normalized by Google; at 1536 we re-normalize.
+    func normalize(_ v: [Float]) -> [Float] {
+        let mag = sqrt(v.reduce(0) { $0 + $1 * $1 })
+        guard mag > 0 else { return v }
+        return v.map { $0 / mag }
+    }
+
+    private func post(path: String, body: [String: Any]) async throws -> Data {
+        guard let key = config.geminiAPIKey else { throw RelayError.notConfigured }
+        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, resp): (Data, URLResponse)
+        do { (data, resp) = try await session.data(for: req) }
+        catch { throw RelayError.network(underlying: error) }
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw RelayError.httpStatus(status) }
+        return data
+    }
+}
+import AppKit
+
+@MainActor
+final class MenuBarController {
+    private var statusItem: NSStatusItem?
+    private let countItem = NSMenuItem(title: "Captures: 0", action: nil, keyEquivalent: "")
+    private let permissionItem = NSMenuItem(title: "⚠ Grant Accessibility…", action: nil, keyEquivalent: "")
+    private let keyItem = NSMenuItem(title: "⚠ No GEMINI_API_KEY in .env", action: nil, keyEquivalent: "")
+    private let encryptionItem = NSMenuItem(title: "⚠ Memory encryption unavailable", action: nil, keyEquivalent: "")
+    private let pauseItem = NSMenuItem(title: "Pause Capture", action: nil, keyEquivalent: "p")
+    private var menuDelegate: MenuDelegate?
+
+    var captureCount: Int = 0 { didSet { countItem.title = "Captures: \(captureCount)" } }
+    var paused: Bool = false { didSet { pauseItem.title = paused ? "Resume Capture" : "Pause Capture" } }
+    var hasAPIKey: Bool = true { didSet { keyItem.isHidden = hasAPIKey } }
+    var accessibilityGranted: Bool = true { didSet { permissionItem.isHidden = accessibilityGranted } }
+    var encryptionAvailable: Bool = true { didSet { encryptionItem.isHidden = encryptionAvailable } }
+
+    func install(
+        onTogglePause: @escaping () -> Void,
+        onQuit: @escaping () -> Void,
+        recentApps: @escaping () -> [(bundleID: String, name: String)],
+        pausedApps: @escaping () -> Set<String>,
+        onToggleAppPause: @escaping (String) -> Void,
+        lastSourceKey: @escaping () -> String?,
+        onPauseCurrentThread: @escaping () -> Void
+    ) {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "🧠"
+        let menu = NSMenu()
+        permissionItem.isHidden = accessibilityGranted
+        keyItem.isHidden = hasAPIKey
+        encryptionItem.isHidden = encryptionAvailable
+        permissionItem.action = #selector(NSApplication.openAccessibilitySettings)
+        permissionItem.target = NSApp
+        menu.addItem(countItem)
+        menu.addItem(.separator())
+        menu.addItem(permissionItem)
+        menu.addItem(keyItem)
+        menu.addItem(encryptionItem)
+        menu.addItem(pauseItem)
+        pauseItem.setAction { onTogglePause() }
+
+        // Per-app pause submenu
+        let appPauseItem = NSMenuItem(title: "Pause capture for ▸", action: nil, keyEquivalent: "")
+        let appPauseMenu = NSMenu()
+        appPauseItem.submenu = appPauseMenu
+
+        // Pause current thread
+        let pauseThreadItem = NSMenuItem(title: "Pause capture for current thread", action: nil, keyEquivalent: "")
+        pauseThreadItem.setAction(onPauseCurrentThread)
+
+        // Populate dynamically on menu open
+        let delegate = MenuDelegate(
+            updateAppPauseMenu: { [weak appPauseMenu] in
+                guard let appPauseMenu else { return }
+                appPauseMenu.removeAllItems()
+                let recent = recentApps()
+                let paused = pausedApps()
+                for app in recent {
+                    let item = NSMenuItem(title: app.name, action: nil, keyEquivalent: "")
+                    item.state = paused.contains(app.bundleID) ? .on : .off
+                    item.setAction { onToggleAppPause(app.bundleID) }
+                    appPauseMenu.addItem(item)
+                }
+                if recent.isEmpty {
+                    let placeholder = NSMenuItem(title: "No recent apps", action: nil, keyEquivalent: "")
+                    placeholder.isEnabled = false
+                    appPauseMenu.addItem(placeholder)
+                }
+            },
+            updatePauseThreadItem: { [weak pauseThreadItem] in
+                pauseThreadItem?.isEnabled = lastSourceKey() != nil
+            }
+        )
+        self.menuDelegate = delegate
+        menu.delegate = delegate
+        menu.addItem(appPauseItem)
+        menu.addItem(pauseThreadItem)
+
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit MaxMi", action: nil, keyEquivalent: "q")
+        quit.setAction { onQuit() }
+        menu.addItem(quit)
+        item.menu = menu
+        statusItem = item
+    }
+}
+
+// Closure-backed NSMenuItem actions (no @objc target boilerplate per item).
+private final class ActionTrampoline: NSObject {
+    let block: () -> Void
+    init(_ block: @escaping () -> Void) { self.block = block }
+    @objc func fire() { block() }
+}
+private let trampolineKey: StaticString = "trampolineKey"
+extension NSMenuItem {
+    func setAction(_ block: @escaping () -> Void) {
+        let t = ActionTrampoline(block)
+        objc_setAssociatedObject(self, trampolineKey.utf8Start, t, .OBJC_ASSOCIATION_RETAIN)
+        target = t
+        action = #selector(ActionTrampoline.fire)
+    }
+}
+extension NSApplication {
+    @objc func openAccessibilitySettings() {
+        NSWorkspace.shared.open(URL(string:
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+}
+
+private final class MenuDelegate: NSObject, NSMenuDelegate {
+    let updateAppPauseMenu: () -> Void
+    let updatePauseThreadItem: () -> Void
+    init(updateAppPauseMenu: @escaping () -> Void, updatePauseThreadItem: @escaping () -> Void) {
+        self.updateAppPauseMenu = updateAppPauseMenu
+        self.updatePauseThreadItem = updatePauseThreadItem
+    }
+    func menuWillOpen(_ menu: NSMenu) {
+        updateAppPauseMenu()
+        updatePauseThreadItem()
+    }
+}
+
+exec
+/bin/zsh -lc "rg -l \"class FocusObserver|struct FocusObserver|final class FocusObserver\" Sources && rg -n \"FocusObserver|activeApplication|didActivateApplication|workspace\" Sources/MaxMi Sources/MaxMiCapture && sed -n '1,230p' Sources/MaxMiCapture/FocusObserver.swift 2>/dev/null || true && find Sources -maxdepth 2 -type f -name '*Focus*' -print && sed -n '60,190p' Sources/MaxMiStore/StoreAPI.swift && sed -n '1,200p' Package.swift" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+Sources/MaxMiCapture/FocusObserver.swift
+Sources/MaxMi/AppWiring.swift:49:    var observer: FocusObserver?
+Sources/MaxMi/AppWiring.swift:124:        let observer = FocusObserver(
+Sources/MaxMiCapture/SlackParser.swift:34:    /// "<view> - <workspace> - Slack" -> "slack:<workspace>/<view>"; else "slack:<title>".
+Sources/MaxMiCapture/SlackParser.swift:42:            let view = slug(parts[0]); let workspace = slug(parts[parts.count - 2])
+Sources/MaxMiCapture/SlackParser.swift:43:            return "slack:\(workspace)/\(view)"
+Sources/MaxMiCapture/FocusObserver.swift:19:public final class FocusObserver {
+Sources/MaxMiCapture/FocusObserver.swift:29:    var workspaceObserver: NSObjectProtocol?
+Sources/MaxMiCapture/FocusObserver.swift:43:        guard workspaceObserver == nil else { return }
+Sources/MaxMiCapture/FocusObserver.swift:44:        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+Sources/MaxMiCapture/FocusObserver.swift:45:            forName: NSWorkspace.didActivateApplicationNotification,
+Sources/MaxMiCapture/FocusObserver.swift:54:        if let token = workspaceObserver {
+Sources/MaxMiCapture/FocusObserver.swift:57:        workspaceObserver = nil
+Sources/MaxMiCapture/FocusObserver.swift:103:            let me = Unmanaged<FocusObserver>.fromOpaque(refcon).takeUnretainedValue()
+import AppKit
+import ApplicationServices
+
+public enum Browser: String, CaseIterable, Sendable {
+    case chrome = "com.google.Chrome"
+    case arc = "company.thebrowser.Browser"
+    case zen = "app.zen-browser.zen"
+    case safari = "com.apple.Safari"
+    case brave = "com.brave.Browser"
+    case edge = "com.microsoft.edgemac"
+    public var isChromium: Bool {
+        switch self { case .safari, .zen: return false; default: return true }
+    }
+}
+
+/// Observes app focus changes and triggers captures for capturable apps.
+/// Callers MUST call stop() before releasing; deinit cannot tear down MainActor state under Swift 6.
+@MainActor
+public final class FocusObserver {
+    let debounceMs: Int
+    let recaptureIntervalSec: Double
+    let isCapturable: @Sendable (String) -> Bool
+    let onCapture: @MainActor (AppInfo, pid_t) -> Void
+
+    var debounceTask: Task<Void, Never>?
+    var recaptureTimer: Timer?
+    var axObserver: AXObserver?
+    var observedPid: pid_t?
+    var workspaceObserver: NSObjectProtocol?
+    var current: (bundleID: String, pid: pid_t)?
+    var appName: String = ""
+
+    public init(debounceMs: Int = 1_000, recaptureIntervalSec: Double = 45,
+                isCapturable: @escaping @Sendable (String) -> Bool,
+                onCapture: @escaping @MainActor (AppInfo, pid_t) -> Void) {
+        self.debounceMs = debounceMs
+        self.recaptureIntervalSec = recaptureIntervalSec
+        self.isCapturable = isCapturable
+        self.onCapture = onCapture
+    }
+
+    public func start() {
+        guard workspaceObserver == nil else { return }
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            Task { @MainActor in self?.frontmostChanged(app) }
+        }
+        if let app = NSWorkspace.shared.frontmostApplication { frontmostChanged(app) }
+    }
+
+    public func stop() {
+        if let token = workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+        }
+        workspaceObserver = nil
+        recaptureTimer?.invalidate(); recaptureTimer = nil
+        debounceTask?.cancel()
+        detachAXObserver()
+        current = nil
+    }
+
+    func frontmostChanged(_ app: NSRunningApplication) {
+        guard let bid = app.bundleIdentifier, isCapturable(bid) else {
+            detachAXObserver()
+            recaptureTimer?.invalidate(); recaptureTimer = nil
+            current = nil; return
+        }
+        let newPid = app.processIdentifier
+        if let cur = current, cur.bundleID == bid, cur.pid == newPid {
+            scheduleCapture(); return   // same app/pid -> no observer churn
+        }
+        detachAXObserver()
+        current = (bundleID: bid, pid: newPid)
+        appName = app.localizedName ?? bid
+        if let browser = Browser(rawValue: bid), browser.isChromium {
+            ChromiumKick.apply(pid: newPid)
+        }
+        attachAXObserver(pid: newPid)
+        recaptureTimer?.invalidate()
+        recaptureTimer = Timer.scheduledTimer(withTimeInterval: recaptureIntervalSec, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.scheduleCapture() }
+        }
+        scheduleCapture()
+    }
+
+    func scheduleCapture() {
+        debounceTask?.cancel()
+        let ms = debounceMs
+        debounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(ms))
+            guard !Task.isCancelled, let self, let cur = self.current else { return }
+            let title: String? = nil
+            self.onCapture(AppInfo(bundleID: cur.bundleID, name: self.appName, windowTitle: title), cur.pid)
+        }
+    }
+
+    func attachAXObserver(pid: pid_t) {
+        var observer: AXObserver?
+        let cb: AXObserverCallback = { _, _, _, refcon in
+            guard let refcon else { return }
+            let me = Unmanaged<FocusObserver>.fromOpaque(refcon).takeUnretainedValue()
+            Task { @MainActor in me.scheduleCapture() }
+        }
+        guard AXObserverCreate(pid, cb, &observer) == .success, let observer else { return }
+        let appEl = AXUIElementCreateApplication(pid)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        AXObserverAddNotification(observer, appEl, kAXFocusedUIElementChangedNotification as CFString, refcon)
+        AXObserverAddNotification(observer, appEl, kAXTitleChangedNotification as CFString, refcon)
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+        axObserver = observer
+        observedPid = pid
+    }
+
+    func detachAXObserver() {
+        if let axObserver, let pid = observedPid {
+            let appEl = AXUIElementCreateApplication(pid)
+            AXObserverRemoveNotification(axObserver, appEl, kAXFocusedUIElementChangedNotification as CFString)
+            AXObserverRemoveNotification(axObserver, appEl, kAXTitleChangedNotification as CFString)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(axObserver), .defaultMode)
+        }
+        axObserver = nil
+        observedPid = nil
+    }
+}
+Sources/MaxMiCapture/FocusObserver.swift
+    public func commitCapture(_ input: CaptureInput, nowMs: EpochMs) throws -> CommitResult {
+        let hash = ContentHash.sha256Hex(input.content)
+        let bucket = HourBucket.bucket(forMs: nowMs)
+        let words = input.content.split(whereSeparator: \.isWhitespace).count
+        let storedContent = try cipher.encrypt(input.content)
+
+        return try db.dbQueue.write { d in
+            // 1. Upsert thread; dedup on unchanged tree hash.
+            let existing = try Row.fetchOne(d,
+                sql: "SELECT id, last_tree_hash FROM threads WHERE source_app=? AND source_key=?",
+                arguments: [input.sourceApp, input.sourceKey])
+            let threadID: String
+            if let existing {
+                if existing["last_tree_hash"] as String? == hash { return .deduplicated }
+                threadID = existing["id"]
+                try d.execute(sql: "UPDATE threads SET source_title=?, last_tree_hash=?, updated_at=? WHERE id=?",
+                              arguments: [input.sourceTitle, hash, nowMs, threadID])
+            } else {
+                threadID = Ident.uuidv7(nowMs: nowMs)
+                try d.execute(sql: """
+                    INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?)
+                    """, arguments: [threadID, input.sourceApp, input.sourceKey, input.sourceTitle, hash, nowMs, nowMs])
+            }
+
+            // Per-item fingerprint dedup: if no line is novel for this thread, skip (spec §3b).
+            // Complements last_tree_hash (which catches identical whole trees) by catching
+            // recaptures where only order/chrome changed but no new message appeared.
+            if !recordNovelFingerprints(input.content, threadID: threadID, nowMs: nowMs, d) {
+                return .deduplicated
+            }
+
+            // 2. Freeze-then-create: seal mutable versions from past hours.
+            try d.execute(sql: "UPDATE versions SET is_frozen=1 WHERE thread_id=? AND is_frozen=0 AND hour_bucket<>?",
+                          arguments: [threadID, bucket])
+
+            // 3. Upsert this hour's version (replace content, reset pending, un-freeze if clock stepped back).
+            if let vid = try String.fetchOne(d, sql: "SELECT id FROM versions WHERE thread_id=? AND hour_bucket=?",
+                                             arguments: [threadID, bucket]) {
+                try d.execute(sql: """
+                    UPDATE versions SET content=?, content_hash=?, word_count=?, committed_at=?,
+                                        extract_status='pending', is_frozen=0 WHERE id=?
+                    """, arguments: [storedContent, hash, words, nowMs, vid])
+                return .committed(versionID: vid, contentHash: hash)
+            } else {
+                let vid = Ident.uuidv7(nowMs: nowMs)
+                try d.execute(sql: """
+                    INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status)
+                    VALUES (?,?,?,?,?,?,0,?,'pending')
+                    """, arguments: [vid, threadID, bucket, storedContent, hash, words, nowMs])
+                return .committed(versionID: vid, contentHash: hash)
+            }
+        }
+    }
+}
+
+extension Store {
+    public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
+        // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
+        // can serve as baseline; its unextracted facts are suppressed from the newer diff).
+        try db.dbQueue.read { d in
+            let currentBucket = HourBucket.bucket(forMs: nowMs)
+            let rows = try Row.fetchAll(d, sql: """
+                SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
+                       t.source_app, t.source_key,
+                       (SELECT p.content FROM versions p
+                         WHERE p.thread_id = v.thread_id AND p.hour_bucket < v.hour_bucket
+                         ORDER BY p.hour_bucket DESC LIMIT 1) AS previous_frozen_content
+                FROM versions v JOIN threads t ON t.id = v.thread_id
+                WHERE v.extract_status = 'pending'
+                  AND (v.is_frozen = 1 OR v.hour_bucket < ? OR v.committed_at <= ?)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM retry_queue r
+                    WHERE r.kind = 'extract' AND r.version_id = v.id AND r.next_attempt_at > ?
+                  )
+                ORDER BY v.committed_at
+                """, arguments: [currentBucket, nowMs - idleThresholdMs, nowMs])
+            return rows.map { r in
+                PendingVersion(id: r["id"], threadID: r["thread_id"], hourBucket: r["hour_bucket"],
+                               content: decryptOrMarker(r["content"]), contentHash: r["content_hash"],
+                               sourceApp: r["source_app"], sourceKey: r["source_key"],
+                               previousFrozenContent: (r["previous_frozen_content"] as String?).map(decryptOrMarker))
+            }
+        }
+    }
+
+    public func markExtracted(versionID: String, contentHashRead: String) throws -> Bool {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE versions SET extract_status='completed' WHERE id=? AND content_hash=?",
+                          arguments: [versionID, contentHashRead])
+            return d.changesCount > 0
+        }
+    }
+
+    public func markExtractFailed(versionID: String) throws {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE versions SET extract_status='failed' WHERE id=?", arguments: [versionID])
+        }
+    }
+
+    public func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PendingDerivative] {
+        try db.dbQueue.write { d in
+            var inserted: [PendingDerivative] = []
+            for fact in facts {
+                let id = Ident.uuidv7(nowMs: nowMs)
+                let hash = ContentHash.sha256Hex(fact)
+                let storedContent = try cipher.encrypt(fact)
+                try d.execute(sql: """
+                    INSERT OR IGNORE INTO derivatives (id, thread_id, version_id, content, content_hash, committed_at, embedding_status)
+                    VALUES (?,?,?,?,?,?,'pending')
+                    """, arguments: [id, threadID, versionID, storedContent, hash, nowMs])
+                if d.changesCount > 0 { inserted.append(PendingDerivative(id: id, content: fact)) }
+            }
+            return inserted
+        }
+    }
+
+    public func markEmbedded(derivativeID: String) throws {
+        try db.dbQueue.write { d in
+            try d.execute(sql: "UPDATE derivatives SET embedding_status='completed' WHERE id=?", arguments: [derivativeID])
+        }
+    }
+
+    public func pendingDerivatives(versionID: String) throws -> [PendingDerivative] {
+        try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: "SELECT id, content FROM derivatives WHERE version_id=? AND embedding_status='pending'",
+                             arguments: [versionID])
+                .map { PendingDerivative(id: $0["id"], content: decryptOrMarker($0["content"])) }
+        }
+    }
+
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "MaxMi",
+    platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+    ],
+    targets: [
+        .target(
+            name: "CSQLiteVec",
+            path: "Vendor/sqlite-vec",
+            sources: ["sqlite-vec.c"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("SQLITE_CORE"),           // link against real sqlite3 symbols, no ext thunk
+                .unsafeFlags(["-Wno-everything"]) // vendored amalgamation, not our lint problem
+            ]
+        ),
+        .target(
+            name: "CWhisper",
+            path: "Sources/CWhisper",
+            exclude: ["ggml-metal.m", "ggml-metal.metal", "coreml"],
+            sources: [
+                "ggml.c",
+                "ggml-alloc.c",
+                "ggml-backend.c",
+                "ggml-quants.c",
+                "whisper.cpp",
+            ],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("GGML_USE_ACCELERATE"),
+                .unsafeFlags(["-Wno-shorten-64-to-32", "-Wno-deprecated-declarations"])
+            ],
+            linkerSettings: [
+                .linkedFramework("Accelerate")
+            ]
+        ),
+        .target(name: "MaxMiCore"),
+        .target(name: "MaxMiStore", dependencies: [
+            "MaxMiCore", "CSQLiteVec",
+            .product(name: "GRDB", package: "GRDB.swift"),
+        ]),
+        .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),
+        .target(name: "MaxMiRelay", dependencies: ["MaxMiCore"]),
+        .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore", "CWhisper"]),
+        .executableTarget(name: "MaxMi", dependencies: [
+            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay", "MaxMiMeetings",
+        ]),
+        .executableTarget(name: "MaxMiMCP", dependencies: [
+            "MaxMiCore", "MaxMiStore", "MaxMiRelay",
+        ]),
+        .testTarget(name: "MaxMiCoreTests", dependencies: ["MaxMiCore"]),
+        .testTarget(name: "MaxMiStoreTests", dependencies: ["MaxMiStore"]),
+        .testTarget(name: "MaxMiCaptureTests", dependencies: ["MaxMiCapture"],
+                    resources: [.copy("Fixtures")]),
+        .testTarget(name: "MaxMiRelayTests", dependencies: ["MaxMiRelay"]),
+        .testTarget(name: "MaxMiMCPTests", dependencies: ["MaxMiMCP"]),
+        .testTarget(name: "MaxMiMeetingsTests", dependencies: ["MaxMiMeetings"]),
+    ]
+)
+
+exec
+/bin/zsh -lc "rg -n \"NSApplication|AppDelegate|activationPolicy|setActivationPolicy|run\\(|applicationDidFinish|NSWindow|NSPanel|Timer\" Sources/MaxMi packaging && find Sources/MaxMi -maxdepth 1 -type f -print | sort && sed -n '1,180p' Sources/MaxMi/main.swift 2>/dev/null || true && sed -n '1,200p' Sources/MaxMi/RightLanePanel.swift && sed -n '1,220p' Sources/MaxMiStore/MaxMiDatabase.swift 2>/dev/null || true && rg -n \"extractModel|embedModel|Gemini\" README.md docs Sources/MaxMiCore Sources/MaxMiRelay --glob '"'!**/.build/**'"'" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+Sources/MaxMi/main.swift:3:let app = NSApplication.shared
+Sources/MaxMi/main.swift:4:app.setActivationPolicy(.accessory)   // menu-bar only; pairs with LSUIElement in Info.plist
+Sources/MaxMi/main.swift:10:    var timer: Timer?
+Sources/MaxMi/main.swift:13:        let t = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] timer in
+Sources/MaxMi/main.swift:39:app.run()
+Sources/MaxMi/RightLanePanel.swift:4:/// NSPanel-based right-lane meeting recorder UI conforming to MeetingPanelPresenting.
+Sources/MaxMi/RightLanePanel.swift:8:    private let panel: NSPanel
+Sources/MaxMi/RightLanePanel.swift:31:        self.panel = NSPanel(
+Sources/MaxMi/RightLanePanel.swift:83:        startTimerUpdates()
+Sources/MaxMi/RightLanePanel.swift:88:        stopTimerUpdates()
+Sources/MaxMi/RightLanePanel.swift:95:        stopTimerUpdates()
+Sources/MaxMi/RightLanePanel.swift:102:        stopTimerUpdates()
+Sources/MaxMi/RightLanePanel.swift:117:        stopTimerUpdates()
+Sources/MaxMi/RightLanePanel.swift:158:            forName: NSApplication.didChangeScreenParametersNotification,
+Sources/MaxMi/RightLanePanel.swift:405:    // MARK: - Timer
+Sources/MaxMi/RightLanePanel.swift:407:    private func startTimerUpdates() {
+Sources/MaxMi/RightLanePanel.swift:408:        stopTimerUpdates()
+Sources/MaxMi/RightLanePanel.swift:411:                updateTimerLabel()
+Sources/MaxMi/RightLanePanel.swift:417:    private func stopTimerUpdates() {
+Sources/MaxMi/RightLanePanel.swift:422:    private func updateTimerLabel() {
+Sources/MaxMi/AppWiring.swift:51:    var pipelineTimer: Timer?
+Sources/MaxMi/AppWiring.swift:140:        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+Sources/MaxMi/AppWiring.swift:147:        pipelineTimer = t
+Sources/MaxMi/MenuBarController.swift:35:        permissionItem.action = #selector(NSApplication.openAccessibilitySettings)
+Sources/MaxMi/MenuBarController.swift:106:extension NSApplication {
+Sources/MaxMi/AppWiring.swift
+Sources/MaxMi/KeychainKeyStore.swift
+Sources/MaxMi/MeetingPermissions.swift
+Sources/MaxMi/MenuBarController.swift
+Sources/MaxMi/PermissionGate.swift
+Sources/MaxMi/RightLanePanel.swift
+Sources/MaxMi/StoreMeetingPersister.swift
+Sources/MaxMi/main.swift
+import AppKit
+
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)   // menu-bar only; pairs with LSUIElement in Info.plist
+
+// If permission was missing at launch, poll until granted, then start capture.
+@MainActor
+final class PermissionPoller {
+    weak var wiring: AppWiring?
+    var timer: Timer?
+
+    nonisolated func start() {
+        let t = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            Task { @MainActor [weak self] in
+                guard let self, let wiring = self.wiring else { return }
+                if AXIsProcessTrusted() {
+                    self.timer?.invalidate()
+                    wiring.start()
+                }
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        Task { @MainActor [weak self] in self?.timer = t }
+    }
+}
+
+let wiring = try AppWiring()
+wiring.start()
+
+let permissionPoller: PermissionPoller? = {
+    guard wiring.observer == nil else { return nil }
+    let poller = PermissionPoller()
+    poller.wiring = wiring
+    poller.start()
+    return poller
+}()
+
+app.run()
+import AppKit
+import MaxMiMeetings
+
+/// NSPanel-based right-lane meeting recorder UI conforming to MeetingPanelPresenting.
+/// Floats over all spaces, docks to the right edge of the meeting window's screen.
+@MainActor
+final class RightLanePanel: NSObject, MeetingPanelPresenting {
+    private let panel: NSPanel
+    private var contentView: NSView?
+    private var currentState: State = .hidden
+    private var startTime: Date?
+    private var timerUpdateTask: Task<Void, Never>?
+    private var timerLabel: NSTextField?
+    private var levelBar: NSLevelIndicator?
+    private var transcriptLabel: NSTextField?
+
+    // Button action closures (wired by AppWiring)
+    var onRecord: (() -> Void)?
+    var onSkip: (() -> Void)?
+    var onStop: (() -> Void)?
+    var onKeep: (() -> Void)?
+    var onFinish: (() -> Void)?
+
+    private enum State {
+        case hidden, preparing, prompt, recording, endSuggestion, finishing, error
+    }
+
+    override init() {
+        let panelSize = CGSize(width: 300, height: 160)
+
+        self.panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: panelSize),
+            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        super.init()
+
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.backgroundColor = .clear
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        panel.isMovableByWindowBackground = false
+        panel.ignoresMouseEvents = false
+        panel.hasShadow = true
+
+        observeScreenChanges()
+    }
+
+    // MARK: - MeetingPanelPresenting
+
+    func showPreparing() {
+        currentState = .preparing
+        buildPreparingView()
+        positionPanel(meetingWindow: nil)
+        panel.orderFront(nil)
+    }
+
+    func showPrompt(app: String) {
+        currentState = .prompt
+        buildPromptView(app: app)
+        positionPanel(meetingWindow: nil)
+        panel.orderFront(nil)
+
+        // Auto-dismiss nudge after 30 seconds
+        Task {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            if currentState == .prompt {
+                hidePanel()
+            }
+        }
+    }
+
+    func showRecording() {
+        currentState = .recording
+        startTime = Date()
+        buildRecordingView()
+        positionPanel(meetingWindow: nil)  // Will reposition when session provides window frame
+        panel.orderFront(nil)
+        startTimerUpdates()
+    }
+
+    func showEndSuggestion() {
+        currentState = .endSuggestion
+        stopTimerUpdates()
+        buildEndSuggestionView()
+        panel.orderFront(nil)
+    }
+
+    func showFinishing() {
+        currentState = .finishing
+        stopTimerUpdates()
+        buildFinishingView()
+        panel.orderFront(nil)
+    }
+
+    func showError(_ message: String) {
+        currentState = .error
+        stopTimerUpdates()
+        buildErrorView(message: message)
+        positionPanel(meetingWindow: nil)
+        panel.orderFront(nil)
+
+        // Auto-dismiss error after 10 seconds
+        Task {
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            if currentState == .error {
+                hidePanel()
+            }
+        }
+    }
+
+    func hidePanel() {
+        stopTimerUpdates()
+        panel.orderOut(nil)
+        currentState = .hidden
+    }
+
+    func updateLevel(_ level: Float) {
+        levelBar?.floatValue = level
+    }
+
+    func updateTranscript(_ text: String) {
+        transcriptLabel?.stringValue = text.prefix(100) + (text.count > 100 ? "..." : "")
+    }
+
+    // MARK: - Positioning
+
+    func repositionToMeetingScreen(windowFrame: CGRect) {
+        positionPanel(meetingWindow: windowFrame)
+    }
+
+    private func positionPanel(meetingWindow: CGRect?) {
+        let screens = NSScreen.screens.map { $0.visibleFrame }
+        let cursor = NSEvent.mouseLocation
+
+        let chosenScreen = RightLanePlacement.chooseScreen(
+            meetingWindow: meetingWindow,
+            screens: screens,
+            cursor: cursor
+        )
+
+        let origin = RightLanePlacement.origin(
+            inScreen: chosenScreen,
+            panelSize: panel.frame.size,
+            topInset: 80,
+            margin: 16
+        )
+
+        panel.setFrameOrigin(origin)
+    }
+
+    private func observeScreenChanges() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.positionPanel(meetingWindow: nil)
+        }
+    }
+
+    // MARK: - View Building
+
+    private func buildPreparingView() {
+        let container = makeContainer()
+
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        spinner.startAnimation(nil)
+        container.addSubview(spinner)
+
+        let label = makeLabel("Preparing transcription...")
+        container.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            spinner.topAnchor.constraint(equalTo: container.topAnchor, constant: 30),
+            spinner.widthAnchor.constraint(equalToConstant: 32),
+            spinner.heightAnchor.constraint(equalToConstant: 32),
+
+            label.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            label.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 12),
+        ])
+
+        setContent(container)
+    }
+
+    private func buildPromptView(app: String) {
+        let container = makeContainer()
+
+        let titleLabel = makeLabel("Meeting detected")
+        titleLabel.font = .boldSystemFont(ofSize: 13)
+        container.addSubview(titleLabel)
+
+        let appLabel = makeLabel(app)
+README.md:3:MaxMi is a self-built ambient-memory Mac menu bar app modeled after Minimi. It captures browsing context from active browser windows (Safari and Zen), storing full page snapshots with versioning, deduplication, and automatic fact extraction. Captured data is embedded locally via Gemini, enabling context-aware retrieval. The M1 milestone delivers the full capture-to-database pipeline with offline queue handling and privacy protections.
+README.md:15:1. Create `~/Library/Application Support/MaxMi/.env` with your Gemini API key:
+README.md:48:never interferes with capture. Uses the same `.env` Gemini key to embed queries.
+Sources/MaxMiCore/CapturePipeline.swift:44:        // Skip processing corruption markers — don't send junk to Gemini.
+Sources/MaxMiRelay/GeminiClient.swift:4:public final class GeminiClient: MemoryRelay {
+Sources/MaxMiRelay/GeminiClient.swift:21:        let data = try await post(path: "models/\(config.extractModel):generateContent", body: body)
+Sources/MaxMiRelay/GeminiClient.swift:34:            "model": "models/\(config.embedModel)",
+Sources/MaxMiRelay/GeminiClient.swift:38:        let data = try await post(path: "models/\(config.embedModel):embedContent", body: body)
+Sources/MaxMiCore/EnvConfig.swift:5:    public let extractModel: String
+Sources/MaxMiCore/EnvConfig.swift:6:    public let embedModel: String
+Sources/MaxMiCore/EnvConfig.swift:9:    public init(geminiAPIKey: String?, extractModel: String, embedModel: String, embedDims: Int) {
+Sources/MaxMiCore/EnvConfig.swift:11:        self.extractModel = extractModel
+Sources/MaxMiCore/EnvConfig.swift:12:        self.embedModel = embedModel
+Sources/MaxMiCore/EnvConfig.swift:33:            extractModel: kv["MAXMI_EXTRACT_MODEL"] ?? "gemini-flash-lite-latest",
+Sources/MaxMiCore/EnvConfig.swift:34:            embedModel: kv["MAXMI_EMBED_MODEL"] ?? "gemini-embedding-001",
+docs/superpowers/specs/2026-07-11-maxmi-m5-meetings-design.md:26:MaxMi is **all-Swift, in-process, local-first** (no Electron, no always-on cloud relay beyond the existing Gemini extraction). So:
+docs/superpowers/specs/2026-07-08-maxmi-m4-native-app-parsers-design.md:117:- Gemini still receives plaintext content for extraction (unchanged since M1, by design).
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:11:**Milestone 1 delivers one complete vertical slice:** the active **browser tab's** content is captured via the macOS Accessibility (AX) tree, versioned into a local SQLite database, sent to Gemini to extract atomic memory facts, embedded, and stored as vectors — all on device except the Gemini API calls. No retrieval, no MCP, no Claude integration yet. The success test is: browse a few pages, then inspect the DB and see correctly-versioned threads with extracted fact sentences and their embeddings.
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:23:- No own backend — the app calls Gemini's API directly. (A relay backend is a later concern.)
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:39:  MaxMiRelay/     GeminiClient: extract(newContent, previousContent?) -> [String],
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:40:                  embed(text) -> [Float]. Only talks to Gemini. Mockable via a protocol.
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:80:Capture (fast, synchronous-ish) is decoupled from the network pipeline (slow, async, retryable) via the version's `extract_status` and a retry queue — so a failed/offline Gemini call never blocks or loses a capture.
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:84:Extraction does **not** run on every capture — that would re-extract the same facts all hour (each within-hour capture would diff against the same frozen baseline) and re-pay Gemini for duplicates. A version becomes extract work when:
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:90:**Race guard (lost-update):** the pipeline records the `content_hash` it read before calling Gemini. Completion is `UPDATE versions SET extract_status='completed' WHERE id=? AND content_hash=<hash read>`. Zero rows updated → the content moved mid-flight → the version stays `pending` and re-runs on the next trigger. Symmetrically, `commitCapture` always resets `extract_status='pending'` whenever content changes. Extraction is idempotent because derivatives are hash-deduped (§4), so a re-run — including a retry after a crash between extract and embed — never stores duplicate facts.
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:186:`GeminiClient`, talking directly to Google's Generative Language API with a key from `.env` (see §8). Two operations behind a `MemoryRelay` protocol (so tests inject a mock):
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:188:- **`extract(newContent:previousContent:) -> [String]`** — calls a Gemini flash-lite–tier model (`gemini-flash-lite-latest`; we pin the concrete id in code and note the fallback). **We write our own extraction prompt** (Minimi's is server-side and not needed): instruct the model to return a JSON array of atomic, self-contained, third-person fact sentences describing what the user did/read, naming the user by first name; when `previousContent` is provided, extract only facts new since it. This exactly reproduces the input/output contract we captured: `{new_content, previous_content, metadata}` → `["fact", "fact", …]`. `previousContent` is the thread's **latest frozen version** (§4) — and because extraction runs on freeze/idle rather than per capture (§3a), plus hash-dedup on derivatives, within-hour re-extraction can't multiply facts.
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:189:- **`embed(text:) -> [Float]`** — Gemini `gemini-embedding-001` with `outputDimensionality: 1536`, embedding each fact sentence whole (no chunking — confirmed from intercept). Only the full 3072-dim output is pre-normalized by Google; at 1536 we **re-normalize client-side** (one line) so M2's similarity thresholds are stable. Returns the 1536-float vector. TODO (not M1): `batchEmbedContents` — one call per fact mimics Minimi but a busy hour can produce dozens of facts against per-request flash-tier rate limits; the retry queue absorbs this for now.
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:196:- `.env` is gitignored. We chose `.env` over Keychain deliberately for this milestone — matches the Yuki-on-Gemini learning that Keychain causes repeated password prompts during dev (note [[project_yuki_gemini3]]).
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:203:- Perspective: M1 ships every captured page to Gemini's cloud in plaintext by design. The local DB is not the biggest exposure surface.
+docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md:213:- **Malformed Gemini output** (extract not valid JSON array): one reparse attempt (strip code fences, first-`[`-to-last-`]`), then mark `failed` and enqueue retry; never store garbage.
+docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md:23:- **No Gemini API key migration to Keychain.** `.env` stays (decided: dev iteration convenience; the API key is lower-value than the DB key; revisit at distribution time).
+docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md:55:- The pipeline, extractor, GeminiClient, MemoryQueries, and MCP protocol layer are untouched — they see plaintext through the Store API exactly as before. Gemini still receives plaintext content (cloud-relay exposure is unchanged from M1 by design).
+docs/superpowers/specs/2026-07-07-maxmi-m3-encryption-signing-design.md:105:Protects against: casual file reading, backups/Time Machine leakage, other-user access, DB exfiltration without Keychain access. Does NOT protect against: malware running as the user with Keychain access (can read the key), Gemini cloud exposure (unchanged by design), metadata analysis (URLs + titles readable — someone with the DB knows *what pages* you visited, not what they said), and **embedding inversion** (vectors are plaintext for KNN; embeddings of short facts can leak content to a determined attacker with model access — same residual Minimi accepts). The `chmod 600` + Time Machine exclusion from M1 remain in force.
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:12:3. **Rewrite-for-display** — turn raw Gemini `derivatives` into clean, presentable per-session summaries.
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:35:- **Local Gemini, not a cloud `/api/activity/*` backend.** MaxMi already relays to Gemini for extraction (M1). M6's `detect-conversation`/`hourly-review`/`rewrite-for-display` become **local pipeline steps that call Gemini** with purpose-built prompts, reusing the existing `MemoryRelay`. No new backend.
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:59:  DisplaySummarizer.swift     Gemini rewrite-for-display: derivatives -> clean session summary
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:61:  AgentPrompts.swift          the Gemini prompts (detect-conversation, hourly-review, rewrite)
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:75:Data flow: FocusObserver app-switch → `ActivityStore.recordVisit` (timeline). Idle/periodic → `ConversationDetector` groups new versions into sessions → `DisplaySummarizer` (Gemini) writes each session `summary` → `activity_conversations`. Hourly timer → `HourlyAgent` reviews the window's new versions → Gemini hourly-review → action-item deltas → `AgentStore`. Menu-bar dog click → `ActivityWindow` (SwiftUI) loads `ActivityViewModel` → renders timeline + action items.
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:124:- Gemini sees the same plaintext it already sees for extraction (unchanged trust model).
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:126:- Nothing new leaves the Mac beyond the existing Gemini relay.
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:137:- No cloud activity backend (local pipeline calling the existing Gemini relay).
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:142:- **DisplaySummarizer / HourlyAgent:** prompt-building + delta logic (new/resolved/updated) with a mock relay returning canned JSON — the Gemini call is mocked; delta math is asserted.
+docs/superpowers/specs/2026-07-11-maxmi-m6-activity-agent-ui-design.md:147:1. App-visit timeline recorded; sessions grouped with Gemini summaries ("what you did in <app>").
+docs/superpowers/specs/2026-07-07-maxmi-m2-mcp-server-design.md:41:Reused unchanged: `MaxMiStore` (DB, vector KNN via `nearestDerivatives` — already implemented and tested in M1 for exactly this), `MaxMiRelay` (GeminiClient embeds the query), `MaxMiCore` (EnvConfig). One small Store addition: a **read-only open mode** (`MaxMiDatabase(path:readOnly:)` using SQLITE_OPEN_READONLY through GRDB's Configuration).
+docs/superpowers/specs/2026-07-07-maxmi-m2-mcp-server-design.md:49:  -> GeminiClient.embed(query)            gemini-embedding-001, 1536 dims, normalized
+docs/superpowers/specs/2026-07-07-maxmi-m2-mcp-server-design.md:74:  `Memory search needs the Gemini API key and network access (vector search embeds the query). Capture and browsing history are unaffected.`
+docs/superpowers/specs/2026-07-07-maxmi-m2-mcp-server-design.md:94:- **Query-embedding latency:** each `search_memory` call costs one Gemini embed (~200–500 ms cold). Accepted for M2 — Minimi pays the same per-search round-trip through its backend, and an MCP tool call already sits inside a multi-second assistant turn. One cheap mitigation ships now: an in-process LRU cache (last 32 query→vector pairs, exact-string match) so repeated queries in a session skip the network. No semantic/similarity caching (YAGNI).
+docs/superpowers/specs/2026-07-07-maxmi-m2-mcp-server-design.md:108:- Gemini errors (offline, 429, 5xx, keyless): caught per call → `isError: true` tool result with the §4 message. Never enqueued to the app's retry queue (that queue belongs to the capture pipeline; a failed *query* should fail fast, not retry later).
+docs/superpowers/specs/2026-07-07-maxmi-m2-mcp-server-design.md:115:- **MaxMiMCPTests** (all against in-memory or temp-file DBs; Gemini mocked via the existing `MemoryRelay` protocol):
+docs/superpowers/specs/2026-07-08-maxmi-m4-completion-design.md:60:- Key collisions/coarseness (e.g. two Notion pages with the same title) are best-effort, same standard as Slack keys (spec §5) — Gemini-tolerant, thread-fracture not data-loss.
+docs/superpowers/specs/2026-07-11-m5-codex-review-2.txt:56:MaxMi is **all-Swift, in-process, local-first** (no Electron, no always-on cloud relay beyond the existing Gemini extraction). So:
+docs/superpowers/specs/2026-07-11-m5-codex-review-3.txt:172:MaxMi is **all-Swift, in-process, local-first** (no Electron, no always-on cloud relay beyond the existing Gemini extraction). So:
+docs/superpowers/plans/2026-07-11-m5-plan-codex-review-1.txt:601:Sources/MaxMiMCP/LazyTools.swift:64:            let queries = MemoryQueries(store: Store(db: db, cipher: AESGCMFieldCipher(keyData: keyData)), relay: GeminiClient(config: config))
+docs/superpowers/plans/2026-07-11-m5-plan-codex-review-1.txt:796:    static let offlineText = "Memory search needs the Gemini API key and network access (vector search embeds the query). Capture and browsing history are unaffected."
+docs/superpowers/specs/2026-07-11-m5-codex-review-1.txt:16:Context: MaxMi is all-Swift, in-process, local-first. It captures on-screen text via macOS Accessibility, stores versioned content in encrypted SQLite (GRDB + sqlite-vec), extracts facts via Gemini, and serves memory over MCP. M5 adds the FIRST audio capability: detect meetings, show a right-edge recorder popup, capture+transcribe audio, store as meeting memories. The design is modeled on a competitor (Minimi) which uses a CoreAudio "responsibility SPI" mic-ownership detector, an Electron right-lane BrowserWindow popup, and Deepgram WS transcription. MaxMi adapts this to Swift: CoreAudio mic-active detection, an AppKit NSPanel popup, ScreenCaptureKit+AVAudioEngine audio, on-device SFSpeechRecognizer (Deepgram pluggable).
+docs/superpowers/specs/2026-07-11-m5-codex-review-1.txt:66:MaxMi is **all-Swift, in-process, local-first** (no Electron, no always-on cloud relay beyond the existing Gemini extraction). So:
+docs/superpowers/specs/2026-07-11-m5-codex-review-1.txt:1017:    static let offlineText = "Memory search needs the Gemini API key and network access (vector search embeds the query). Capture and browsing history are unaffected."
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:7:**Architecture:** New executable target `MaxMiMCP` in the existing SwiftPM package. Reuses `MaxMiStore` (read-only DB + vector KNN), `MaxMiRelay` (GeminiClient embeds the query), `MaxMiCore` (EnvConfig). No SDK — MCP stdio is newline-delimited JSON-RPC 2.0 handled with `JSONSerialization`. All query/format logic lives in `MemoryQueries` (unit-testable, relay mocked); Store gains three read methods so SQL stays in MaxMiStore per M1 convention.
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:9:**Tech Stack:** Swift 6.0 SwiftPM, macOS 14+, GRDB 7 (read-only Configuration), existing vendored sqlite-vec, Gemini `gemini-embedding-001` @1536, `RelativeDateTimeFormatter`.
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:20:- Offline/keyless search text (verbatim): `Memory search needs the Gemini API key and network access (vector search embeds the query). Capture and browsing history are unaffected.`
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:683:        XCTAssertEqual(r.text, "Memory search needs the Gemini API key and network access (vector search embeds the query). Capture and browsing history are unaffected.")
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:743:    static let offlineText = "Memory search needs the Gemini API key and network access (vector search embeds the query). Capture and browsing history are unaffected."
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:1021:- Consumes: everything above; `EnvConfig.load` (M1), `GeminiClient(config:)` (M1).
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:1068:            let queries = MemoryQueries(store: Store(db: db), relay: GeminiClient(config: config))
+docs/superpowers/plans/2026-07-07-maxmi-m2-mcp-server.md:1136:never interferes with capture. Uses the same `.env` Gemini key to embed queries.
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:5:**Goal:** A native macOS menu-bar app that captures the active browser tab via the AX tree, versions it per-hour into local SQLite, and (via Gemini) extracts fact sentences + 1536-dim embeddings — per the spec at `docs/superpowers/specs/2026-07-07-maxmi-capture-to-db-design.md`.
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:7:**Architecture:** One SwiftPM package, four library targets + one executable, mirroring `burnt/` structurally. `MaxMiStore` owns the versioning state machine (freeze-then-create, hash-guarded completion); `MaxMiCore` owns orchestration (CapturePipeline over protocol-typed Store/Relay); `MaxMiCapture` reads AX trees behind a snapshot abstraction so tests use recorded fixtures; `MaxMiRelay` is the Gemini HTTP client. sqlite-vec is **vendored as a C target compiled with `SQLITE_CORE`** and initialized per-connection — macOS system SQLite omits `sqlite3_load_extension` (verified), so runtime dylib loading is impossible.
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:9:**Tech Stack:** Swift 6.0 SwiftPM, macOS 14+, GRDB.swift 7.x, vendored sqlite-vec (C), CryptoKit (SHA-256), AppKit/ApplicationServices (AX), Gemini API (`gemini-flash-lite-latest` extract, `gemini-embedding-001` embed @1536).
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:39:  MaxMiRelay/   GeminiClient.swift, ExtractPrompt.swift, JSONArrayParser.swift
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:45:  MaxMiRelayTests/   GeminiClientTests, JSONArrayParserTests
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:278:    public let extractModel: String   // default "gemini-flash-lite-latest"
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:279:    public let embedModel: String     // default "gemini-embedding-001"
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:311:        XCTAssertEqual(c.extractModel, "gemini-2.5-flash-lite")
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:312:        XCTAssertEqual(c.embedModel, "gemini-embedding-001") // default survives
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:318:        XCTAssertEqual(c.extractModel, "gemini-flash-lite-latest")
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:337:    public let extractModel: String
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:338:    public let embedModel: String
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:358:            extractModel: kv["MAXMI_EXTRACT_MODEL"] ?? "gemini-flash-lite-latest",
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:359:            embedModel: kv["MAXMI_EMBED_MODEL"] ?? "gemini-embedding-001",
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1074:### Task 8: Gemini relay — client, prompt, JSON parsing, normalization
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1077:- Create: `Sources/MaxMiCore/Protocols.swift`, `Sources/MaxMiRelay/GeminiClient.swift`, `Sources/MaxMiRelay/ExtractPrompt.swift`, `Sources/MaxMiRelay/JSONArrayParser.swift`
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1078:- Test: `Tests/MaxMiRelayTests/JSONArrayParserTests.swift`, `Tests/MaxMiRelayTests/GeminiClientTests.swift`
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1094:- Produces in Relay: `public final class GeminiClient: MemoryRelay { public init(config: EnvConfig, session: URLSession = .shared) }`; `enum ExtractPrompt { static func build(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) -> String }`; `enum JSONArrayParser { static func parse(_ raw: String) throws -> [String] }`.
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1191:`Sources/MaxMiRelay/GeminiClient.swift`:
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1197:public final class GeminiClient: MemoryRelay {
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1214:        let data = try await post(path: "models/\(config.extractModel):generateContent", body: body)
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1227:            "model": "models/\(config.embedModel)",
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1231:        let data = try await post(path: "models/\(config.embedModel):embedContent", body: body)
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1264:- [ ] **Step 4: Client tests with a stub URLProtocol** — `Tests/MaxMiRelayTests/GeminiClientTests.swift`:
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1285:final class GeminiClientTests: XCTestCase {
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1286:    func makeClient() -> GeminiClient {
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1290:        let keyed = EnvConfig(geminiAPIKey: "test-key", extractModel: env.extractModel,
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1291:                              embedModel: env.embedModel, embedDims: env.embedDims)
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1292:        return GeminiClient(config: keyed, session: URLSession(configuration: cfg))
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1324:        let client = GeminiClient(config: EnvConfig.load(searchPaths: []),
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1332:Note: `EnvConfig` needs a memberwise `public init` for the test — add it (`public init(geminiAPIKey:extractModel:embedModel:embedDims:)`) to `EnvConfig.swift` if Task 3's struct didn't expose one.
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:1334:- [ ] **Step 5: Run — PASS** (9 relay tests).  - [ ] **Step 6: Commit** `feat(relay): Gemini extract+embed client with prompt, lenient JSON parsing, normalization`
+docs/superpowers/plans/2026-07-07-maxmi-m1-implementation.md:2150:        let relay = GeminiClient(config: config)
+
+codex
+I’ve confirmed a few important implementation realities: captures are mutable, hour-bucketed versions (not individual events); `FocusObserver` currently has no visit callback; and the process runs as an `.accessory` AppKit app. I’m checking current official Gemini pricing/limits next because that materially changes the hourly-agent recommendation.
+exec
+/bin/zsh -lc "sed -n '1,260p' /Users/mafex/.agents/skills/firecrawl/SKILL.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
+---
+name: firecrawl
+description: |
+  Official Firecrawl CLI skill for web scraping, search, crawling, and browser automation. Returns clean LLM-optimized markdown.
+
+  USE FOR:
+  - Web search and research
+  - Scraping pages, docs, and articles
+  - Site mapping and bulk content extraction
+  - Browser automation for interactive pages
+
+  Must be pre-installed and authenticated. See rules/install.md for setup, rules/security.md for output handling.
+allowed-tools:
+  - Bash(firecrawl *)
+  - Bash(npx firecrawl *)
+---
+
+# Firecrawl CLI
+
+Web scraping, search, and browser automation CLI. Returns clean markdown optimized for LLM context windows.
+
+Run `firecrawl --help` or `firecrawl <command> --help` for full option details.
+
+## Prerequisites
+
+Must be installed and authenticated. Check with `firecrawl --status`.
+
+```
+  🔥 firecrawl cli v1.8.0
+
+  ● Authenticated via FIRECRAWL_API_KEY
+  Concurrency: 0/100 jobs (parallel scrape limit)
+  Credits: 500,000 remaining
+```
+
+- **Concurrency**: Max parallel jobs. Run parallel operations up to this limit.
+- **Credits**: Remaining API credits. Each scrape/crawl consumes credits.
+
+If not ready, see [rules/install.md](rules/install.md). For output handling guidelines, see [rules/security.md](rules/security.md).
+
+```bash
+firecrawl search "query" --scrape --limit 3
+```
+
+## Workflow
+
+Follow this escalation pattern:
+
+1. **Search** - No specific URL yet. Find pages, answer questions, discover sources.
+2. **Scrape** - Have a URL. Extract its content directly.
+3. **Map + Scrape** - Large site or need a specific subpage. Use `map --search` to find the right URL, then scrape it.
+4. **Crawl** - Need bulk content from an entire site section (e.g., all /docs/).
+5. **Browser** - Scrape failed because content is behind interaction (pagination, modals, form submissions, multi-step navigation).
+
+| Need                        | Command   | When                                                      |
+| --------------------------- | --------- | --------------------------------------------------------- |
+| Find pages on a topic       | `search`  | No specific URL yet                                       |
+| Get a page's content        | `scrape`  | Have a URL, page is static or JS-rendered                 |
+| Find URLs within a site     | `map`     | Need to locate a specific subpage                         |
+| Bulk extract a site section | `crawl`   | Need many pages (e.g., all /docs/)                        |
+| AI-powered data extraction  | `agent`   | Need structured data from complex sites                   |
+| Interact with a page        | `browser` | Content requires clicks, form fills, pagination, or login |
+
+See also: [`download`](#download) -- a convenience command that combines `map` + `scrape` to save an entire site to local files.
+
+**Scrape vs browser:**
+
+- Use `scrape` first. It handles static pages and JS-rendered SPAs.
+- Use `browser` when you need to interact with a page, such as clicking buttons, filling out forms, navigating through a complex site, infinite scroll, or when scrape fails to grab all the content you need.
+- Never use browser for web searches - use `search` instead.
+
+**Avoid redundant fetches:**
+
+- `search --scrape` already fetches full page content. Don't re-scrape those URLs.
+- Check `.firecrawl/` for existing data before fetching again.
+
+**Example: fetching API docs from a large site**
+
+```
+search "site:docs.example.com authentication API"  →  found the docs domain
+map https://docs.example.com --search "auth"        →  found /docs/api/authentication
+scrape https://docs.example.com/docs/api/auth...    →  got the content
+```
+
+**Example: data behind pagination**
+
+```
+scrape https://example.com/products                 →  only shows first 10 items, no next-page links
+browser "open https://example.com/products"         →  open in browser
+browser "snapshot -i"                               →  find the pagination button
+browser "click @e12"                                →  click "Next Page"
+browser "scrape" -o .firecrawl/products-p2.md       →  extract page 2 content
+```
+
+**Example: login then scrape authenticated content**
+
+```
+browser launch-session --profile my-app  →  create a named profile
+browser "open https://app.example.com/login"        →  navigate to login
+browser "snapshot -i"                               →  find form fields
+browser "fill @e3 'user@example.com'"               →  fill email
+browser "fill @e5 'password'"                       →  fill password
+browser "click @e7"                                 →  click Login
+browser "wait 2"                                    →  wait for redirect
+browser close                                       →  disconnect, state persisted
+
+browser launch-session --profile my-app  →  reconnect, cookies intact
+browser "open https://app.example.com/dashboard"    →  already logged in
+browser "scrape" -o .firecrawl/dashboard.md         →  extract authenticated content
+browser close
+```
+
+**Example: research task**
+
+```
+search "firecrawl vs competitors 2024" --scrape -o .firecrawl/search-comparison-scraped.json
+                                                    →  full content already fetched for each result
+grep -n "pricing\|features" .firecrawl/search-comparison-scraped.json
+head -200 .firecrawl/search-comparison-scraped.json →  read and process what you have
+                                                    →  notice a relevant URL in the content
+scrape https://newsite.com/comparison -o .firecrawl/newsite-comparison.md
+                                                    →  only scrape this new URL
+```
+
+## Output & Organization
+
+Unless the user specifies to return in context, write results to `.firecrawl/` with `-o`. Add `.firecrawl/` to `.gitignore`. Always quote URLs - shell interprets `?` and `&` as special characters.
+
+```bash
+firecrawl search "react hooks" -o .firecrawl/search-react-hooks.json --json
+firecrawl scrape "<url>" -o .firecrawl/page.md
+```
+
+Naming conventions:
+
+```
+.firecrawl/search-{query}.json
+.firecrawl/search-{query}-scraped.json
+.firecrawl/{site}-{path}.md
+```
+
+Never read entire output files at once. Use `grep`, `head`, or incremental reads:
+
+```bash
+wc -l .firecrawl/file.md && head -50 .firecrawl/file.md
+grep -n "keyword" .firecrawl/file.md
+```
+
+Single format outputs raw content. Multiple formats (e.g., `--format markdown,links`) output JSON.
+
+## Commands
+
+### search
+
+Web search with optional content scraping. Run `firecrawl search --help` for all options.
+
+```bash
+# Basic search
+firecrawl search "your query" -o .firecrawl/result.json --json
+
+# Search and scrape full page content from results
+firecrawl search "your query" --scrape -o .firecrawl/scraped.json --json
+
+# News from the past day
+firecrawl search "your query" --sources news --tbs qdr:d -o .firecrawl/news.json --json
+```
+
+Options: `--limit <n>`, `--sources <web,images,news>`, `--categories <github,research,pdf>`, `--tbs <qdr:h|d|w|m|y>`, `--location`, `--country <code>`, `--scrape`, `--scrape-formats`, `-o`
+
+### scrape
+
+Scrape one or more URLs. Multiple URLs are scraped concurrently and each result is saved to `.firecrawl/`. Run `firecrawl scrape --help` for all options.
+
+```bash
+# Basic markdown extraction
+firecrawl scrape "<url>" -o .firecrawl/page.md
+
+# Main content only, no nav/footer
+firecrawl scrape "<url>" --only-main-content -o .firecrawl/page.md
+
+# Wait for JS to render, then scrape
+firecrawl scrape "<url>" --wait-for 3000 -o .firecrawl/page.md
+
+# Multiple URLs (each saved to .firecrawl/)
+firecrawl scrape https://firecrawl.dev https://firecrawl.dev/blog https://docs.firecrawl.dev
+
+# Get markdown and links together
+firecrawl scrape "<url>" --format markdown,links -o .firecrawl/page.json
+```
+
+Options: `-f <markdown,html,rawHtml,links,screenshot,json>`, `-H`, `--only-main-content`, `--wait-for <ms>`, `--include-tags`, `--exclude-tags`, `-o`
+
+### map
+
+Discover URLs on a site. Run `firecrawl map --help` for all options.
+
+```bash
+# Find a specific page on a large site
+firecrawl map "<url>" --search "authentication" -o .firecrawl/filtered.txt
+
+# Get all URLs
+firecrawl map "<url>" --limit 500 --json -o .firecrawl/urls.json
+```
+
+Options: `--limit <n>`, `--search <query>`, `--sitemap <include|skip|only>`, `--include-subdomains`, `--json`, `-o`
+
+### crawl
+
+Bulk extract from a website. Run `firecrawl crawl --help` for all options.
+
+```bash
+# Crawl a docs section
+firecrawl crawl "<url>" --include-paths /docs --limit 50 --wait -o .firecrawl/crawl.json
+
+# Full crawl with depth limit
+firecrawl crawl "<url>" --max-depth 3 --wait --progress -o .firecrawl/crawl.json
+
+# Check status of a running crawl
+firecrawl crawl <job-id>
+```
+
+Options: `--wait`, `--progress`, `--limit <n>`, `--max-depth <n>`, `--include-paths`, `--exclude-paths`, `--delay <ms>`, `--max-concurrency <n>`, `--pretty`, `-o`
+
+### agent
+
+AI-powered autonomous extraction (2-5 minutes). Run `firecrawl agent --help` for all options.
+
+```bash
+# Extract structured data
+firecrawl agent "extract all pricing tiers" --wait -o .firecrawl/pricing.json
+
+# With a JSON schema for structured output
+firecrawl agent "extract products" --schema '{"type":"object","properties":{"name":{"type":"string"},"price":{"type":"number"}}}' --wait -o .firecrawl/products.json
+
+# Focus on specific pages
+firecrawl agent "get feature list" --urls "<url>" --wait -o .firecrawl/features.json
+```
+
+Options: `--urls`, `--model <spark-1-mini|spark-1-pro>`, `--schema <json>`, `--schema-file`, `--max-credits <n>`, `--wait`, `--pretty`, `-o`
+
+### browser
+
+Cloud Chromium sessions in Firecrawl's remote sandboxed environment. Run `firecrawl browser --help` and `firecrawl browser "agent-browser --help"` for all options.
+
+```bash
+# Typical browser workflow
+firecrawl browser "open <url>"
+firecrawl browser "snapshot -i"                       # see interactive elements with @ref IDs
+firecrawl browser "click @e5"                         # interact with elements
+firecrawl browser "fill @e3 'search query'"           # fill form fields
+firecrawl browser "scrape" -o .firecrawl/page.md      # extract content
+firecrawl browser close
+```
+
+Shorthand auto-launches a session if none exists - no setup required.
+
+**Core agent-browser commands:**
+
+| Command              | Description                              |
+| -------------------- | ---------------------------------------- |
+
+codex
+I’m using the Firecrawl research skill solely to verify the current official Gemini pricing and quota model; the spec’s cost assumptions should not be based on stale model economics.
+exec
+/bin/zsh -lc 'firecrawl search "site:ai.google.dev/gemini-api/docs/pricing Gemini API pricing Flash Lite" --scrape --limit 3 --json' in /Users/mafex/code/personal/MaxMi
+ exited 1 in 247ms:
+Error: getaddrinfo ENOTFOUND api.firecrawl.dev
+
+web search: 
+web search: Gemini API pricing official Flash Lite input output cached context ...
+web search: 
+web search: 
+codex
+## Feasibility verdict
+
+**Not ready for an M6a implementation plan as written.** The product direction is good and SwiftUI is a sensible choice, but the persistence model and processing invariants are too underspecified to avoid losing history, rewriting past sessions, duplicating action items, and leaking more metadata than intended.
+
+Revise the schema/data-flow first. Then M6a is very feasible.
+
+## Critical issues
+
+- `activity_conversations` is not a sufficient session model. It has no `ended_at`, no membership/provenance, no processing state, and no link to `versions`, `derivatives`, or visits. Therefore the promised “expand to underlying captured detail” cannot be implemented reliably.
+
+  Use a real `activity_sessions` table rather than competitor-derived “conversations” terminology, plus a membership table:
+
+  - `activity_sessions(id, app_bundle, app_label, started_at, ended_at, last_activity_at, summary_ciphertext, summary_status, source_hash, model_id, prompt_version, created_at, updated_at)`
+  - `activity_session_versions(session_id, version_id PRIMARY KEY)` (or an equivalent immutable source reference)
+  - Keep `activity_app_visits` as raw focus telemetry.
+
+  A session summary must record the exact input set/hash it summarizes. Otherwise mutable current-hour versions will cause stale or duplicate summaries.
+
+- `UNIQUE(app_bundle, sub_key)` is wrong for historic sessions. Re-visiting the same URL/document next week either overwrites the old session or collides. In SQLite, multiple `NULL` `sub_key` values are also permitted, so it does not deduplicate generic sessions at all. If `sub_key` is a URL or title, it is also an additional cleartext privacy leak.
+
+- The current store is hour-bucketed and mutable: `versions` are overwritten within an hour. It is not an event stream. A Gemini “detect-conversation” pass cannot recover precise sessions that were never stored. Deterministically segment from focus visits plus stable/frozen versions; use Gemini only to write a display summary for a closed/quiet session.
+
+- `FocusObserver` currently only exposes `onCapture`, and drops state when the app becomes non-capturable. It cannot correctly persist visits without an explicit focus-transition callback. It also needs to close an open visit on sensitive-app transition, sleep, screen lock, termination, and startup repair after a crash. Decide explicitly whether sensitive apps produce no visit at all; do not record their app names merely because capture is suppressed.
+
+- “Local Gemini” is inaccurate. The app calls Google’s Gemini API directly. M6 sends new synthesized content and a history of open action items, not merely the exact extractor input. The free tier is marked as allowing product-improvement use; paid usage is marked otherwise. That needs explicit user-facing consent, not just “unchanged trust model.” [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing)
+
+## Should-fix
+
+### Activity architecture
+
+- Keep both visits and sessions, but give them distinct jobs:
+
+  - Visits answer “which app was foreground, and when?”
+  - Sessions answer “what coherent work did I do?” and are a materialized, revisable view over immutable source references.
+
+  A deterministic sessionizer should split on app change, a configurable inactivity gap, and optionally a source/thread change. Gemini should not decide boundaries in M6a.
+
+- Derivatives are useful compact evidence, but they are not a complete activity log: the existing extractor is optimized for atomic facts and can omit workflow context or commitments. Feed summary generation the relevant derivatives plus bounded source snippets/meeting transcript, with version IDs as provenance. Do not send all raw activity blindly.
+
+- Add `ended_at`, `last_activity_at`, `summary_updated_at`, `summary_input_hash`, `summary_status`, retry metadata, and a bounded retry/lease mechanism. Never summarize a still-mutating version; summarize after idle/freeze, and permit a controlled rewrite when the source hash changes.
+
+- Use `CHECK` constraints for run/item states and a transition API rather than unconstrained strings. Encrypt `resolution_evidence`; the proposed schema leaves it plaintext. Consider encrypting `sub_label` too. `app_bundle`, timestamps, and status can remain cleartext only if that metadata-leak tradeoff is stated plainly.
+
+- A new `MaxMiUI` module is the right boundary if it depends on presentation models/protocols, not directly on GRDB or `Store`. `MaxMiActivity` should own orchestration and depend on a narrow typed generation protocol. `MemoryRelay` currently only has `extract` and `embed`; “reuse MemoryRelay” requires an intentional extension or a new `ActivityGenerationRelay`, not ad hoc calls from the UI.
+
+### Hourly agent
+
+The desired delta behavior is sound, but “review new versions since last run” is not enough.
+
+- Persist an atomic cursor: `input_from`, `input_to`, immutable version IDs/content hashes, model/prompt version, and a run lease. `new_chars` and `before_chars` are observability fields, not correctness state.
+
+- Serialize runs in one actor/DB lease. A timer fire, retry, launch catch-up, and foreground trigger must not review the same window concurrently.
+
+- Give the model existing open items with stable opaque IDs and require operations such as `create`, `update(existingID)`, and `resolve(existingID, evidence)`. Validate IDs and apply the batch transactionally. Do not rely on title matching.
+
+- Never resolve an item merely because it is absent from a later model response. Require affirmative completion evidence. A user dismissal must be terminal unless the user explicitly reopens it; otherwise the agent will resurrect dismissed work.
+
+- Add `updated_at`, `last_evidence_at`, `source_refs`, a revision/event table, and retention/archival policy. Without these, action items grow indefinitely and updates are not auditable.
+
+- The agent should cap input by token count/version count and process backfill batches. Advance the cursor only after the corresponding transaction commits. A week offline cannot become one unbounded Gemini prompt.
+
+- Use **idle-gated, threshold-triggered work with an hourly fallback**, not a wall-clock-only `Timer`. A `Timer` on the app run loop does not survive process death or sleep and is not an hourly-delivery guarantee. Run on launch/foreground when overdue, after enough stable new material, and through `NSBackgroundActivityScheduler` where appropriate; it remains advisory, so the durable cursor is the source of truth.
+
+Gemini rate limits are project- and tier-based across RPM, TPM, and RPD; any exceeded dimension can return `429 RESOURCE_EXHAUSTED`, so M6 needs shared throttling with extraction/embedding and exponential backoff with jitter. [Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)
+
+### Cost
+
+The cost can be modest, but only if calls are bounded and summaries are not duplicated. With current paid `gemini-2.5-flash-lite` standard pricing of $0.10/M input and $0.40/M output tokens, 24 reviews/day at 8k input + 500 output each is roughly **$0.72/month** for reviews alone. At 50k input per review it is roughly **$3.75/month**, before display summaries. The current `gemini-flash-lite-latest` alias does not pin that cost or behavior; configure an explicit model ID and show estimated monthly usage. [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing)
+
+## SwiftUI/AppKit concerns
+
+This is achievable on macOS 14/15.
+
+- `@Observable` is available on macOS 14. Keep the view model `@MainActor`; perform database/Gemini work off-main and publish a prebuilt view state back to it.
+- Create and retain one `NSWindow` manager in `AppWiring`; host the root view in `NSHostingController`. On open call `NSApp.activate(ignoringOtherApps: true)` then `makeKeyAndOrderFront(nil)`. Do not let the window manager disappear when it closes.
+- The app is `.accessory`, which can still present an `NSWindow`. A normal closable `NSWindow` is preferable to an `NSPanel` for the main activity surface.
+- Left-click-open/right-click-menu needs deliberate status-item handling. Assigning `NSStatusItem.menu` normally makes the item show that menu; use the `NSStatusBarButton` action/event type to open the window on left mouse-up and call `popUpMenu(_:with:for:)` for right mouse-up.
+- “60 fps” should be a performance target, not an acceptance criterion. Avoid rebuilding all rows on refresh, use stable session IDs, avoid date formatting/decryption in `body`, and measure with Instruments. A `List` or `ScrollView`/`LazyVStack` can be smooth, but spring animations on a large refetched collection can still jank.
+- “Dark Minimi-style” conflicts with “respects light/dark.” Specify either an intentional always-dark branded surface or two semantic palettes; do not leave it to default colors.
+- For the tray asset, set `NSImage.isTemplate = true`; the source bitmap should be a simple alpha shape, not a permanently white icon.
+
+## Scope
+
+The split is directionally right, but the sequencing needs two changes:
+
+1. M6a must include privacy controls for activity synthesis, at minimum a global enable/disable and per-app exclusion before any session is written. Deferring that to M6c means M6a can create summaries from apps users intended to keep out of the timeline.
+2. Reduce M6a’s Gemini work: deterministic sessionization + summarized closed sessions + a read-only Activity window is a shippable vertical slice. Do not add a separate Gemini conversation-detector pass.
+
+The dog icon can land in M6a. Full settings, update checks, and animation refinement can remain M6c. The activity-window opening plumbing cannot wait until M6c because M6a needs the menu-bar click behavior.
+
+## Nice-to-have
+
+- Add a “Why am I seeing this?” disclosure showing the source sessions/version IDs behind a summary or action item.
+- Store local day buckets derived from one documented timezone policy; retain epoch milliseconds in UTC. DST and travel otherwise produce surprising grouping.
+- Put an explicit summary/action-item retention policy in the spec.
+- Use Gemini structured output with a schema and strict local decoding/validation, rather than prose/JSON parsing heuristics.
+- Treat raw app visits as optional diagnostic data; the primary UI can show sessions and reveal visit granularity only on expansion.
+
+## Overall recommendation
+
+**Revise before planning M6a.** Keep the product goal and the module split, but replace `activity_conversations` with source-linked sessions, make session boundaries deterministic, add durable agent cursors/leases/provenance, and move activity privacy controls into M6a. After those changes, M6a is a good, genuinely shippable first user-facing slice; M6b can safely build the agent atop the same immutable activity inputs.
+tokens used
+79,480
+## Feasibility verdict
+
+**Not ready for an M6a implementation plan as written.** The product direction is good and SwiftUI is a sensible choice, but the persistence model and processing invariants are too underspecified to avoid losing history, rewriting past sessions, duplicating action items, and leaking more metadata than intended.
+
+Revise the schema/data-flow first. Then M6a is very feasible.
+
+## Critical issues
+
+- `activity_conversations` is not a sufficient session model. It has no `ended_at`, no membership/provenance, no processing state, and no link to `versions`, `derivatives`, or visits. Therefore the promised “expand to underlying captured detail” cannot be implemented reliably.
+
+  Use a real `activity_sessions` table rather than competitor-derived “conversations” terminology, plus a membership table:
+
+  - `activity_sessions(id, app_bundle, app_label, started_at, ended_at, last_activity_at, summary_ciphertext, summary_status, source_hash, model_id, prompt_version, created_at, updated_at)`
+  - `activity_session_versions(session_id, version_id PRIMARY KEY)` (or an equivalent immutable source reference)
+  - Keep `activity_app_visits` as raw focus telemetry.
+
+  A session summary must record the exact input set/hash it summarizes. Otherwise mutable current-hour versions will cause stale or duplicate summaries.
+
+- `UNIQUE(app_bundle, sub_key)` is wrong for historic sessions. Re-visiting the same URL/document next week either overwrites the old session or collides. In SQLite, multiple `NULL` `sub_key` values are also permitted, so it does not deduplicate generic sessions at all. If `sub_key` is a URL or title, it is also an additional cleartext privacy leak.
+
+- The current store is hour-bucketed and mutable: `versions` are overwritten within an hour. It is not an event stream. A Gemini “detect-conversation” pass cannot recover precise sessions that were never stored. Deterministically segment from focus visits plus stable/frozen versions; use Gemini only to write a display summary for a closed/quiet session.
+
+- `FocusObserver` currently only exposes `onCapture`, and drops state when the app becomes non-capturable. It cannot correctly persist visits without an explicit focus-transition callback. It also needs to close an open visit on sensitive-app transition, sleep, screen lock, termination, and startup repair after a crash. Decide explicitly whether sensitive apps produce no visit at all; do not record their app names merely because capture is suppressed.
+
+- “Local Gemini” is inaccurate. The app calls Google’s Gemini API directly. M6 sends new synthesized content and a history of open action items, not merely the exact extractor input. The free tier is marked as allowing product-improvement use; paid usage is marked otherwise. That needs explicit user-facing consent, not just “unchanged trust model.” [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing)
+
+## Should-fix
+
+### Activity architecture
+
+- Keep both visits and sessions, but give them distinct jobs:
+
+  - Visits answer “which app was foreground, and when?”
+  - Sessions answer “what coherent work did I do?” and are a materialized, revisable view over immutable source references.
+
+  A deterministic sessionizer should split on app change, a configurable inactivity gap, and optionally a source/thread change. Gemini should not decide boundaries in M6a.
+
+- Derivatives are useful compact evidence, but they are not a complete activity log: the existing extractor is optimized for atomic facts and can omit workflow context or commitments. Feed summary generation the relevant derivatives plus bounded source snippets/meeting transcript, with version IDs as provenance. Do not send all raw activity blindly.
+
+- Add `ended_at`, `last_activity_at`, `summary_updated_at`, `summary_input_hash`, `summary_status`, retry metadata, and a bounded retry/lease mechanism. Never summarize a still-mutating version; summarize after idle/freeze, and permit a controlled rewrite when the source hash changes.
+
+- Use `CHECK` constraints for run/item states and a transition API rather than unconstrained strings. Encrypt `resolution_evidence`; the proposed schema leaves it plaintext. Consider encrypting `sub_label` too. `app_bundle`, timestamps, and status can remain cleartext only if that metadata-leak tradeoff is stated plainly.
+
+- A new `MaxMiUI` module is the right boundary if it depends on presentation models/protocols, not directly on GRDB or `Store`. `MaxMiActivity` should own orchestration and depend on a narrow typed generation protocol. `MemoryRelay` currently only has `extract` and `embed`; “reuse MemoryRelay” requires an intentional extension or a new `ActivityGenerationRelay`, not ad hoc calls from the UI.
+
+### Hourly agent
+
+The desired delta behavior is sound, but “review new versions since last run” is not enough.
+
+- Persist an atomic cursor: `input_from`, `input_to`, immutable version IDs/content hashes, model/prompt version, and a run lease. `new_chars` and `before_chars` are observability fields, not correctness state.
+
+- Serialize runs in one actor/DB lease. A timer fire, retry, launch catch-up, and foreground trigger must not review the same window concurrently.
+
+- Give the model existing open items with stable opaque IDs and require operations such as `create`, `update(existingID)`, and `resolve(existingID, evidence)`. Validate IDs and apply the batch transactionally. Do not rely on title matching.
+
+- Never resolve an item merely because it is absent from a later model response. Require affirmative completion evidence. A user dismissal must be terminal unless the user explicitly reopens it; otherwise the agent will resurrect dismissed work.
+
+- Add `updated_at`, `last_evidence_at`, `source_refs`, a revision/event table, and retention/archival policy. Without these, action items grow indefinitely and updates are not auditable.
+
+- The agent should cap input by token count/version count and process backfill batches. Advance the cursor only after the corresponding transaction commits. A week offline cannot become one unbounded Gemini prompt.
+
+- Use **idle-gated, threshold-triggered work with an hourly fallback**, not a wall-clock-only `Timer`. A `Timer` on the app run loop does not survive process death or sleep and is not an hourly-delivery guarantee. Run on launch/foreground when overdue, after enough stable new material, and through `NSBackgroundActivityScheduler` where appropriate; it remains advisory, so the durable cursor is the source of truth.
+
+Gemini rate limits are project- and tier-based across RPM, TPM, and RPD; any exceeded dimension can return `429 RESOURCE_EXHAUSTED`, so M6 needs shared throttling with extraction/embedding and exponential backoff with jitter. [Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)
+
+### Cost
+
+The cost can be modest, but only if calls are bounded and summaries are not duplicated. With current paid `gemini-2.5-flash-lite` standard pricing of $0.10/M input and $0.40/M output tokens, 24 reviews/day at 8k input + 500 output each is roughly **$0.72/month** for reviews alone. At 50k input per review it is roughly **$3.75/month**, before display summaries. The current `gemini-flash-lite-latest` alias does not pin that cost or behavior; configure an explicit model ID and show estimated monthly usage. [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing)
+
+## SwiftUI/AppKit concerns
+
+This is achievable on macOS 14/15.
+
+- `@Observable` is available on macOS 14. Keep the view model `@MainActor`; perform database/Gemini work off-main and publish a prebuilt view state back to it.
+- Create and retain one `NSWindow` manager in `AppWiring`; host the root view in `NSHostingController`. On open call `NSApp.activate(ignoringOtherApps: true)` then `makeKeyAndOrderFront(nil)`. Do not let the window manager disappear when it closes.
+- The app is `.accessory`, which can still present an `NSWindow`. A normal closable `NSWindow` is preferable to an `NSPanel` for the main activity surface.
+- Left-click-open/right-click-menu needs deliberate status-item handling. Assigning `NSStatusItem.menu` normally makes the item show that menu; use the `NSStatusBarButton` action/event type to open the window on left mouse-up and call `popUpMenu(_:with:for:)` for right mouse-up.
+- “60 fps” should be a performance target, not an acceptance criterion. Avoid rebuilding all rows on refresh, use stable session IDs, avoid date formatting/decryption in `body`, and measure with Instruments. A `List` or `ScrollView`/`LazyVStack` can be smooth, but spring animations on a large refetched collection can still jank.
+- “Dark Minimi-style” conflicts with “respects light/dark.” Specify either an intentional always-dark branded surface or two semantic palettes; do not leave it to default colors.
+- For the tray asset, set `NSImage.isTemplate = true`; the source bitmap should be a simple alpha shape, not a permanently white icon.
+
+## Scope
+
+The split is directionally right, but the sequencing needs two changes:
+
+1. M6a must include privacy controls for activity synthesis, at minimum a global enable/disable and per-app exclusion before any session is written. Deferring that to M6c means M6a can create summaries from apps users intended to keep out of the timeline.
+2. Reduce M6a’s Gemini work: deterministic sessionization + summarized closed sessions + a read-only Activity window is a shippable vertical slice. Do not add a separate Gemini conversation-detector pass.
+
+The dog icon can land in M6a. Full settings, update checks, and animation refinement can remain M6c. The activity-window opening plumbing cannot wait until M6c because M6a needs the menu-bar click behavior.
+
+## Nice-to-have
+
+- Add a “Why am I seeing this?” disclosure showing the source sessions/version IDs behind a summary or action item.
+- Store local day buckets derived from one documented timezone policy; retain epoch milliseconds in UTC. DST and travel otherwise produce surprising grouping.
+- Put an explicit summary/action-item retention policy in the spec.
+- Use Gemini structured output with a schema and strict local decoding/validation, rather than prose/JSON parsing heuristics.
+- Treat raw app visits as optional diagnostic data; the primary UI can show sessions and reveal visit granularity only on expansion.
+
+## Overall recommendation
+
+**Revise before planning M6a.** Keep the product goal and the module split, but replace `activity_conversations` with source-linked sessions, make session boundaries deterministic, add durable agent cursors/leases/provenance, and move activity privacy controls into M6a. After those changes, M6a is a good, genuinely shippable first user-facing slice; M6b can safely build the agent atop the same immutable activity inputs.

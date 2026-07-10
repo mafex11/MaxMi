@@ -45,9 +45,11 @@ let package = Package(
         ]),
         .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),
         .target(name: "MaxMiRelay", dependencies: ["MaxMiCore"]),
+        .target(name: "MaxMiActivity", dependencies: ["MaxMiCore"]),
         .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore", "CWhisper"]),
+        .target(name: "MaxMiUI", dependencies: ["MaxMiCore"]),
         .executableTarget(name: "MaxMi", dependencies: [
-            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay", "MaxMiMeetings",
+            "MaxMiCore", "MaxMiStore", "MaxMiCapture", "MaxMiRelay", "MaxMiActivity", "MaxMiMeetings", "MaxMiUI",
         ]),
         .executableTarget(name: "MaxMiMCP", dependencies: [
             "MaxMiCore", "MaxMiStore", "MaxMiRelay",
@@ -57,6 +59,8 @@ let package = Package(
         .testTarget(name: "MaxMiCaptureTests", dependencies: ["MaxMiCapture"],
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "MaxMiRelayTests", dependencies: ["MaxMiRelay"]),
+        .testTarget(name: "MaxMiActivityTests", dependencies: ["MaxMiActivity"]),
+        .testTarget(name: "MaxMiUITests", dependencies: ["MaxMiUI"]),
         .testTarget(name: "MaxMiMCPTests", dependencies: ["MaxMiMCP"]),
         .testTarget(name: "MaxMiMeetingsTests", dependencies: ["MaxMiMeetings"]),
     ]

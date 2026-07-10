@@ -13,7 +13,7 @@ extension Store {
         try mutateSet("paused_threads", element: sourceKey, insert: paused, nowMs: nowMs)
     }
 
-    private func readSet(_ key: String) throws -> Set<String> {
+    func readSet(_ key: String) throws -> Set<String> {
         try db.dbQueue.read { d in
             guard let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: [key]) else { return [] }
             // Recoverable metadata: log decode failure and treat as empty.
@@ -25,7 +25,7 @@ extension Store {
         }
     }
 
-    private func mutateSet(_ key: String, element: String, insert: Bool, nowMs: EpochMs) throws {
+    func mutateSet(_ key: String, element: String, insert: Bool, nowMs: EpochMs) throws {
         try db.dbQueue.write { d in
             var set: Set<String> = []
             if let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: [key]) {

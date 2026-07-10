@@ -5,20 +5,36 @@ public final class GeminiClient: MemoryRelay {
     let config: EnvConfig
     let session: URLSession
     let baseURL: URL
+    let throttle: GeminiThrottle
 
     public init(config: EnvConfig, session: URLSession = .shared,
-                baseURL: URL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!) {
-        self.config = config; self.session = session; self.baseURL = baseURL
+                baseURL: URL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
+                throttle: GeminiThrottle = GeminiThrottle.shared) {
+        self.config = config; self.session = session; self.baseURL = baseURL; self.throttle = throttle
     }
 
-    public func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String] {
-        let prompt = ExtractPrompt.build(newContent: newContent, previousContent: previousContent,
-                                         sourceApp: sourceApp, sourceKey: sourceKey)
+    public func generateContent(model: String, prompt: String, temperature: Double = 0.2, responseMimeType: String? = nil) async throws -> String {
+        await throttle.waitIfNeeded()
+
+        var generationConfig: [String: Any] = ["temperature": temperature]
+        if let mimeType = responseMimeType {
+            generationConfig["responseMimeType"] = mimeType
+        }
+
         let body: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
-            "generationConfig": ["temperature": 0.2, "responseMimeType": "application/json"],
+            "generationConfig": generationConfig,
         ]
-        let data = try await post(path: "models/\(config.extractModel):generateContent", body: body)
+
+        let data: Data
+        do {
+            data = try await post(path: "models/\(model):generateContent", body: body)
+            await throttle.recordSuccess()
+        } catch let RelayError.httpStatus(code) {
+            await throttle.recordFailure(statusCode: code)
+            throw RelayError.httpStatus(code)
+        }
+
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let candidates = obj["candidates"] as? [[String: Any]],
               let content = candidates.first?["content"] as? [String: Any],
@@ -26,16 +42,33 @@ public final class GeminiClient: MemoryRelay {
               let text = parts.first?["text"] as? String else {
             throw RelayError.malformedResponse(String(data: data.prefix(200), encoding: .utf8) ?? "")
         }
+
+        return text
+    }
+
+    public func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String] {
+        let prompt = ExtractPrompt.build(newContent: newContent, previousContent: previousContent,
+                                         sourceApp: sourceApp, sourceKey: sourceKey)
+        let text = try await generateContent(model: config.extractModel, prompt: prompt, temperature: 0.2, responseMimeType: "application/json")
         return try JSONArrayParser.parse(text)
     }
 
     public func embed(text: String) async throws -> [Float] {
+        await throttle.waitIfNeeded()
+
         let body: [String: Any] = [
             "model": "models/\(config.embedModel)",
             "content": ["parts": [["text": text]]],
             "outputDimensionality": config.embedDims,
         ]
-        let data = try await post(path: "models/\(config.embedModel):embedContent", body: body)
+        let data: Data
+        do {
+            data = try await post(path: "models/\(config.embedModel):embedContent", body: body)
+            await throttle.recordSuccess()
+        } catch let RelayError.httpStatus(code) {
+            await throttle.recordFailure(statusCode: code)
+            throw RelayError.httpStatus(code)
+        }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let emb = obj["embedding"] as? [String: Any],
               let values = emb["values"] as? [Double] else {

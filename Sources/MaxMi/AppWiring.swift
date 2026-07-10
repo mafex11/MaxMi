@@ -4,7 +4,9 @@ import MaxMiCore
 import MaxMiStore
 import MaxMiCapture
 import MaxMiRelay
+import MaxMiActivity
 import MaxMiMeetings
+import MaxMiUI
 
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
 final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is internally serialized by GRDB's DatabaseQueue
@@ -62,6 +64,15 @@ final class AppWiring {
     var rightLanePanel: RightLanePanel?
     var modelStore: WhisperModelStore?
 
+    // Activity focus-generation mechanism
+    var focusGeneration: Int = 0
+    var currentVisitID: String?
+    let displaySummarizer: DisplaySummarizer
+
+    // Activity UI
+    let activityWindow: ActivityWindow
+    let activityPrivacyWindow: ActivityPrivacyWindow
+
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MaxMi", isDirectory: true)
@@ -96,6 +107,36 @@ final class AppWiring {
         pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
         menuBar = MenuBarController()
         menuBar.hasAPIKey = config.geminiAPIKey != nil
+        let activityRepo = StoreActivitySummaryRepository(store: store)
+        let activityRelay = GeminiActivityRelay(geminiClient: relay, maxEvidenceChars: 12_000)
+        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay, maxEvidenceChars: 12_000)
+
+        // Initialize activity UI
+        // Store is internally serialized by GRDB; we safely capture it via nonisolated(unsafe)
+        nonisolated(unsafe) let activityStore = store
+        let viewModel = ActivityViewModel(
+            load: { @Sendable in
+                do {
+                    let sessions = try activityStore.recentSessions(limit: 100)
+                    return try sessions.map { session in
+                        let evidence = try activityStore.sessionEvidence(session.id)
+                        return TimelineSessionDTO(
+                            id: session.id,
+                            appLabel: session.appLabel,
+                            summary: session.summary,
+                            startedAtMs: session.startedAtMs,
+                            evidence: evidence
+                        )
+                    }
+                } catch {
+                    NSLog("MaxMi: failed to load activity sessions: \(error)")
+                    return []
+                }
+            },
+            now: { epochNowMs() }
+        )
+        activityWindow = ActivityWindow(viewModel: viewModel)
+        activityPrivacyWindow = ActivityPrivacyWindow(store: store)
     }
 
     func start() {
@@ -113,12 +154,58 @@ final class AppWiring {
             onPauseCurrentThread: { [weak self] in
                 guard let self, let key = self.lastSourceKey else { return }
                 try? self.store.setThreadPaused(key, paused: true, nowMs: epochNowMs())
-            }
+            },
+            onOpenActivity: { [weak self] in self?.activityWindow.show() },
+            onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() }
         )
         menuBar.encryptionAvailable = encryptionAvailable
         guard encryptionAvailable else { return }          // capture paused per §9
         do { try store.encryptExistingContent(nowMs: epochNowMs()) }   // §6: backfill before capture
         catch { NSLog("MaxMi: backfill failed, will retry next launch: \(error)") }
+
+        // Startup crash-repair for activity
+        do {
+            try store.closeOpenVisits(nowMs: epochNowMs())
+            try store.closeOpenSessions(nowMs: epochNowMs())
+        } catch {
+            NSLog("MaxMi: activity startup crash-repair failed: \(error)")
+        }
+
+        // Show privacy window on first run if consent is unset
+        do {
+            if try store.activityConsent() == .unset {
+                activityPrivacyWindow.show()
+            }
+        } catch {
+            NSLog("MaxMi: failed to check activity consent: \(error)")
+        }
+
+        // Sleep/lock notification for activity
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let nowMs = epochNowMs()
+                try? self.store.closeOpenVisits(nowMs: nowMs)
+                self.currentVisitID = nil
+                try? self.store.closeActiveSession(nowMs: nowMs)
+            }
+        }
+
+        // Screen lock / session resign for activity
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let nowMs = epochNowMs()
+                try? self.store.closeOpenVisits(nowMs: nowMs)
+                self.currentVisitID = nil
+                try? self.store.closeActiveSession(nowMs: nowMs)
+            }
+        }
+
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
         guard self.observer == nil else { return }  // prevent double-start
         let observer = FocusObserver(
@@ -134,6 +221,9 @@ final class AppWiring {
                 self?.captureFrontmost(app: app, pid: pid)
             }
         )
+        observer.onFocusChanged = { [weak self] app, isCapturable, pid in
+            self?.handleFocusChange(app: app, isCapturable: isCapturable, pid: pid)
+        }
         observer.start()
         self.observer = observer
         // Pipeline sweep every 30s: picks up idle/frozen versions and due retries (spec §3a sweeper).
@@ -141,6 +231,12 @@ final class AppWiring {
             Task { @MainActor in
                 guard let self, !self.paused else { return }
                 await self.pipeline.tick()
+                // Close idle activity sessions (5 min gap)
+                _ = try? self.store.closeIdleSessions(idleGapMs: 5*60_000, nowMs: epochNowMs())
+                // Summarize due sessions if activity enabled
+                if self.isActivitySynthesisEnabled() {
+                    await self.displaySummarizer.summarizeDue(nowMs: epochNowMs())
+                }
             }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -148,6 +244,58 @@ final class AppWiring {
 
         // Meeting capture wiring — guarded by same availability as regular capture
         wireMeetingCapture()
+    }
+
+    private func handleFocusChange(app: AppInfo, isCapturable: Bool, pid: pid_t) {
+        let nowMs = epochNowMs()
+
+        // Bump generation on EVERY focus transition
+        focusGeneration += 1
+
+        // Close active session + all open visits (there should only be one, but closeOpenVisits is the clean approach)
+        do {
+            try store.closeActiveSession(nowMs: nowMs)
+            try store.closeOpenVisits(nowMs: nowMs)
+            currentVisitID = nil
+        } catch {
+            NSLog("MaxMi: activity close failed on focus change: \(error)")
+        }
+
+        // Open new visit ONLY if eligible
+        guard isActivityEligible(bundleID: app.bundleID) else { return }
+
+        do {
+            let visitID = try store.openVisit(appBundle: app.bundleID, appLabel: app.name, nowMs: nowMs)
+            currentVisitID = visitID
+        } catch {
+            NSLog("MaxMi: activity visit open failed: \(error)")
+        }
+    }
+
+    private func isActivityEligible(bundleID: String) -> Bool {
+        do {
+            let consent = try store.activityConsent()
+            let enabled = try store.activityEnabled()
+            let excluded = try store.activityExcludedApps()
+
+            return consent == .granted
+                && enabled
+                && !Denylist.isSensitiveApp(bundleID)
+                && !excluded.contains(bundleID)
+        } catch {
+            NSLog("MaxMi: activity eligibility check failed: \(error)")
+            return false
+        }
+    }
+
+    private func isActivitySynthesisEnabled() -> Bool {
+        do {
+            let consent = try store.activityConsent()
+            let enabled = try store.activityEnabled()
+            return consent == .granted && enabled
+        } catch {
+            return false
+        }
     }
 
     private func wireMeetingCapture() {
@@ -257,13 +405,16 @@ final class AppWiring {
             if recentApps.count > 8 { recentApps.removeLast() }
         }
 
+        // Capture the current generation for this capture
+        let gen = focusGeneration
+
         // Chromium browsers and Slack need retry-shortly for post-kick empty trees (spec §10).
         let needsRetry = Browser(rawValue: app.bundleID)?.isChromium == true || app.bundleID == ParserRegistry.slackBundleID
         let attemptsLeft = needsRetry ? 3 : 1
-        attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft)
+        attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: gen)
     }
 
-    private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int) {
+    private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int, captureGeneration: Int) {
         guard !paused else { return }
         // The AX tree read is synchronous cross-process IPC — for heavy trees (Mail ~3600 nodes)
         // it must NOT run on the main thread, or it freezes the menu-bar UI. Read off-main, then
@@ -271,15 +422,15 @@ final class AppWiring {
         // the actor boundary safely.
         Task.detached(priority: .utility) { [weak self] in
             let snapshot = AXReader.snapshotFrontmostWindow(pid: pid)
-            await self?.finishCapture(app: app, pid: pid, attemptsLeft: attemptsLeft, snapshot: snapshot)
+            await self?.finishCapture(app: app, pid: pid, attemptsLeft: attemptsLeft, snapshot: snapshot, captureGeneration: captureGeneration)
         }
     }
 
     private func finishCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int,
-                               snapshot: (window: AXNode, title: String?)?) {
+                               snapshot: (window: AXNode, title: String?)?, captureGeneration: Int) {
         guard !paused else { return }
         guard let (window, title) = snapshot else {
-            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft); return
+            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: captureGeneration); return
         }
 
         // Build AppInfo with authoritative AXReader title
@@ -303,7 +454,7 @@ final class AppWiring {
 
             // Shared tail: guard parsed, check denylist + pause, commit
             guard let parsed else {
-                retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft)
+                retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: captureGeneration)
                 return
             }
 
@@ -320,10 +471,30 @@ final class AppWiring {
                 return
             }
             guard CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: cleanKey, pausedThreads: pausedThreads) else { return }
+            let nowMs = epochNowMs()
             let result = try store.commitCapture(
                 CaptureInput(sourceApp: parsed.sourceApp, sourceKey: cleanKey,
                             sourceTitle: parsed.sourceTitle, content: parsed.content),
-                nowMs: epochNowMs())
+                nowMs: nowMs)
+
+            // After normal memory capture commits, record activity evidence ONLY if generation matches AND committed (not deduplicated)
+            let eligible = isActivityEligible(bundleID: appInfo.bundleID)
+            if MaxMiCore.shouldRecordActivity(captureGeneration: captureGeneration, currentGeneration: focusGeneration, eligible: eligible) {
+                // Only record activity for .committed captures (not deduplicated)
+                if case .committed(let versionID, _) = result {
+                    do {
+                        _ = try store.recordActivityCapture(
+                            appBundle: appInfo.bundleID,
+                            appLabel: appInfo.name,
+                            versionID: versionID,
+                            content: parsed.content,
+                            nowMs: nowMs
+                        )
+                    } catch {
+                        NSLog("MaxMi: activity capture failed: \(error)")
+                    }
+                }
+            }
 
             switch result {
             case .committed:
@@ -336,16 +507,16 @@ final class AppWiring {
             }
         } catch ExtractionError.emptyContent, ExtractionError.noWebArea, ExtractionError.noURL {
             // Browser extraction errors: retry
-            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft)
+            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: captureGeneration)
         } catch {
             NSLog("MaxMi capture skipped: \(error)")             // logged, skipped, never crash (spec §10)
         }
     }
 
-    private func retryOrGiveUp(app: AppInfo, pid: pid_t, attemptsLeft: Int) {
+    private func retryOrGiveUp(app: AppInfo, pid: pid_t, attemptsLeft: Int, captureGeneration: Int) {
         guard attemptsLeft > 1 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft - 1)
+            self?.attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft - 1, captureGeneration: captureGeneration)
         }
     }
 }
