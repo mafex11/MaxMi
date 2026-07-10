@@ -41,7 +41,9 @@ public final class AudioMixer {
     }
 
     private func processMix(_ buffer: AVAudioPCMBuffer, time: AVAudioTime, isSystem: Bool) {
-        guard let onFrame = onFrame else { return }
+        // NOTE: do NOT early-return when onFrame is nil — the level meter must update regardless
+        // of whether a frame handler is attached (the recorder UI polls `level` before wiring
+        // a handler). onFrame is checked only at the emit step below.
 
         // Get or create converter for this source
         let converter: AVAudioConverter?
@@ -87,9 +89,10 @@ public final class AudioMixer {
         let rms = sqrt(samples.reduce(0.0) { $0 + $1 * $1 } / Float(samples.count))
         currentLevel = rms
 
-        // Emit PCMFrame with host timestamp
-        let hostTimeNs = time.hostTime
-        let frame = PCMFrame(samples: samples, hostTimeNs: hostTimeNs)
-        onFrame(frame)
+        // Emit PCMFrame with host timestamp (only if a handler is attached; level already updated).
+        if let onFrame = onFrame {
+            let frame = PCMFrame(samples: samples, hostTimeNs: time.hostTime)
+            onFrame(frame)
+        }
     }
 }

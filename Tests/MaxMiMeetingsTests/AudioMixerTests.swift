@@ -6,6 +6,7 @@ final class AudioMixerTests: XCTestCase {
     func testMixesSystemAndMicBuffersTo16kHzMono() throws {
         let mixer = AudioMixer(targetSampleRate: 16_000)
         let expectation = self.expectation(description: "frame emitted")
+        expectation.assertForOverFulfill = false   // two buffers (system+mic) each emit a frame
         let boxedFrame = Box<PCMFrame?>(nil)
 
         mixer.onFrame = { frame in
@@ -83,13 +84,13 @@ final class AudioMixerTests: XCTestCase {
     func testHandlesConcurrentSystemAndMicCalls() throws {
         let mixer = AudioMixer(targetSampleRate: 16_000)
         let expectation = self.expectation(description: "frames emitted")
-        let boxedCount = Box<Int>(0)
+        expectation.expectedFulfillmentCount = 5
+        expectation.assertForOverFulfill = false   // 20 concurrent frames may over-fulfill — that's fine
+        let counter = Counter()                     // serialized counter (frames arrive on the mixer's serial queue)
 
         mixer.onFrame = { _ in
-            boxedCount.value += 1
-            if boxedCount.value >= 5 {
-                expectation.fulfill()
-            }
+            counter.increment()
+            expectation.fulfill()
         }
 
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
@@ -117,8 +118,15 @@ final class AudioMixerTests: XCTestCase {
         wait(for: [expectation], timeout: 2.0)
 
         // Should have emitted frames without crashes
-        XCTAssertGreaterThanOrEqual(boxedCount.value, 5, "should emit frames from concurrent input")
+        XCTAssertGreaterThanOrEqual(counter.value, 5, "should emit frames from concurrent input")
     }
+}
+
+/// Thread-safe counter for the concurrent-emit test (onFrame may fire from concurrent producers).
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock(); private var _v = 0
+    func increment() { lock.lock(); _v += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return _v }
 }
 
 // Helper to box values for safe capture
