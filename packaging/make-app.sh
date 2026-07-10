@@ -24,5 +24,9 @@ else
   codesign --force --deep --sign - "$APP"
 fi
 echo "Built $APP"
+echo ""
+echo "Relaunch ritual (grant PERSISTS across rebuilds — do NOT run tccutil reset):"
+echo "  pkill -9 -f \"$APP/Contents/MacOS/MaxMi\"; sleep 2; open $APP"
+echo "  ('open' won't replace a running instance — must pkill first.)"
 echo "MCP server bundled. Register with:"
 echo "  claude mcp add maxmi -- \"$PWD/$APP/Contents/MacOS/maxmi-mcp\""
