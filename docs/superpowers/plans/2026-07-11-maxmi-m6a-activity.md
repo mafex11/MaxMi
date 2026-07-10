@@ -65,22 +65,35 @@ public struct ActivitySession: Sendable {
 }
 extension Store {
     // Visit lifecycle
-    public func openVisit(appBundle: String, appLabel: String, nowMs: EpochMs) throws -> String   // visit id
-    public func closeOpenVisits(nowMs: EpochMs) throws                                              // crash-repair + on-transition
-    // Session lifecycle (provisional open -> evidence -> close)
-    public func openOrCurrentSession(appBundle: String, appLabel: String, nowMs: EpochMs) throws -> String  // session id
-    public func appendEvidence(sessionID: String, versionID: String?, content: String, nowMs: EpochMs) throws // encrypts + coalesces by content_hash
+    public func openVisit(appBundle: String, appLabel: String, nowMs: EpochMs) throws -> String
+    public func closeOpenVisits(nowMs: EpochMs) throws                         // crash-repair + on-transition
+    // ▲REV (Codex must-fix #1): ATOMIC attribution. Given the app that OWNED this capture (carried
+    // through the async capture completion as a token), open-or-continue that app's provisional
+    // session AND append the evidence snapshot in ONE write transaction, keyed to the capture's app
+    // — NOT to "whatever app is frontmost now" (capture completes via Task.detached, focus may have moved).
+    // Returns the session id the evidence landed in. Applies the segmenter close-decision internally.
+    public func recordActivityCapture(appBundle: String, appLabel: String, versionID: String?,
+                                      content: String, gapMs: EpochMs, nowMs: EpochMs) throws -> String
     public func closeSession(_ id: String, nowMs: EpochMs) throws
-    public func setSessionSummary(_ id: String, summary: String, sourceHash: String, modelID: String, promptVersion: String, nowMs: EpochMs) throws
-    public func sessionSourceHash(_ id: String) throws -> String     // hash over evidence snapshots
+    public func closeIdleSessions(idleGapMs: EpochMs, nowMs: EpochMs) throws -> [String]  // ▲REV #2: idle finalize; returns closed ids
+    public func closeOpenSessions(nowMs: EpochMs) throws                       // ▲REV #2: startup crash-repair for sessions too
+    // Summary + retry (▲REV #3: failed sessions must retry)
+    public func setSessionSummary(_ id: String, summary: String, expectedSourceHash: String,
+                                  modelID: String, promptVersion: String, nowMs: EpochMs) throws -> Bool // false = stale (no-op)
+    public func markSessionSummaryFailed(_ id: String, error: String, nowMs: EpochMs) throws  // bumps attempts + backoff
+    public func sessionSourceHash(_ id: String) throws -> String
+    public func sessionsNeedingSummary(nowMs: EpochMs, limit: Int) throws -> [ActivitySession] // closed + (pending OR failed-and-due)
     // Queries
     public func recentSessions(limit: Int) throws -> [ActivitySession]
-    public func sessionsPendingSummary(limit: Int) throws -> [ActivitySession]  // closed + pending
-    public func sessionEvidence(_ id: String) throws -> [String]     // decrypted snapshots (expand-to-detail)
-    // Privacy
-    public func deleteActivityForApp(_ appBundle: String) throws     // cascade visits/sessions/evidence
+    public func sessionEvidence(_ id: String) throws -> [String]              // decrypted snapshots (expand-to-detail)
+    // Settings + Privacy
+    public func activityEnabled() throws -> Bool; public func setActivityEnabled(_ on: Bool) throws
+    public func activityExcludedApps() throws -> Set<String>; public func setActivityExcluded(_ bundle: String, _ excluded: Bool) throws
+    public func deleteActivityForApp(_ appBundle: String) throws              // cascade visits/sessions/evidence
+    public static func dayBucket(forMs ms: EpochMs, timeZone: TimeZone) -> Int64  // ▲REV: shared local-day helper
 }
 ```
+`activity_sessions` also gets `summary_attempts INTEGER DEFAULT 0` + `summary_next_attempt_at INTEGER` (add to the v4 DDL — for summary retry/backoff).
 
 - [ ] **Step 1: Enable FK.** In `Sources/MaxMiStore/Database.swift`, inside `config.prepareDatabase { db in ... }` add `try db.execute(sql: "PRAGMA foreign_keys = ON")`.
 - [ ] **Step 2: Failing migration test** — add to `MigrationTests.swift`:
@@ -145,7 +158,7 @@ final class ActivityStoreTests: XCTestCase {
 }
 ```
 - [ ] **Step 7: Run — FAIL.**
-- [ ] **Step 8: Implement ActivityStore.swift.** `openOrCurrentSession`: if an open (ended_at null) session for this app exists and is recent, return it; else insert a provisional row (Ident.uuidv7, summary_status 'pending'). `appendEvidence`: `ContentHash.sha256Hex(content)`, `INSERT OR IGNORE` into evidence (unique index coalesces), encrypt content, bump session `last_activity_at`. `closeSession`: set ended_at. `sessionSourceHash`: hash the sorted evidence content_hashes. `setSessionSummary`: encrypt summary, set summary_ciphertext/status='summarized'/source_hash/model/prompt. `recentSessions`/`sessionsPendingSummary`: query + decrypt summary. `sessionEvidence`: decrypt snapshots. `deleteActivityForApp`: delete sessions+visits for the bundle (evidence cascades via FK). Use `db.dbQueue.write`.
+- [ ] **Step 8: Implement ActivityStore.swift.** `recordActivityCapture` (the core, one `db.dbQueue.write`): find this app's single open session (`ended_at IS NULL AND app_bundle=?`); apply `SessionSegmenter.decide` on (openApp, its last_activity_at, thisApp, nowMs, gapMs) — if it says close, set the old session's ended_at; if open-new (or none open), insert a provisional session (uuidv7, day_bucket via `dayBucket`, status 'pending'); then `INSERT OR IGNORE` the evidence (`ContentHash.sha256Hex(content)`, encrypted) and **update `last_activity_at` even when the insert is ignored** (same txn); return the session id. `closeIdleSessions`: close open sessions whose `last_activity_at < now - idleGapMs`. `closeOpenSessions`/`closeOpenVisits`: startup crash-repair. `setSessionSummary`: recompute source hash inside the txn, **no-op (return false) if it != expectedSourceHash** (stale Gemini response), else encrypt+store summarized. `markSessionSummaryFailed`: status 'failed', `summary_attempts+1`, `summary_next_attempt_at = now + backoff(attempts)`. `sessionsNeedingSummary`: `ended_at IS NOT NULL AND (summary_status='pending' OR (summary_status='failed' AND summary_next_attempt_at<=now))`. `sessionSourceHash`: hash sorted evidence content_hashes. Settings via the existing `settings` table. `deleteActivityForApp`: delete sessions+visits (evidence cascades). Enable-check + exclusion are read here so the store is the gate too.
 - [ ] **Step 9: Run — PASS.** Full suite green.
 - [ ] **Step 10: Commit** `feat(store): v4 activity tables + FK enforcement + ActivityStore (sessions + immutable evidence)`
 
@@ -200,8 +213,13 @@ final class SessionSegmenterTests: XCTestCase {
 **Interfaces:** FocusObserver gains `var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?` fired on every frontmost change (before the capturable gate). AppWiring uses it + the existing commit path to drive ActivityStore + SessionSegmenter.
 
 - [ ] **Step 1: Add the callback** to FocusObserver: in `frontmostChanged`, after computing the app, call `onFocusChanged?(appInfo, isCapturable(bid), pid)` regardless of capturability (so visits are tracked; the existing onCapture still gates content capture).
-- [ ] **Step 2: Wire in AppWiring** (behind the activity-enabled + not-sensitive + not-excluded gate): on `onFocusChanged`, apply `SessionSegmenter.decide(...)` against the current open session → close old / open new via `ActivityStore`; record the visit (open new, close prior). On each successful `commitCapture` that returns `.committed` (not dedup), call `store.appendEvidence(sessionID: currentSession, versionID: vid, content: parsed.content, ...)`. Skip entirely if the app is sensitive (`Denylist.isSensitiveApp`) or in `activity.disabled_app_bundle_ids` or global-disabled. On app launch, call `store.closeOpenVisits` (crash repair). On `NSWorkspace.willSleepNotification`/screen-lock, close the open session+visit.
-- [ ] **Step 3: Build clean; full suite green** (FocusObserver/AppWiring are glue — verified by build + existing tests + Task 1 store tests).
+- [ ] **Step 2: Wire in AppWiring** (▲REV — Codex must-fix #1, correct async attribution):
+  - On `onFocusChanged`: only manage **visits** (open new visit, close prior) — do NOT open a session here. Sessions open on first eligible capture (below). Skip visits for sensitive/excluded/global-disabled apps.
+  - **Carry the capturing app through the async capture.** The capture path completes via `Task.detached`/`finishCapture` after focus may have moved. So the `AppInfo` (bundle+label) of the capture is passed into the completion; on a `.committed` (non-dedup) result AND activity-enabled AND app not sensitive/excluded, call `store.recordActivityCapture(appBundle:appLabel: <that capture's app, NOT frontmost>, versionID: vid, content: parsed.content, gapMs:, nowMs:)`. The store opens/continues that app's session + appends evidence atomically. Normal memory capture is unaffected; only activity evidence uses this stricter attribution.
+  - **Idle finalize + summary** on the existing 30s pipeline sweep: `store.closeIdleSessions(idleGapMs:5min, nowMs:)` then (Task 4) summarize.
+  - **Startup crash-repair:** `store.closeOpenVisits` AND `store.closeOpenSessions`.
+  - **Sleep/lock** (`NSWorkspace.willSleepNotification`, screen-lock): close open visits + sessions.
+- [ ] **Step 3: Build clean; full suite green** (FocusObserver/AppWiring are glue — verified by build + existing tests + Task 1 store tests). Add a focused test if feasible that a capture committed after a focus switch still attributes to the CAPTURE's app, not the new frontmost.
 - [ ] **Step 4: Commit** `feat(activity): FocusObserver onFocusChanged -> visits/sessions/evidence wiring`
 
 ---
@@ -210,21 +228,31 @@ final class SessionSegmenterTests: XCTestCase {
 
 **Files:** Create `Sources/MaxMiActivity/ActivityGenerationRelay.swift`, `Sources/MaxMiActivity/DisplaySummarizer.swift`, `Sources/MaxMiActivity/AgentPrompts.swift`; Create `Tests/MaxMiActivityTests/DisplaySummarizerTests.swift`; wire the run loop in AppWiring.
 
+**▲REV (Codex must-fix #4,#5): MaxMiActivity must NOT depend on `Store` (module cycle/Sendability). It works over protocols; the app target provides the concrete impls.**
+
 **Interfaces:**
 ```swift
+// In MaxMiActivity (deps MaxMiCore only):
+public struct PendingSession: Sendable { public let id, appLabel: String; public let evidence: [String]; public let expectedSourceHash: String }
+public protocol ActivitySummaryRepository: Sendable {   // implemented in the app target over Store
+    func sessionsNeedingSummary(nowMs: EpochMs) async -> [PendingSession]
+    func saveSummary(sessionID: String, summary: String, expectedSourceHash: String, nowMs: EpochMs) async
+    func markFailed(sessionID: String, error: String, nowMs: EpochMs) async
+}
 public protocol ActivityGenerationRelay: Sendable {
     func summarizeSession(appLabel: String, evidence: [String]) async throws -> String
 }
 public struct DisplaySummarizer: Sendable {
-    public init(relay: any ActivityGenerationRelay)
-    // For each closed + pending + (source_hash changed) session: summarize, store. Skips still-open.
-    public func summarizePending(store: Store, nowMs: EpochMs) async
+    public init(repo: any ActivitySummaryRepository, relay: any ActivityGenerationRelay,
+                maxEvidenceChars: Int = 12_000)
+    public func summarizeDue(nowMs: EpochMs) async   // closed+pending OR failed-and-due; stale hash -> no-op
 }
 ```
-- [ ] **Step 1: Failing test** — `DisplaySummarizerTests`: seed a closed pending session with evidence, run `summarizePending` with a `MockRelay` returning "Worked on X", assert the session becomes `summarized` with that summary and a source_hash. A still-open session is NOT summarized.
-- [ ] **Step 2: Run — FAIL. Step 3: Implement** — query `sessionsPendingSummary`, for each: fetch decrypted evidence, call `relay.summarizeSession`, `store.setSessionSummary` with the computed source_hash + pinned model id. Bound evidence size (token cap). On relay error → mark session summary_status 'failed' (retry next tick), never crash. AgentPrompts holds the rewrite-for-display prompt.
-- [ ] **Step 4: Wire the real relay** in AppWiring: an `ActivityGenerationRelay` impl over the existing Gemini MemoryRelay (pinned model, shared throttle/backoff). Run `summarizePending` on the idle sweep (reuse the existing 30s pipeline tick, gated on activity-enabled + consent).
-- [ ] **Step 5: Run — PASS; build; full suite green. Step 6: Commit** `feat(activity): DisplaySummarizer (Gemini display summaries for closed sessions)`
+- [ ] **Step 1: Add the Gemini generation + throttle (concrete, must-fix #4).** In the relay layer (MaxMiRelay/wherever `GeminiClient` lives): add a generic `generateContent(model:prompt:)` for the pinned `gemini-2.5-flash-lite`, and a shared **rate-limiter/backoff actor** used by extraction + embedding + activity summarization (RPM/TPM/RPD-aware, 429 exponential backoff+jitter). Tests: URLProtocol mock for a normal response + a 429 (asserts backoff/retry). Commit this as its own step before the summarizer.
+- [ ] **Step 2: Failing DisplaySummarizerTests** — a `MockRepo` (returns 1 pending session w/ evidence + expectedHash) + `MockRelay` (returns "Worked on X"): `summarizeDue` → repo.saveSummary called with "Worked on X" + the expected hash; a relay-throwing case → repo.markFailed called (not crash); a still-open session isn't returned by the repo so isn't summarized. **Delimit untrusted captured text** in the prompt (screen content can't override instructions) — assert the prompt wraps evidence in a fenced/labeled block.
+- [ ] **Step 3: Run — FAIL. Step 4: Implement** DisplaySummarizer over the protocols + AgentPrompts (rewrite-for-display, evidence fenced as untrusted data, bounded to maxEvidenceChars).
+- [ ] **Step 5: App-target impls + wiring** — `StoreActivitySummaryRepository` (over Store, `@unchecked Sendable` like the existing StoreAdapter) + `GeminiActivityRelay` (over the generation API from Step 1). Run `summarizeDue` on the 30s sweep, gated on activity-enabled + consent.
+- [ ] **Step 6: Run — PASS; build; full suite green. Step 7: Commit** `feat(activity): DisplaySummarizer over repo/relay protocols + Gemini generation + shared throttle`
 
 ---
 
@@ -233,39 +261,42 @@ public struct DisplaySummarizer: Sendable {
 **Files:** Create `packaging/assets/dog.svg`, generate `packaging/assets/AppIcon.iconset/` PNGs + `icon.icns`, `packaging/assets/tray/tray-default-{light,dark}.png` (template); Modify `packaging/make-app.sh`.
 
 - [ ] **Step 1: Author `packaging/assets/dog.svg`** — a minimalist **white dog silhouette** (simple sitting/lying profile, same weight as Minimi's cat) on transparent bg. Hand-authored vector path (crisp), NOT an AI raster. Also a black-squircle-background variant for the app icon.
-- [ ] **Step 2: Generate iconset + icns:**
-```bash
-cd packaging/assets
-# render dog-on-black-squircle to the required sizes (use rsvg-convert or qlmanage/sips from a 1024 master PNG)
-# produce AppIcon.iconset/icon_{16,32,128,256,512}x{,@2x}.png then:
+- [ ] **Step 2: Generate iconset + icns (▲REV — exact filenames, deterministic).** Render the dog-on-black-squircle SVG to a **1024×1024 master PNG** (prefer `rsvg-convert -w 1024 -h 1024`; if unavailable, `sips` from a checked-in 1024 master PNG — NOT `qlmanage`, unreliable). Then produce EXACTLY these iconset files with `sips -z <h> <w>`:
+```
+AppIcon.iconset/icon_16x16.png icon_16x16@2x.png icon_32x32.png icon_32x32@2x.png
+icon_128x128.png icon_128x128@2x.png icon_256x256.png icon_256x256@2x.png
+icon_512x512.png icon_512x512@2x.png
 iconutil -c icns AppIcon.iconset -o icon.icns
 ```
-(Implementer: if `rsvg-convert` unavailable, render the SVG to a 1024 PNG via `qlmanage`/an available tool, then `sips -z` for each size. Document the tool used.)
+**Check the generated `icon.icns` (and the 1024 master PNG) INTO the repo** so the build is reproducible without the render tool. Document the tool used in the commit.
 - [ ] **Step 3: Tray template PNGs** — white dog silhouette on transparent, 16pt @1x/@2x, saved as template (the app sets `NSImage.isTemplate=true` in Task 7).
-- [ ] **Step 4: make-app.sh** — `cp packaging/assets/icon.icns "$APP/Contents/Resources/icon.icns"` + add `CFBundleIconFile`/`CFBundleIconName` to Info.plist; copy tray PNGs into Resources.
+- [ ] **Step 4: make-app.sh** — `cp packaging/assets/icon.icns "$APP/Contents/Resources/icon.icns"` + set **`CFBundleIconFile` = `icon`** in Info.plist (▲REV: do NOT add `CFBundleIconName` — that needs an asset catalog we don't have). Copy tray PNGs into Resources with **known filenames** and load them in Task 7 via `Bundle.main.url(forResource:)`, NOT `NSImage(named:)` (▲REV: named-lookup isn't guaranteed for copied PNGs).
 - [ ] **Step 5: Build the app** (`./packaging/make-app.sh`), confirm `icon.icns` present + the app shows the dog in Finder. **Commit** `feat(brand): MaxMi dog app icon + template tray icon (Minimi-style, black squircle)`
 
 ---
 
 ### Task 6: SwiftUI Theme + ActivityViewModel + ActivityView
 
-**Files:** add `MaxMiUI` target (deps MaxMiStore, MaxMiCore) to Package.swift; Create `Sources/MaxMiUI/Theme.swift`, `Sources/MaxMiUI/ActivityViewModel.swift`, `Sources/MaxMiUI/ActivityView.swift`; Create `Tests/MaxMiUITests/ActivityViewModelTests.swift`.
+**Files:** add `MaxMiUI` target (deps **MaxMiCore only** — ▲REV #5: NOT MaxMiStore; UI takes a Sendable DTO) to Package.swift; Create `Sources/MaxMiUI/Theme.swift`, `Sources/MaxMiUI/ActivityViewModel.swift`, `Sources/MaxMiUI/ActivityView.swift`; Create `Tests/MaxMiUITests/ActivityViewModelTests.swift`.
 
-**Interfaces:**
+**Interfaces (▲REV — plain DTO boundary, no Store dependency):**
 ```swift
-public struct SessionRow: Identifiable, Sendable {   // precomputed — no decrypt/format in body
-    public let id: String; public let appLabel: String; public let summary: String
-    public let timeAgo: String; public let dayGroup: String   // "Today"/"Yesterday"/date
+public struct TimelineSessionDTO: Identifiable, Sendable {   // the app target builds these from ActivitySession
+    public let id, appLabel: String; public let summary: String?; public let startedAtMs: Int64
+    public let evidence: [String]        // for expand/"why am I seeing this"
+}
+public struct SessionRow: Identifiable, Sendable {           // precomputed for the view (no decrypt/format in body)
+    public let id, appLabel, timeAgo, dayGroup: String; public let summary: String; public let evidence: [String]
 }
 @MainActor @Observable public final class ActivityViewModel {
     public private(set) var groups: [(day: String, rows: [SessionRow])]
-    public init(load: @escaping @Sendable () async -> [ActivitySession], now: @escaping () -> EpochMs)
-    public func refresh() async     // loads off-main, maps to rows (timeAgo/dayGroup precomputed), publishes
+    public init(load: @escaping @Sendable () async -> [TimelineSessionDTO], now: @escaping () -> Int64)
+    public func refresh() async
 }
 ```
 - [ ] **Step 1: Package.swift** — add MaxMiUI target + test target.
-- [ ] **Step 2: Failing ViewModelTests** — inject a `load` returning synthetic ActivitySessions across two days; `refresh()`; assert `groups` has "Today"/"Yesterday" with correct rows, timeAgo formatted ("20m ago"), newest first. (Pure — no SwiftUI.)
-- [ ] **Step 3: Run — FAIL. Step 4: Implement** Theme (dark palette/spacing/animation tokens), ActivityViewModel (map + group by day-bucket, relative-time format — all precomputed off `body`), ActivityView (SwiftUI: `List`/`LazyVStack`, sectioned by day, `SessionRow` with app glyph + summary + timeAgo, `.animation(.spring, value:)` on the collection, always-dark Theme, empty state). ActivityView is compile-checked; ViewModel is tested.
+- [ ] **Step 2: Failing ViewModelTests** — inject a `load` returning synthetic `TimelineSessionDTO`s across two days; `refresh()`; assert `groups` has "Today"/"Yesterday", timeAgo ("20m ago"), newest first, and a nil-summary DTO renders a neutral fallback row (not crash). (Pure — no SwiftUI.)
+- [ ] **Step 3: Run — FAIL. Step 4: Implement** Theme (dark tokens), ActivityViewModel (DTO→rows: group by local day, relative-time — all precomputed), ActivityView (SwiftUI `List`/`LazyVStack` sectioned by day; row = app glyph + summary + timeAgo; **tap expands to show `evidence` / "Why am I seeing this?"** — ▲REV, the provenance UI the spec promised; `.animation(.spring, value:)`; always-dark Theme; empty state). **M6a shows Activity only; Action Items tab shows "Coming soon" (M6b)** — ▲REV. ActivityView compile-checked; ViewModel tested.
 - [ ] **Step 5: Run — PASS; build; full suite green. Step 6: Commit** `feat(ui): SwiftUI activity timeline (Theme + @Observable view model + view)`
 
 ---
@@ -275,8 +306,8 @@ public struct SessionRow: Identifiable, Sendable {   // precomputed — no decry
 **Files:** Create `Sources/MaxMi/ActivityWindow.swift`, `Sources/MaxMi/ActivityPrivacySheet.swift`; Modify `Sources/MaxMi/MenuBarController.swift`, `Sources/MaxMi/AppWiring.swift`.
 
 - [ ] **Step 1: ActivityWindow** — a retained manager owning a closable `NSWindow` hosting `NSHostingController(rootView: ActivityView(viewModel:))`; `show()` = `NSApp.activate(ignoringOtherApps:true)` + `makeKeyAndOrderFront`; refreshes the view model on show.
-- [ ] **Step 2: MenuBarController** — set the status button image to the dog template (`NSImage(named:)` + `isTemplate=true`); handle **left mouse-up → ActivityWindow.show()**, **right mouse-up → popUpMenu(statusMenu)** via `NSStatusBarButton` action + `sendAction(on: [.leftMouseUp,.rightMouseUp])`; add "Activity Privacy…" + "Open MaxMi" menu items.
-- [ ] **Step 3: ActivityPrivacySheet** — SwiftUI sheet: Gemini-consent copy + a global "Enable activity synthesis" toggle + a per-app exclusion list (reads recent app_bundles, toggles write `activity.disabled_app_bundle_ids` setting; excluding calls `store.deleteActivityForApp`). Shown on first synthesis (or via the menu item).
+- [ ] **Step 2: MenuBarController (▲REV — correct click handling)** — set status button image from the dog tray PNG via `Bundle.main.url(forResource:)` → `NSImage` → `isTemplate=true`. **Set `statusItem.menu = nil`**, install a target/action on `statusItem.button` with `sendAction(on: [.leftMouseUp, .rightMouseUp])`; in the handler branch on `NSApp.currentEvent?.type`: left → `ActivityWindow.show()`, right → `statusItem.popUpMenu(statusMenu)`. Menu has "Open MaxMi", "Activity Privacy…", plus the existing pause items.
+- [ ] **Step 3: ActivityPrivacySheet (▲REV — needs a host window)** — a **retained privacy-window presenter** (a small `NSWindow`+`NSHostingController`, since a SwiftUI `.sheet` can't present without a host in a menu-bar `.accessory` app). Content: Gemini-consent disclosure + global "Enable activity synthesis" toggle (writes `activityEnabled`) + per-app exclusion list (writes `activityExcludedApps`; excluding calls `store.deleteActivityForApp`). Shown before first synthesis (consent unset) or via the menu item.
 - [ ] **Step 4: Wire in AppWiring** — construct ActivityWindow with a view model whose `load` = `store.recentSessions`; gate all activity capture (Task 3) + summarization (Task 4) on the global-enable setting + consent. First run with consent unset → show the privacy sheet before any synthesis.
 - [ ] **Step 5: Build clean; full suite green. Step 6: Commit** `feat(ui): Activity window + dog menu-bar (left-open/right-menu) + activity privacy sheet`
 
@@ -288,14 +319,14 @@ public struct SessionRow: Identifiable, Sendable {   // precomputed — no decry
 
 - [ ] **Step 1: Rebuild + relaunch** (grant persists): `./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"; sleep 2; open MaxMi.app`. Confirm the **dog icon** in the menu bar + Finder.
 - [ ] **Step 2: Consent + privacy** — on first run the Activity Privacy sheet appears; enable synthesis; exclude one app and confirm no rows appear for it.
-- [ ] **Step 3: Generate activity** — use several apps (Cursor, Chrome, Slack) for a few minutes each with gaps between.
-- [ ] **Step 4: Open the window** — left-click the dog → Activity window opens showing a timeline grouped by Today, rows like "Cursor · <summary> · Xm ago"; smooth scroll/animation; right-click → menu. Verify sessions closed + summarized:
+- [ ] **Step 3: Generate activity** — use several apps (Cursor, Chrome, Slack) for a few minutes each with gaps between. A session summary needs the session to CLOSE (app switch or 5-min idle) THEN the 30s sweep + a Gemini round-trip — so **wait/poll** (up to ~2 min) before expecting summaries, don't check instantly.
+- [ ] **Step 4: Open the window** — left-click the dog → Activity window opens showing a timeline grouped by Today, rows like "Cursor · <summary> · Xm ago"; smooth scroll/animation; tap a row → evidence/"why am I seeing this"; right-click → menu. Poll until summarized:
 ```bash
 DB=~/Library/Application\ Support/MaxMi/maxmi.db
 sqlite3 -header -column "$DB" "SELECT app_label, summary_status, (ended_at IS NOT NULL) AS closed, datetime(started_at/1000,'unixepoch','localtime') FROM activity_sessions ORDER BY started_at DESC LIMIT 8;"
 sqlite3 "$DB" "SELECT substr(content_ciphertext,1,10) FROM activity_session_evidence LIMIT 2;"  # enc:v1:
 ```
-- [ ] **Step 5: Privacy delete** — exclude an app that has sessions; confirm its `activity_sessions`+evidence rows are gone (cascade).
+- [ ] **Step 5: Privacy — three assertions (▲REV):** (a) with an app **excluded**, use it → NO new visits/sessions/evidence for it appear; (b) **global-disable** → no new activity rows for ANY app; (c) exclude an app that already has sessions → its `activity_sessions`+evidence rows are cascade-deleted.
 - [ ] **Step 6: Declare M6a complete** when 1-5 hold. Then M6b (agent) + M6c (settings/polish).
 
 ---
