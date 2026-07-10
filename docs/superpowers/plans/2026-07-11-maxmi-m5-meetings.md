@@ -73,10 +73,11 @@ public struct PCMFrame: Sendable {
 /// stay on the capture side; the session passes only the Sendable `bundleID`/`captureSystem`.
 public struct CaptureRequest: Sendable {
     public let bundleID: String           // meeting app to scope audio to
+    public let pid: pid_t                 // for resolving the app's SCWindow/SCDisplay (Codex plan#5)
     public let title: String?
     public let captureSystem: Bool        // false => mic-only (denied screen-rec / no shareable app)
-    public init(bundleID: String, title: String?, captureSystem: Bool) {
-        self.bundleID = bundleID; self.title = title; self.captureSystem = captureSystem
+    public init(bundleID: String, pid: pid_t, title: String?, captureSystem: Bool) {
+        self.bundleID = bundleID; self.pid = pid; self.title = title; self.captureSystem = captureSystem
     }
 }
 
@@ -84,31 +85,44 @@ public struct CaptureRequest: Sendable {
 public struct AudioInputProcess: Sendable, Equatable { public let pid: pid_t; public let bundleID: String
     public init(pid: pid_t, bundleID: String) { self.pid = pid; self.bundleID = bundleID } }
 
-/// Capture control as an async Sendable protocol (no non-Sendable objects stored in the session actor).
+/// Capture control — async everywhere so an ACTOR mock can conform (Codex plan#3: no sync
+/// mutable onFrame / sync level on a Sendable an actor implements).
 public protocol AudioCaptureControlling: Sendable {
     func start(_ request: CaptureRequest) async throws -> String   // returns captureMode "system+mic"|"mic-only"
     func stop() async
-    var onFrame: (@Sendable (PCMFrame) -> Void)? { get set }
-    var level: Float { get }
+    func setFrameHandler(_ cb: @escaping @Sendable (PCMFrame) -> Void) async
+    func level() async -> Float
 }
 
-/// Transcriber is an ACTOR-isolated async protocol (Codex #5) — receives only normalized PCMFrames.
-public protocol Transcribing: Sendable {
+/// Transcriber is an ACTOR (not just Sendable — Codex plan#3) — receives only normalized PCMFrames.
+public protocol Transcribing: Actor {
     func start() async throws
     func feed(_ frame: PCMFrame) async
     func finish() async -> String
     func setOnPartial(_ cb: @escaping @Sendable (String) -> Void) async
 }
 
-/// Session -> UI callbacks are @MainActor; persistence is a Sendable async protocol (Codex #5).
+/// Session -> UI callbacks are @MainActor. Includes ALL required states (Codex plan#6):
+/// preparing (model download), prompt, recording, end-suggestion (Finish/Keep), finishing, error.
 @MainActor public protocol MeetingPanelPresenting: AnyObject {
-    func showPrompt(app: String); func showRecording(); func showFinishing(); func hidePanel()
+    func showPreparing()                       // whisper model downloading
+    func showPrompt(app: String)               // Record / Don't record
+    func showRecording()                       // ● + timer + level + Stop
+    func showEndSuggestion()                    // debounced "Finish or keep recording?"
+    func showFinishing()                        // saving spinner
+    func showError(_ message: String)
+    func hidePanel()
+    func updateLevel(_ level: Float)
 }
-public protocol MeetingPersisting: Sendable {
+public protocol MeetingPersisting: Sendable {   // adapter over Store; actor or audited @unchecked Sendable
     func persist(app: String, title: String?, transcript: String, startedAtMs: Int64,
                  endedAtMs: Int64, captureMode: String, transcriptionStatus: String) async
 }
-
+/// Permission gate injected into the session (Codex plan#4 — session can't reach the app target).
+public protocol MeetingAuthorizing: Sendable {
+    func requestMicrophone() async -> Bool
+    func screenRecordingAuthorized() async -> Bool   // preflight; false => mic-only
+}
 /// Injected clock so debounce is testable (Codex #3).
 public protocol MeetingClock: Sendable { func nowMs() -> Int64; func sleep(ms: Int) async }
 ```
@@ -161,10 +175,12 @@ extension Store {
     public func meeting(id: String) throws -> MeetingRecord?
     // ▲REV2 (Codex #1): MCP-facing APIs so MemoryQueries never touches db/cipher directly.
     public func meetingContext(id: String) throws -> MeetingContext?    // decrypts transcript + facts
-    public func searchMeetings(query: String, limit: Int) throws -> [MeetingRecord]  // vec search filtered to meetings
+    // ▲REV3 (Codex plan#1): Store CANNOT embed text (that's MemoryRelay's job in MCP). Take a query
+    // VECTOR; MemoryQueries computes it via relay.embed and passes it in.
+    public func meetingFactHits(near vector: [Float], limit: Int) throws -> [MeetingRecord]
 }
 ```
-The metadata is built with `JSONEncoder`/`JSONSerialization` (not string interpolation — Codex should-fix).
+The metadata is built with `JSONSerialization` (not string interpolation — Codex should-fix).
 
 - [ ] **Step 1: Failing migration test** — add to `Tests/MaxMiStoreTests/MigrationTests.swift`:
 ```swift
@@ -248,16 +264,20 @@ final class MeetingStoreTests: XCTestCase {
 }
 ```
 - [ ] **Step 6: Run — FAIL** (commitMeeting undefined).
-- [ ] **Step 7: Implement MeetingStore.swift:**
+- [ ] **Step 7: Implement MeetingStore.swift** (declare `MeetingRecord`/`MeetingContext` here ONCE — the Interfaces block above is the spec of these same types, do NOT declare them twice):
 ```swift
 import Foundation
 import GRDB
 import MaxMiCore
 
 public struct MeetingRecord: Sendable {
-    public let id: String; public let app: String; public let title: String?
+    public let id: String; public let threadID: String; public let versionID: String?
+    public let app: String; public let title: String?
     public let startedAtMs: EpochMs; public let endedAtMs: EpochMs?
     public let state: String; public let captureMode: String; public let transcriptionStatus: String
+}
+public struct MeetingContext: Sendable {
+    public let record: MeetingRecord; public let transcript: String; public let facts: [String]
 }
 
 extension Store {
@@ -310,16 +330,17 @@ extension Store {
             return MeetingContext(record: rec, transcript: transcript, facts: facts)
         }
     }
-    public func searchMeetings(query: String, limit: Int) throws -> [MeetingRecord] {
-        // Reuse the existing semantic search, then keep only hits whose thread is a meeting.
-        // (Implementer: call the existing vec-search entrypoint; filter thread_id IN (SELECT thread_id FROM meetings).)
-        let meetingThreadIDs = Set(try recentMeetings(limit: 500).map { $0.threadID })
-        return try semanticSearchThreadIDs(query: query, limit: limit)   // existing helper
-            .filter { meetingThreadIDs.contains($0) }
-            .prefix(limit).compactMap { tid in try meetingByThread(tid) }
-    }
-    private func meetingByThread(_ threadID: String) throws -> MeetingRecord? {
-        try db.dbQueue.read { d in try Row.fetchOne(d, sql: "SELECT * FROM meetings WHERE thread_id=?", arguments: [threadID]).map(Self.rec) }
+    // ▲REV3 (Codex plan#1): takes a query VECTOR (MCP computed it via relay.embed) — Store can't embed.
+    public func meetingFactHits(near vector: [Float], limit: Int) throws -> [MeetingRecord] {
+        // Vec search over derivative_embeddings joined to meetings' threads; newest-relevant first.
+        // (Implementer: reuse the existing vec0 KNN query used by search_memory, add
+        //  `AND d.thread_id IN (SELECT thread_id FROM meetings)`, map surviving thread_ids -> meeting rows.)
+        try db.dbQueue.read { d in
+            let tids = try vecSearchMeetingThreadIDs(d, vector: vector, limit: limit)   // existing-KNN-based helper
+            return try tids.compactMap { tid in
+                try Row.fetchOne(d, sql: "SELECT * FROM meetings WHERE thread_id=?", arguments: [tid]).map(Self.rec)
+            }
+        }
     }
     private static func rec(_ r: Row) -> MeetingRecord {
         MeetingRecord(id: r["id"], threadID: r["thread_id"], versionID: r["version_id"], app: r["app"],
@@ -357,7 +378,7 @@ final class MeetingMemoryTests: XCTestCase {
         let t0 = EpochMs(495_700) * 3_600_000
         _ = try store.commitMeeting(id: "mm-1", app: "Zoom", title: "Roadmap sync", transcript: "we decided to ship M5 next",
             startedAtMs: t0, endedAtMs: t0+600_000, captureMode: "system+mic", transcriptionStatus: "complete", nowMs: t0+600_000)
-        return MemoryQueries(store: store, relay: /* the real relay/no-op used by other MCP tests */ .init())
+        return MemoryQueries(store: store, relay: MockRelay())   // use the SAME mock other MCP tests use
     }
     func testListReturnsMeetings() async throws {
         let r = await makeQueries().meetingMemory(action: "list", query: nil)
@@ -374,7 +395,7 @@ final class MeetingMemoryTests: XCTestCase {
 ```
 (Adapt `MemoryQueries.init`/`ToolResult` to the real signatures — inspect existing `search_memory` tests for the exact relay arg the test harness uses.)
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement** — replace the `meetingMemory` stub in `MemoryQueries.swift` (make it `async`): `list` → `store.recentMeetings(limit:20)` → markdown; `get_context <id>` → `store.meetingContext(id:)` (already decrypted transcript+facts) → markdown; `search <q>` → `store.searchMeetings(query:limit:20)` → markdown. Update `Tools.swift`: `meeting_memory` description "Query captured meeting transcripts and summaries (list | search | get_context).", route the `query` arg, and `await` the now-async call.
+- [ ] **Step 3: Implement** — replace the `meetingMemory` stub in `MemoryQueries.swift` (make it `async`): `list` → `store.recentMeetings(limit:20)` → markdown; `get_context <id>` → `store.meetingContext(id:)` (decrypted transcript+facts) → markdown; `search <q>` → **compute the query vector via `relay.embed(q)` (the same embed path `search_memory` uses), then `store.meetingFactHits(near: vector, limit: 20)`** → markdown (Codex plan#1: Store can't embed; MCP owns the relay). Update `Tools.swift`: `meeting_memory` description "Query captured meeting transcripts and summaries (list | search | get_context).", route the `query` arg, and `await` the now-async call.
 - [ ] **Step 4: Run — PASS.** Full suite green.
 - [ ] **Step 5: Commit** `feat(mcp): real meeting_memory over meetings table (list/search/get_context)`
 
@@ -409,14 +430,7 @@ public final class MeetingDetector: MeetingDetecting {
 ```
 - CoreAudio wiring is live-only, but it must (Codex #3): listen to `kAudioHardwarePropertyProcessObjectList` AND, on each list change, add/remove a listener on **each process object's** `kAudioProcessPropertyIsRunningInput` (list-membership alone doesn't signal input start/stop). Each callback rebuilds the `[AudioInputProcess]` snapshot and calls `evaluate`. The **allowlist + classification + debounce** are unit-tested via `evaluate(active:)`.
 
-- [ ] **Step 1: Add Package.swift target** — after the MaxMiCapture target:
-```swift
-        .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore"]),
-```
-and a test target:
-```swift
-        .testTarget(name: "MaxMiMeetingsTests", dependencies: ["MaxMiMeetings"]),
-```
+- [ ] **Step 1: (Package.swift target already added in Task 0 — do NOT re-add. Codex plan: remove duplicate.)**
 - [ ] **Step 2: Failing tests** — `Tests/MaxMiMeetingsTests/MeetingDetectorTests.swift`:
 ```swift
 import XCTest
@@ -482,7 +496,7 @@ public struct WhisperModelStore {
 ```
 - Model download itself is live (network); tests cover **isReady** (file present + checksum), **atomic install** (temp→rename), and **checksum rejection** using a fixture file — NOT a real download.
 
-- [ ] **Step 1: Package.swift — add whisper (▲REV2, pinned — Codex #4).** Vendor whisper.cpp as a C/C++ target `CWhisper` (NOT a `systemLibrary` — nothing is preinstalled): pin **whisper.cpp tag `v1.7.2`** (fetch `ggml.c`, `whisper.cpp`, headers into `Sources/CWhisper/`), expose a tiny C shim header `cwhisper_shim.h` with just: `whisper_context* cw_init(const char* modelPath); void cw_feed(whisper_context*, const float* pcm, int n); const char* cw_result(whisper_context*); void cw_free(whisper_context*);`. Add `.target(name: "CWhisper")` and make `MaxMiMeetings` depend on it. Document the exact whisper.cpp commit hash in the commit message. If the C++ build fights the toolchain, fall back to the maintained SPM package `ggerganov/whisper.spm` pinned to a specific tag — but pin SOMETHING; no "pick at build time".
+- [ ] **Step 1: Package.swift — add whisper (▲REV2, pinned — Codex #4).** Vendor whisper.cpp as a C/C++ target `CWhisper` (NOT a `systemLibrary` — nothing is preinstalled): pin **whisper.cpp tag `v1.7.2`** (fetch `ggml.c`, `whisper.cpp`, headers into `Sources/CWhisper/`), expose a C shim `cwhisper_shim.h` that does REAL transcription (Codex plan#2 — feed/result alone can't decode): `cw_ctx* cw_init(const char* modelPath); char* cw_transcribe(cw_ctx*, const float* pcm16k, int n);  // runs whisper_full with default params, returns malloc'd UTF-8 caller-frees; void cw_free_str(char*); void cw_free(cw_ctx*);`. Vendor the COMPLETE upstream build set whisper.cpp needs (ggml.c, ggml-*.c/metal, whisper.cpp + all headers), not just two files. Pin whisper.cpp to a specific COMMIT hash (not a tag that moves); document it in the commit. Add `.target(name: "CWhisper")` (a real C/C++ target, NOT `systemLibrary`), `MaxMiMeetings` depends on it. Streaming = call `cw_transcribe` on a growing/rolling window from the actor; ownership: caller frees the returned string via `cw_free_str`.
 - [ ] **Step 2: Failing tests** — `WhisperModelStoreTests`: write a fake model file + its real sha256 → `isReady == true`; wrong checksum → `isReady == false`; `ensureModel` with a stub download that returns a temp file → installs atomically and becomes ready. (All local, no network.)
 - [ ] **Step 3: Run — FAIL.**
 - [ ] **Step 4: Implement WhisperModelStore** — `isReady` = file exists at `modelURL` AND its sha256 matches; `ensureModel` = if ready return; else call the injected `download` closure to fetch to a temp URL, verify checksum, `FileManager.moveItem` (atomic) into place, else throw; disk-space precheck.
@@ -540,7 +554,7 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
 
 - [ ] **Step 1: Failing AudioMixer tests** — construct two `AVAudioPCMBuffer`s (48kHz stereo, 44.1kHz mono), feed both, assert `onFrame` emits `PCMFrame` at 16kHz mono and `level` reflects amplitude. Offline buffers, no devices. (Mixer isn't strictly "pure" — it uses `AVAudioConverter` — but offline-buffer tests are valid.)
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement AudioMixer** — `AVAudioConverter` per source → 16kHz mono; **serial `DispatchQueue`** guarding converter/mix state (SC delivery queue + mic tap fire concurrently — Codex should-fix); timestamp-align via `hostTimeNs`; emit `PCMFrame`; RMS `level`. **Implement AudioCapture** — resolve `SCShareableContent.current` → find the `SCRunningApplication` whose bundleID matches + its `SCDisplay`; `SCContentFilter(display:includingApplications:[app],exceptingWindows:[])`, `capturesAudio=true`, `excludesCurrentProcessAudio=true`; `AVAudioEngine` input tap for mic; both feed the mixer; return `"system+mic"`; on no shareable app / `captureSystem=false` / SCStream failure → mic-only, return `"mic-only"`. Handle `AVAudioEngineConfigurationChange`.
+- [ ] **Step 3: Implement AudioMixer** — `AVAudioConverter` per source → 16kHz mono; **serial `DispatchQueue`** guarding converter/mix state (SC delivery queue + mic tap fire concurrently — Codex should-fix); timestamp-align via `hostTimeNs`; emit `PCMFrame`; RMS `level`. **Implement AudioCapture (▲REV3 — Codex plan#5, correct SC API + display algorithm):** get shareable content via `SCShareableContent.getExcludingDesktopWindows(_:onScreenWindowsOnly:completionHandler:)` (NOT `.current`); find the `SCRunningApplication` matching `request.pid`/`bundleID`; find its on-screen `SCWindow`, map that window's frame → the `SCDisplay` it's on (fallback: the app's main display); `SCContentFilter(display: thatDisplay, includingApplications: [app], exceptingWindows: [])`, `capturesAudio=true`, `excludesCurrentProcessAudio=true`; `AVAudioEngine` input tap for mic; both feed the mixer; return `"system+mic"`. On no shareable app / `captureSystem=false` / SCStream failure → mic-only, return `"mic-only"`. Also expose the resolved meeting-window frame (via a callback or the session) so Task 8's panel can pick the meeting screen. Handle `AVAudioEngineConfigurationChange`.
 - [ ] **Step 4: Run — PASS** (mixer tests; AudioCapture live-only, compile-checked). Full suite green.
 - [ ] **Step 5: Commit** `feat(meetings): AudioMixer (converter+align) + AudioCapture (SCStream app-scoped + mic)`
 
@@ -556,14 +570,16 @@ public enum MeetingState: Equatable, Sendable { case idle, prompting, recording,
 public actor MeetingSession {
     public init(panel: any MeetingPanelPresenting,          // @MainActor protocol (Task 0)
                 persister: any MeetingPersisting,            // Sendable async (Task 0)
+                authorizer: any MeetingAuthorizing,          // Codex plan#4 — injected, session can't reach app target
                 makeCapture: @Sendable @escaping () -> any AudioCaptureControlling,
                 makeTranscriber: @Sendable @escaping () -> any Transcribing,
                 clock: any MeetingClock)
-    public func candidateDetected(bundleID: String, title: String?, captureSystem: Bool)  // -> prompting
-    public func userAcceptedRecord() async                   // -> recording (capture.start(CaptureRequest))
+    public func candidateDetected(bundleID: String, pid: pid_t, title: String?)  // -> prompting
+    public func userAcceptedRecord() async                   // authorize (mic/screen) -> recording; mic denied -> error
     public func userSkipped() async                          // -> skipped, hide
     public func userStopped() async                          // -> finishing -> transcriber.finish -> persist
-    public func inputStopped() async                         // -> debounced end SUGGESTION (NOT auto-stop)
+    public func inputStopped() async                         // -> debounced showEndSuggestion (NOT auto-stop)
+    public func userKeptRecording() async                    // from end-suggestion -> back to recording
     public var state: MeetingState { get }
 }
 ```
@@ -571,7 +587,7 @@ All capture/transcriber objects are created inside the actor via the `@Sendable`
 
 - [ ] **Step 1: Failing tests** — with a mock `MeetingPanelPresenting` (@MainActor), mock `MeetingPersisting`, mock `AudioCaptureControlling`, mock `Transcribing` (all actors/Sendable), and a fake `MeetingClock`, drive: detect→prompt (state prompting, showPrompt called); accept→recording (capture.start called with the right `CaptureRequest`, showRecording); stop→finishing→persist (transcript from transcriber.finish, persist called with it); skip path (no persist); **inputStopped does NOT persist/stop** (stays recording pending user confirm — assert state still `.recording`); error path (capture.start throws → failed, hidePanel, no persist). Use `await` throughout (actor).
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement** the actor state machine per the transitions; `userStopped` awaits `transcriber.finish()` then `delegate.persist(...)`; `inputStopped` triggers a debounced end-suggestion (delegate can re-prompt) but never auto-finalizes.
+- [ ] **Step 3: Implement** the actor state machine per the transitions; `userAcceptedRecord` calls `authorizer.requestMicrophone()` (deny → `panel.showError` + hidePanel, no capture) then `authorizer.screenRecordingAuthorized()` (false → build `CaptureRequest(captureSystem:false)` = mic-only) → `capture.start(request)`; `userStopped` awaits `transcriber.finish()` then `persister.persist(...)`; `inputStopped` starts a `clock`-based debounce then `panel.showEndSuggestion()` (never auto-finalizes); `userKeptRecording` returns to `.recording`. Panel calls hop to `@MainActor`.
 - [ ] **Step 4: Run — PASS.**
 - [ ] **Step 5: Commit** `feat(meetings): MeetingSession actor state machine (consent-first, manual-stop authoritative)`
 
