@@ -53,7 +53,7 @@
 
 Per brainstorming discipline, M6 is decomposed into three sub-specs, each independently shippable, in this order (value-first — the user wants to SEE activity):
 
-- **M6a — Activity layer + summaries + Activity window UI + dog logo + privacy controls.** Tables (`activity_app_visits`, `activity_sessions`, `activity_session_versions`), deterministic `SessionSegmenter` + `DisplaySummarizer` (Gemini for summary only), the SwiftUI Activity window + menu-bar click-to-open plumbing, the dog app/tray icons, AND (▲REV — Codex) the **activity privacy controls** (global activity-synthesis enable/disable + per-app exclusion + Gemini-consent disclosure) — these MUST be in M6a, not deferred, so no session is ever summarized from an app the user meant to exclude. This slice delivers the "menu shows what I did per app" the user asked for. Reduced Gemini work: deterministic sessionization + summarize only closed sessions + read-only window.
+- **M6a — Activity layer + summaries + Activity window UI + dog logo + privacy controls.** Tables (`activity_app_visits`, `activity_sessions`, `activity_session_evidence`), deterministic `SessionSegmenter` + `DisplaySummarizer` (Gemini for summary only), the SwiftUI Activity window + menu-bar click-to-open plumbing, the dog app/tray icons, AND (▲REV — Codex) the **activity privacy controls** (global activity-synthesis enable/disable + per-app exclusion + Gemini-consent disclosure) — these MUST be in M6a, not deferred, so no session is ever summarized from an app the user meant to exclude. This slice delivers the "menu shows what I did per app" the user asked for. Reduced Gemini work: deterministic sessionization + summarize only closed sessions + read-only window.
 - **M6b — Hourly agent + Action Items.** `agent_runs`, `agent_action_items`, the hourly review job, the Action Items SwiftUI inbox (resolve/dismiss).
 - **M6c — Menu/Settings polish + ship-readiness.** Settings window (Launch at Login, pause controls, per-app disable, Check for Updates, model/keys status), animation/interaction polish across all windows, final ship pass.
 
@@ -73,7 +73,8 @@ Sources/MaxMiStore/AgentStore.swift          NEW: agent_runs cursor + action_ite
                                                   (create/update/resolve/dismiss) + events audit
 Sources/MaxMiActivity/                        NEW module (synthesis logic, non-UI; owns orchestration,
                                               depends on a narrow ActivityGenerationRelay protocol, NOT GRDB/Store directly)
-  SessionSegmenter.swift      DETERMINISTIC: visits + gap -> sessions + member version-ids (no Gemini)
+  SessionSegmenter.swift      DETERMINISTIC finalization: visits + gap -> open/close sessions (no Gemini;
+                              evidence snapshots appended by ActivityStore per capture)
   DisplaySummarizer.swift     Gemini: closed/idle session's derivatives+snippets -> encrypted summary
   HourlyAgent.swift           cursor-based review (actor, ID-ops, never-resolve-on-absence, backfill)
   AgentPrompts.swift          the Gemini prompts (hourly-review, rewrite-for-display) — structured output
@@ -126,7 +127,7 @@ CREATE TABLE activity_sessions (
   summary_ciphertext TEXT,                 -- encrypted display summary (enc:v1:), null until summarized
   summary_status TEXT NOT NULL DEFAULT 'pending'
     CHECK(summary_status IN ('pending','summarized','failed','skipped')),
-  source_hash TEXT,                        -- hash of the exact member-version set summarized (stale-guard)
+  source_hash TEXT,                        -- hash over the session's immutable evidence snapshots (stale-guard)
   model_id TEXT, prompt_version TEXT,      -- provenance: which model/prompt produced the summary
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE INDEX idx_sessions_day ON activity_sessions(day_bucket DESC, started_at DESC);
