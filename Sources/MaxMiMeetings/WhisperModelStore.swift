@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-public struct WhisperModelStore {
+public struct WhisperModelStore: Sendable {
     private let directory: URL
 
     public init(dir: URL) {

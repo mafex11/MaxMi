@@ -24,5 +24,11 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>MaxMi reads recent Mail messages to build your searchable memory.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MaxMi records and transcribes meetings you choose to capture.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>MaxMi captures system audio from meeting applications you choose to record.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>MaxMi transcribes recorded meetings using on-device speech recognition.</string>
 </dict>
 </plist>
