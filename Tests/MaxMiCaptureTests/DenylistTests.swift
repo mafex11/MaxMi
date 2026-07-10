@@ -45,9 +45,9 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isSensitiveApp("com.apple.keychainaccess"))
         XCTAssertTrue(Denylist.isSensitiveApp("com.agilebits.onepassword7"))
         XCTAssertTrue(Denylist.isSensitiveApp("com.bitwarden.desktop"))
-        // substring families
-        XCTAssertTrue(Denylist.isSensitiveApp("com.example.MyBankApp"))
+        // password-manager name substrings still match
         XCTAssertTrue(Denylist.isSensitiveApp("io.LastPass.helper"))
+        XCTAssertTrue(Denylist.isSensitiveApp("com.example.1password-helper"))
     }
     func testNormalAppsAreCapturable() {
         // The apps the user named + common ones must NOT be sensitive (capture-by-default).
@@ -56,6 +56,10 @@ final class DenylistTests: XCTestCase {
         XCTAssertFalse(Denylist.isSensitiveApp("com.apple.finder"))
         XCTAssertFalse(Denylist.isSensitiveApp("com.microsoft.VSCode"))
         XCTAssertFalse(Denylist.isSensitiveApp("com.hnc.Discord"))
+        // Bank/wallet/crypto apps ARE captured now — substring over-match removed (user's call).
+        XCTAssertFalse(Denylist.isSensitiveApp("com.example.MyBankApp"))
+        XCTAssertFalse(Denylist.isSensitiveApp("com.coinbase.wallet"))
+        XCTAssertFalse(Denylist.isSensitiveApp("com.bankless.podcast"))
     }
     func testAdultSearchQueryBlocked() {
         // The gap found in live data: google.com/search?q=jaav+porn slipped through (host is google).

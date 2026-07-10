@@ -28,10 +28,11 @@ public enum Denylist {
         "org.keepassxc.keepassxc",              // KeePassXC
         "com.apple.Terminal.SecureKeyboardEntry",
     ]
-    // Substring matches for sensitive-app families (banking, VPN auth, wallets).
+    // Substring matches ONLY for password-manager families (safe, specific product names).
+    // Deliberately NOT "bank"/"wallet"/"authenticator" — those over-match legit apps
+    // (Bankless, DataBank, crypto wallets) the user wants captured. Capture-by-default wins.
     static let sensitiveAppSubstrings: [String] = [
         "1password", "bitwarden", "lastpass", "dashlane", "keepass",
-        "bank", "wallet", "authenticator", "vpn.auth",
     ]
 
     /// True if a native app should NEVER be captured (even by the generic fallback).
