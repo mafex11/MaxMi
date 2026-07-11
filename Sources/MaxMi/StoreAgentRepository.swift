@@ -23,13 +23,17 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
         }
     }
 
-    func complete(runID: String, ops: [AgentOpDTO]) async {
+    func complete(runID: String, ops: [AgentOpDTO]) async throws {
+        // Validate and map [AgentOpDTO] -> [AgentOp]
+        let validatedOps = try Self.validateAndMap(ops)
+        _ = try store.completeAgentRun(runID: runID, ops: validatedOps, nowMs: epochNowMs())
+    }
+
+    func renew(runID: String) async {
         do {
-            // Validate and map [AgentOpDTO] -> [AgentOp]
-            let validatedOps = try Self.validateAndMap(ops)
-            _ = try store.completeAgentRun(runID: runID, ops: validatedOps, nowMs: epochNowMs())
+            try store.renewAgentRunLease(runID: runID, leaseMs: 120_000, nowMs: epochNowMs())
         } catch {
-            // Validation or store error — silently fail (HourlyAgent would have called fail if relay threw)
+            // Best effort
         }
     }
 
@@ -48,10 +52,10 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
     /// Filters out invalid ops (e.g., create+resolve of same item, invalid source_refs).
     static func validateAndMap(_ dtos: [AgentOpDTO]) throws -> [AgentOp] {
         var result: [AgentOp] = []
-        var newItemTitles: Set<String> = []
-        var resolvedNewTitles: Set<String> = []
+        var newItemIndices: Set<Int> = []
+        var resolveTargetIndices: Set<Int> = []
 
-        for dto in dtos {
+        for (i, dto) in dtos.enumerated() {
             switch dto.op {
             case "create":
                 guard let kind = dto.kind, !kind.isEmpty else {
@@ -70,10 +74,7 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
                 }
 
                 let sourceRefs = dto.sourceRefs ?? []
-
-                // Track new items by title for create+resolve drop logic
-                newItemTitles.insert(title)
-
+                newItemIndices.insert(i)
                 result.append(.create(kind: kind, title: title, details: details, sourceRefs: sourceRefs))
 
             case "update":
@@ -109,11 +110,7 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
                     throw ValidationError.fieldTooLong("evidence exceeds 2000 chars")
                 }
 
-                // Track resolved IDs for create+resolve drop logic
-                // (We can't perfectly detect this without knowing which create it refers to,
-                // but we can heuristically filter by title if the evidence contains the same title)
-                resolvedNewTitles.insert(id)
-
+                resolveTargetIndices.insert(i)
                 result.append(.resolve(id: id, evidence: evidence))
 
             default:
@@ -121,9 +118,12 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
             }
         }
 
-        // Filter out create+resolve pairs of the same new item
-        // (This is a best-effort heuristic — we drop resolves that reference IDs we haven't seen)
-        // In practice, the Store's completeAgentRun will also validate source_refs and unknown IDs.
+        // Drop resolve ops that target items created in the same batch (same-run conflict)
+        let conflictIndices = newItemIndices.intersection(resolveTargetIndices)
+        if !conflictIndices.isEmpty {
+            result = result.enumerated().filter { !conflictIndices.contains($0.offset) }.map { $0.element }
+        }
+
         return result
     }
 

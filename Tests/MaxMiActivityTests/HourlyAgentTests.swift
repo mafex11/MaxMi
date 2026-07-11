@@ -28,12 +28,16 @@ actor MockAgentRepo: AgentRepository {
         return page
     }
 
-    func complete(runID: String, ops: [AgentOpDTO]) async {
+    func complete(runID: String, ops: [AgentOpDTO]) async throws {
         completeCalls.append((runID, ops))
     }
 
     func fail(runID: String, error: String) async {
         failCalls.append((runID, error))
+    }
+
+    func renew(runID: String) async {
+        // No-op for mock
     }
 }
 

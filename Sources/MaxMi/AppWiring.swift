@@ -196,8 +196,7 @@ final class AppWiring {
             },
             onDismiss: { @Sendable id in
                 try activityStore.dismissActionItem(id, nowMs: epochNowMs())
-            },
-            now: { epochNowMs() }
+            }
         )
 
         activityWindow = ActivityWindow(viewModel: viewModel, actionItemsViewModel: actionItemsViewModel)

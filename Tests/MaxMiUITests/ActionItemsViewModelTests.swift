@@ -17,7 +17,6 @@ final class ActionItemsViewModelTests: XCTestCase {
             },
             onResolve: { _ in },
             onDismiss: { _ in },
-            now: { 1000 }
         )
 
         await vm.refresh()
@@ -61,7 +60,6 @@ final class ActionItemsViewModelTests: XCTestCase {
                 await state.markResolved()
             },
             onDismiss: { _ in },
-            now: { 1000 }
         )
 
         await vm.refresh()
@@ -97,7 +95,6 @@ final class ActionItemsViewModelTests: XCTestCase {
                 throw NSError(domain: "test", code: 1)
             },
             onDismiss: { _ in },
-            now: { 1000 }
         )
 
         await vm.refresh()
@@ -146,7 +143,6 @@ final class ActionItemsViewModelTests: XCTestCase {
                 XCTAssertEqual(id, "1")
                 await state.markDismissed()
             },
-            now: { 1000 }
         )
 
         await vm.refresh()
@@ -182,7 +178,6 @@ final class ActionItemsViewModelTests: XCTestCase {
             onDismiss: { @Sendable _ in
                 throw NSError(domain: "test", code: 1)
             },
-            now: { 1000 }
         )
 
         await vm.refresh()

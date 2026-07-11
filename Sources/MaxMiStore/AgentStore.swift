@@ -78,7 +78,7 @@ extension Store {
 
             let lastCursor = try Row.fetchOne(d, sql: """
                 SELECT input_to_at, input_to_session_id FROM agent_runs
-                WHERE status='completed' ORDER BY started_at DESC LIMIT 1
+                WHERE status='completed' ORDER BY input_to_at DESC, input_to_session_id DESC LIMIT 1
                 """)
 
             let curAt: EpochMs = lastCursor?["input_to_at"] ?? 0
@@ -130,15 +130,27 @@ extension Store {
                 return AgentRunResult(newCount: 0, resolvedCount: 0, updatedCount: 0)
             }
 
-            let curAt: EpochMs = runRow["input_to_at"]!
-            let curID: String = runRow["input_to_session_id"]!
+            let lastAt: EpochMs = runRow["input_to_at"]!
+            let lastID: String = runRow["input_to_session_id"]!
+
+            // Rebuild the claimed page: find the *previous* completed cursor, then select the page
+            let prevCursor = try Row.fetchOne(d, sql: """
+                SELECT input_to_at, input_to_session_id FROM agent_runs
+                WHERE status='completed' AND (input_to_at < ? OR (input_to_at = ? AND input_to_session_id < ?))
+                ORDER BY input_to_at DESC, input_to_session_id DESC
+                LIMIT 1
+                """, arguments: [lastAt, lastAt, lastID])
+
+            let curAt: EpochMs = prevCursor?["input_to_at"] ?? 0
+            let curID: String = prevCursor?["input_to_session_id"] ?? ""
 
             let pageSourceIDs = try String.fetchAll(d, sql: """
                 SELECT id FROM activity_sessions
                 WHERE summary_status='summarized'
                   AND (updated_at > ? OR (updated_at = ? AND id > ?))
+                  AND (updated_at < ? OR (updated_at = ? AND id <= ?))
                 ORDER BY updated_at ASC, id ASC
-                """, arguments: [curAt, curAt, curID])
+                """, arguments: [curAt, curAt, curID, lastAt, lastAt, lastID])
 
             let pageSourceSet = Set(pageSourceIDs)
             var newCount = 0
@@ -154,7 +166,7 @@ extension Store {
                     let idemKey = "\(runID):\(i)"
                     let itemID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
                     let titleCipher = try cipher.encrypt(title)
-                    let detailsCipher = try? details.map { try cipher.encrypt($0) }
+                    let detailsCipher = try details.map { try cipher.encrypt($0) }
                     let validRefs = sourceRefs.filter { pageSourceSet.contains($0) }
                     let refsJSON = try? JSONEncoder().encode(validRefs)
                     let refsStr = refsJSON.map { String(data: $0, encoding: .utf8)! }
@@ -286,10 +298,19 @@ extension Store {
 
     public func failAgentRun(runID: String, error: String, nowMs: EpochMs) throws {
         try db.dbQueue.write { d in
+            // Store a fixed error KIND instead of the full error text to avoid leaking model output
+            let errorKind: String
+            if error.contains("malformed") || error.contains("decode") {
+                errorKind = "relay_malformed"
+            } else if error.contains("validation") || error.contains("ValidationError") {
+                errorKind = "validation_error"
+            } else {
+                errorKind = "unknown_error"
+            }
             try d.execute(sql: """
                 UPDATE agent_runs SET status='failed', error=?, ended_at=?
                 WHERE id=?
-                """, arguments: [error, nowMs, runID])
+                """, arguments: [errorKind, nowMs, runID])
         }
     }
 
@@ -316,7 +337,7 @@ extension Store {
             try d.execute(sql: """
                 UPDATE agent_action_items
                 SET status='dismissed', updated_at=?
-                WHERE id=?
+                WHERE id=? AND status='open'
                 """, arguments: [nowMs, id])
 
             if d.changesCount > 0 {
@@ -374,17 +395,6 @@ extension Store {
             try Int.fetchOne(d, sql: """
                 SELECT COUNT(*) FROM activity_sessions WHERE summary_status='summarized'
                 """) ?? 0
-        }
-    }
-
-    public func lastAgentRunFailed() throws -> Bool {
-        try db.dbQueue.read { d in
-            guard let status = try String.fetchOne(d, sql: """
-                SELECT status FROM agent_runs ORDER BY started_at DESC LIMIT 1
-                """) else {
-                return false
-            }
-            return status == "failed"
         }
     }
 }

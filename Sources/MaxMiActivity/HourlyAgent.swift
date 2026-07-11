@@ -55,8 +55,9 @@ public struct AgentOpDTO: Sendable, Codable {
 
 public protocol AgentRepository: Sendable {
     func claimNextPage() async -> AgentLeasedPage?
-    func complete(runID: String, ops: [AgentOpDTO]) async
+    func complete(runID: String, ops: [AgentOpDTO]) async throws
     func fail(runID: String, error: String) async
+    func renew(runID: String) async
 }
 
 public protocol AgentGenerationRelay: Sendable {
@@ -85,8 +86,18 @@ public struct HourlyAgent: Sendable {
             let input = AgentReviewInput(sessions: page.sessions, openItems: page.openItems)
 
             do {
+                // Launch a renewal heartbeat that runs every ~40s while relay call is in flight
+                let renewalTask = Task {
+                    while !Task.isCancelled {
+                        try await Task.sleep(nanoseconds: 40_000_000_000) // 40s
+                        guard !Task.isCancelled else { break }
+                        await repo.renew(runID: page.runID)
+                    }
+                }
+
                 let ops = try await relay.reviewActivity(input)
-                await repo.complete(runID: page.runID, ops: ops)
+                renewalTask.cancel()
+                try await repo.complete(runID: page.runID, ops: ops)
             } catch {
                 await repo.fail(runID: page.runID, error: error.localizedDescription)
                 break
