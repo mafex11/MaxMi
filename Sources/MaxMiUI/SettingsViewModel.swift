@@ -48,6 +48,10 @@ public final class SettingsViewModel {
         get { _activityEnabled }
         set {
             guard newValue != _activityEnabled else { return }
+            // Consent gate: can't enable without consent
+            if newValue && !consentGranted {
+                return
+            }
             _activityEnabled = newValue
             onSetActivityEnabled(newValue)
         }
@@ -56,6 +60,7 @@ public final class SettingsViewModel {
     public private(set) var excludedApps: [SettingsExcludedApp] = []
     public private(set) var version: String = ""
     public private(set) var updateStatus: String = ""
+    public private(set) var launchAtLoginError: String? = nil
     public private(set) var statusLines: [String] = []
 
     private let load: @Sendable () async -> SettingsSnapshot
@@ -63,19 +68,33 @@ public final class SettingsViewModel {
     private let onSetActivityEnabled: @Sendable (Bool) -> Void
     private let onToggleExcluded: @Sendable (String, Bool) async -> Void
     private let onCheckUpdates: @Sendable () async -> String
+    private let onOpenPrivacy: @MainActor @Sendable () -> Void
+    private let onOpenLoginItems: @MainActor @Sendable () -> Void
 
     public init(
         load: @escaping @Sendable () async -> SettingsSnapshot,
         onSetLaunchAtLogin: @escaping @Sendable (Bool) async throws -> Void,
         onSetActivityEnabled: @escaping @Sendable (Bool) -> Void,
         onToggleExcluded: @escaping @Sendable (String, Bool) async -> Void,
-        onCheckUpdates: @escaping @Sendable () async -> String
+        onCheckUpdates: @escaping @Sendable () async -> String,
+        onOpenPrivacy: @escaping @MainActor @Sendable () -> Void,
+        onOpenLoginItems: @escaping @MainActor @Sendable () -> Void
     ) {
         self.load = load
         self.onSetLaunchAtLogin = onSetLaunchAtLogin
         self.onSetActivityEnabled = onSetActivityEnabled
         self.onToggleExcluded = onToggleExcluded
         self.onCheckUpdates = onCheckUpdates
+        self.onOpenPrivacy = onOpenPrivacy
+        self.onOpenLoginItems = onOpenLoginItems
+    }
+
+    public func openPrivacy() {
+        onOpenPrivacy()
+    }
+
+    public func openLoginItems() {
+        onOpenLoginItems()
     }
 
     public func refresh() async {
@@ -86,6 +105,7 @@ public final class SettingsViewModel {
         excludedApps = snapshot.excludedApps
         version = snapshot.version
         statusLines = snapshot.statusLines
+        launchAtLoginError = nil
     }
 
     public func toggleExcluded(_ id: String) async {
@@ -100,11 +120,12 @@ public final class SettingsViewModel {
     }
 
     public func setLaunchAtLogin(_ on: Bool) async {
+        launchAtLoginError = nil
         do {
             try await onSetLaunchAtLogin(on)
         } catch {
-            // Surface error in UI (could add error state to view model)
             NSLog("MaxMi: setLaunchAtLogin failed: \(error)")
+            launchAtLoginError = error.localizedDescription
         }
         // Reload status after attempt (authoritative, not optimistic)
         await refresh()

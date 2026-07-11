@@ -80,8 +80,8 @@ public struct ActionItemsView: View {
                         Text(statusLabel(item.status))
                             .font(.caption)
                             .foregroundColor(statusColor(item.status))
-                            .padding(.horizontal, Theme.spacingHalf + 2)
-                            .padding(.vertical, 2)
+                            .padding(.horizontal, Theme.spacing1)
+                            .padding(.vertical, Theme.spacingHalf)
                             .background(Theme.badgeBackground)
                             .cornerRadius(Theme.cornerRadiusSmall)
                     }

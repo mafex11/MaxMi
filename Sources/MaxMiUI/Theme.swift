@@ -5,8 +5,8 @@ public enum Theme {
     public static let background = Color(white: 0.08)
     public static let surface = Color(white: 0.12)
     public static let text = Color.white
-    public static let secondaryText = Color.white.opacity(0.6)
-    public static let tertiaryText = Color.white.opacity(0.8)
+    public static let secondaryText = Color.white.opacity(0.8)
+    public static let tertiaryText = Color.white.opacity(0.6)
     public static let accent = Color(red: 0.3, green: 0.6, blue: 1.0)
     public static let success = Color.green
     public static let destructive = Color.red

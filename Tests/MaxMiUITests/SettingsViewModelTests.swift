@@ -22,7 +22,9 @@ final class SettingsViewModelTests: XCTestCase {
             onSetLaunchAtLogin: { _ in },
             onSetActivityEnabled: { _ in },
             onToggleExcluded: { _, _ in },
-            onCheckUpdates: { "Checking updates is manual" }
+            onCheckUpdates: { "Checking updates is manual" },
+            onOpenPrivacy: { },
+            onOpenLoginItems: { }
         )
 
         await vm.refresh()
@@ -77,7 +79,9 @@ final class SettingsViewModelTests: XCTestCase {
                 toggledBundle = bundle
                 toggledExcluded = excluded
             },
-            onCheckUpdates: { "Manual" }
+            onCheckUpdates: { "Manual" },
+            onOpenPrivacy: { },
+            onOpenLoginItems: { }
         )
 
         await vm.refresh()
@@ -111,7 +115,9 @@ final class SettingsViewModelTests: XCTestCase {
             onCheckUpdates: {
                 checkCalled = true
                 return "MaxMi v1.0 · updates are manual"
-            }
+            },
+            onOpenPrivacy: { },
+            onOpenLoginItems: { }
         )
 
         await vm.refresh()
@@ -145,7 +151,9 @@ final class SettingsViewModelTests: XCTestCase {
             },
             onSetActivityEnabled: { _ in },
             onToggleExcluded: { _, _ in },
-            onCheckUpdates: { "Manual" }
+            onCheckUpdates: { "Manual" },
+            onOpenPrivacy: { },
+            onOpenLoginItems: { }
         )
 
         await vm.refresh()
@@ -177,7 +185,9 @@ final class SettingsViewModelTests: XCTestCase {
                 setEnabledCalls.append(enabled)
             },
             onToggleExcluded: { _, _ in },
-            onCheckUpdates: { "Manual" }
+            onCheckUpdates: { "Manual" },
+            onOpenPrivacy: { },
+            onOpenLoginItems: { }
         )
 
         await vm.refresh()
@@ -186,9 +196,9 @@ final class SettingsViewModelTests: XCTestCase {
         // Attempt to enable activity when consent is not granted
         vm.activityEnabled = true
 
-        // The view model should reject this change (consent gating)
-        // In the real UI, the toggle would be disabled, but we verify the setter behavior
-        XCTAssertEqual(setEnabledCalls.count, 1, "setter should call closure")
+        // The view model should block this change (consent gating)
+        XCTAssertEqual(setEnabledCalls.count, 0, "setter should NOT call closure when consent is missing")
+        XCTAssertEqual(vm.activityEnabled, false, "activityEnabled should remain false")
     }
 
     func testActivityEnabledSetterCallsOnSetActivityEnabled() async {
@@ -209,7 +219,9 @@ final class SettingsViewModelTests: XCTestCase {
                 setCalls.append(enabled)
             },
             onToggleExcluded: { _, _ in },
-            onCheckUpdates: { "Manual" }
+            onCheckUpdates: { "Manual" },
+            onOpenPrivacy: { },
+            onOpenLoginItems: { }
         )
 
         await vm.refresh()

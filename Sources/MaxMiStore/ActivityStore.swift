@@ -284,19 +284,82 @@ extension Store {
         }
     }
 
+    public func setActivityExcludedAndDeleteActivity(_ bundle: String, excluded: Bool) throws {
+        try db.dbQueue.write { d in
+            let nowMs = epochNowMs()
+
+            // Read current set (JSON format)
+            var set: Set<String> = []
+            if let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: ["activity_excluded_apps"]) {
+                if let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) {
+                    set = Set(arr)
+                } else {
+                    NSLog("MaxMi: activity_excluded_apps JSON decode failed, treating as empty: \(json)")
+                }
+            }
+
+            // Update set
+            if excluded {
+                set.insert(bundle)
+            } else {
+                set.remove(bundle)
+            }
+
+            // Write updated set (JSON format)
+            let json = String(decoding: try JSONEncoder().encode(set.sorted()), as: UTF8.self)
+            try d.execute(sql: "INSERT OR REPLACE INTO settings VALUES (?,?,?)",
+                          arguments: ["activity_excluded_apps", json, nowMs])
+
+            // Delete activity data if excluding
+            if excluded {
+                try d.execute(sql: "DELETE FROM activity_app_visits WHERE app_bundle=?", arguments: [bundle])
+                try d.execute(sql: "DELETE FROM activity_sessions WHERE app_bundle=?", arguments: [bundle])
+            }
+        }
+    }
+
     public func observedActivityApps() throws -> [(bundle: String, label: String)] {
-        try db.dbQueue.read { d in
+        // Read excluded apps first (outside the main read transaction)
+        let excludedSet = try activityExcludedApps()
+
+        return try db.dbQueue.read { d in
+            // Union of observed apps from sessions AND visits, plus excluded apps
             let rows = try Row.fetchAll(d, sql: """
-                SELECT app_bundle, app_label
-                FROM (
-                    SELECT app_bundle, app_label, started_at,
-                           ROW_NUMBER() OVER (PARTITION BY app_bundle ORDER BY started_at DESC) AS rn
+                WITH observed AS (
+                    SELECT app_bundle, app_label, MAX(started_at) AS latest_ts
                     FROM activity_sessions
+                    GROUP BY app_bundle
+                    UNION
+                    SELECT app_bundle, app_label, MAX(started_at) AS latest_ts
+                    FROM activity_app_visits
+                    GROUP BY app_bundle
                 )
-                WHERE rn = 1
-                ORDER BY app_label
+                SELECT app_bundle,
+                       MAX(app_label) AS app_label
+                FROM observed
+                GROUP BY app_bundle
+                ORDER BY app_label, app_bundle
                 """)
-            return rows.map { (bundle: $0["app_bundle"], label: $0["app_label"]) }
+
+            var result = rows.map { (bundle: $0["app_bundle"] as String, label: $0["app_label"] as String) }
+
+            // Add excluded apps that aren't in the observed set
+            let observedBundles = Set(result.map { $0.bundle })
+            for excludedBundle in excludedSet {
+                if !observedBundles.contains(excludedBundle) {
+                    result.append((bundle: excludedBundle, label: excludedBundle))
+                }
+            }
+
+            // Sort final result by label, then bundle (deterministic)
+            result.sort { lhs, rhs in
+                if lhs.label != rhs.label {
+                    return lhs.label < rhs.label
+                }
+                return lhs.bundle < rhs.bundle
+            }
+
+            return result
         }
     }
 

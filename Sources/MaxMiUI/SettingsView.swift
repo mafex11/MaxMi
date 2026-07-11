@@ -54,10 +54,20 @@ public struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(Theme.secondaryText)
                     Button("Open Login Items") {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+                        viewModel.openLoginItems()
                     }
                     .buttonStyle(.link)
                     .font(.caption)
+                }
+            }
+
+            if let error = viewModel.launchAtLoginError {
+                HStack(spacing: Theme.spacing1) {
+                    Image(systemName: "xmark.circle")
+                        .foregroundColor(Theme.destructive)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(Theme.secondaryText)
                 }
             }
         }
@@ -86,6 +96,11 @@ public struct SettingsView: View {
                     Text("Consent required")
                         .font(.caption)
                         .foregroundColor(Theme.secondaryText)
+                    Button("Grant Consent") {
+                        viewModel.openPrivacy()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
                 }
             }
 

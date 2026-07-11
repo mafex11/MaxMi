@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ServiceManagement
 import MaxMiCore
 import MaxMiStore
 import MaxMiCapture
@@ -208,6 +209,7 @@ final class AppWiring {
         let hasAPIKey = config.geminiAPIKey != nil
         let encryptionOK = encryptionAvailable
         nonisolated(unsafe) let mb = menuBar
+        nonisolated(unsafe) let privacyWindow = activityPrivacyWindow
 
         let settingsViewModel = SettingsViewModel(
             load: { @Sendable in
@@ -254,17 +256,33 @@ final class AppWiring {
                 try await LaunchAtLogin.setEnabled(on)
             },
             onSetActivityEnabled: { @Sendable enabled in
-                try? activityStore.setActivityEnabled(enabled)
+                do {
+                    // Consent gate: can't enable without consent
+                    if enabled {
+                        let consent = try activityStore.activityConsent()
+                        guard consent == .granted else { return }
+                    }
+                    try activityStore.setActivityEnabled(enabled)
+                } catch {
+                    NSLog("MaxMi: setActivityEnabled failed: \(error)")
+                }
             },
             onToggleExcluded: { @Sendable bundle, excluded in
-                try? activityStore.setActivityExcluded(bundle, excluded)
-                if excluded {
-                    try? activityStore.deleteActivityForApp(bundle)
+                do {
+                    try activityStore.setActivityExcludedAndDeleteActivity(bundle, excluded: excluded)
+                } catch {
+                    NSLog("MaxMi: setActivityExcludedAndDeleteActivity failed: \(error)")
                 }
             },
             onCheckUpdates: { @Sendable in
                 let version = UpdateChecker.currentVersion()
                 return "MaxMi \(version) · updates are manual"
+            },
+            onOpenPrivacy: { @MainActor in
+                privacyWindow.show()
+            },
+            onOpenLoginItems: { @MainActor in
+                SMAppService.openSystemSettingsLoginItems()
             }
         )
 
