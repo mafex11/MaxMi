@@ -4,7 +4,7 @@
 
 **Goal:** Ship M6c — a proper SwiftUI **Settings window** (Launch at Login, Check for Updates, per-app activity exclusion, status) matching Minimi's menu-app, plus a **final UX polish pass** so MaxMi is ~99% ship-ready — per the M6 spec §4 (M6c) and the user's ship-readiness goal (clean, animated, smooth).
 
-**Architecture:** A SwiftUI `SettingsView` (always-dark Theme) hosted in a retained `NSWindow` (like ActivityWindow), reached from the menu-bar "Settings…" item. Launch-at-Login via `SMAppService.mainApp` (macOS 13+). Check-for-Updates is a lightweight version-check (MaxMi has no Sparkle; a simple "you're on vX; latest is Y" against a pinned/manual endpoint OR just a stub that opens the repo — honest about scope). Per-app exclusion reuses the M6a `activityExcludedApps` store APIs. A polish pass tightens animations/spacing/empty-states across ActivityView/ActionItemsView/RightLanePanel/privacy.
+**Architecture:** A SwiftUI `SettingsView` (always-dark Theme) hosted in a retained `NSWindow` (like ActivityWindow), reached from the menu-bar "Settings…" item. Launch-at-Login via `SMAppService.mainApp` (macOS 13+). Check-for-Updates is a lightweight version-check (MaxMi has no Sparkle; a simple "you're on vX; latest is Y" against a pinned/manual endpoint OR just a stub that opens the repo — honest about scope). Per-app exclusion needs an OBSERVED-APPS query (M6a's activityExcludedApps returns only excluded ids, not names) — add `Store.observedActivityApps() -> [(bundle,label)]` (distinct apps from activity_sessions/visits) merged with excluded ids; excluding an app is ONE transaction: persist exclusion + deleteActivityForApp (already exists) — the ViewModel calls a single `onToggleExcluded` that does both atomically so a crash can't leave exclusion-without-delete. A polish pass tightens animations/spacing/empty-states across ActivityView/ActionItemsView/RightLanePanel/privacy.
 
 **Tech Stack:** Swift 6, SwiftUI, ServiceManagement (SMAppService), MaxMiUI Theme, existing Store settings APIs.
 
@@ -40,20 +40,22 @@ Task order: 1 LaunchAtLogin + UpdateChecker (pure-ish helpers) → 2 SettingsVie
 
 **Interfaces:**
 ```swift
+public enum LaunchAtLoginState: Sendable, Equatable { case enabled, notRegistered, requiresApproval, unavailable }
 public enum LaunchAtLogin {   // SMAppService.mainApp (macOS 13+)
-    public static var isEnabled: Bool { get }         // reads SMAppService.mainApp.status == .enabled
-    public static func setEnabled(_ on: Bool) throws   // register()/unregister()
+    public static func status() -> LaunchAtLoginState        // maps the FULL SMAppService.mainApp.status
+    public static func setEnabled(_ on: Bool) async throws   // register()/unregister(); async+throwing
+    // (register is user-approval-subject + can throw already-registered/denied; caller reloads status)
 }
 public struct AppVersion: Sendable { public let current: String }   // from Bundle CFBundleShortVersionString
 public struct UpdateChecker: Sendable {
     public static func currentVersion() -> String
     // Honest: if a version endpoint is set, fetch + compare; else return .upToDateUnknown.
-    public func check() async -> UpdateStatus     // .current / .available(String) / .unknown
+    public func check() async -> UpdateStatus     // M6c: always .unknownManual
 }
-public enum UpdateStatus: Sendable, Equatable { case current, available(String), unknown }
+public enum UpdateStatus: Sendable, Equatable { case unknownManual }   // M6c: always manual, honest
 ```
 - [ ] **Step 1: LaunchAtLogin** — wrap `SMAppService.mainApp`: `isEnabled` reads `.status == .enabled`; `setEnabled(true)` = `try register()`, `setEnabled(false)` = `try unregister()`. (Only works from a real .app bundle — in tests/CLI it may throw; the caller handles the error and the live check verifies.)
-- [ ] **Step 2: UpdateChecker** — `currentVersion()` = `Bundle.main.infoDictionary?["CFBundleShortVersionString"]`. `check()` — for M6c, since MaxMi has no update server, return `.unknown` with a documented note (a `versionEndpoint` optional lets a future build compare; if nil → `.unknown`). Keep it honest — do NOT claim auto-update.
+- [ ] **Step 2: UpdateChecker (▲REV — ONE honest behavior).** `currentVersion()` from CFBundleShortVersionString. `check()` ALWAYS returns `.unknown` in M6c (no endpoint, no trust policy, no auto-update). The Settings UI shows: "MaxMi vX · updates are manual" — it NEVER claims 'up to date' (can't verify without a trusted source). No versionEndpoint stub, no repo-opening pretense — just an honest version display + manual-update statement. (Real Developer-ID+notarized update delivery is out of M6c scope — noted in ship-readiness.)
 - [ ] **Step 3: Test** the version-compare pure logic (`isNewer(_:than:)` semver-ish compare) if UpdateChecker has one; LaunchAtLogin is live-only (SMAppService needs a bundle) — compile-checked. Build + full suite green.
 - [ ] **Step 4: Commit** `feat(settings): LaunchAtLogin (SMAppService) + UpdateChecker (honest version check)`
 
@@ -67,20 +69,22 @@ public enum UpdateStatus: Sendable, Equatable { case current, available(String),
 ```swift
 public struct SettingsExcludedApp: Identifiable, Sendable { public let id: String; public let name: String; public let excluded: Bool }
 @MainActor @Observable public final class SettingsViewModel {
-    public var launchAtLogin: Bool           // didSet -> onSetLaunchAtLogin
-    public var activityEnabled: Bool         // didSet -> onSetActivityEnabled
-    public private(set) var excludedApps: [SettingsExcludedApp]
+    public private(set) var launchAtLoginStatus: LaunchAtLoginState   // authoritative, reloaded after set
+    public var activityEnabled: Bool         // didSet -> onSetActivityEnabled (disabled if consent != granted)
+    public private(set) var consentGranted: Bool                      // gates activityEnabled meaningfully
+    public private(set) var excludedApps: [SettingsExcludedApp]        // observed apps + excluded flag
     public private(set) var version: String
     public private(set) var updateStatus: String   // "You're up to date" / "vX available" / "Up to date (vN)"
     public private(set) var statusLines: [String]   // permission/key/encryption status (from menu-bar state)
     public init(load: @escaping @Sendable () async -> SettingsSnapshot,
-                onSetLaunchAtLogin: @escaping @Sendable (Bool) -> Void,
+                onSetLaunchAtLogin: @escaping @Sendable (Bool) async throws -> Void,  // reloads status after
                 onSetActivityEnabled: @escaping @Sendable (Bool) -> Void,
                 onToggleExcluded: @escaping @Sendable (String, Bool) async -> Void,
                 onCheckUpdates: @escaping @Sendable () async -> String)
     public func refresh() async; public func toggleExcluded(_ id: String) async; public func checkUpdates() async
+    public func setLaunchAtLogin(_ on: Bool) async     // calls the throwing closure, reloads status, surfaces error/requiresApproval
 }
-public struct SettingsSnapshot: Sendable { public let launchAtLogin, activityEnabled: Bool; public let excludedApps: [SettingsExcludedApp]; public let version: String; public let statusLines: [String] }
+public struct SettingsSnapshot: Sendable { public let launchAtLoginStatus: LaunchAtLoginState; public let activityEnabled: Bool; public let consentGranted: Bool; public let excludedApps: [SettingsExcludedApp]; public let version: String; public let statusLines: [String] }
 ```
 - [ ] **Step 1: Failing SettingsViewModelTests** — inject a load snapshot (launchAtLogin=false, activityEnabled=true, 2 apps one excluded, version "1.0"); refresh → fields populated; toggleExcluded(id) → calls onToggleExcluded + reloads; checkUpdates → updateStatus set from onCheckUpdates. Pure.
 - [ ] **Step 2: Run — FAIL. Step 3: Implement** SettingsViewModel + SettingsView (SwiftUI, always-dark Theme, sections: **General** (Launch at Login toggle), **Activity** (enable synthesis toggle + per-app exclusion list with checkboxes), **About** (version + Check for Updates button + status lines: Accessibility/API key/Encryption). Clean spacing, SF Symbols, smooth.) + SettingsWindow (retained NSWindow+NSHostingController, `show()`). Wire MenuBarController "Settings…" → SettingsWindow.show(); AppWiring builds the view model with Store/LaunchAtLogin/UpdateChecker-backed closures.
@@ -92,7 +96,7 @@ public struct SettingsSnapshot: Sendable { public let launchAtLogin, activityEna
 
 **Files:** Modify `Sources/MaxMiUI/Theme.swift`, `ActivityView.swift`, `ActionItemsView.swift`, `SettingsView.swift`, `Sources/MaxMi/RightLanePanel.swift` as needed.
 
-- [ ] **Step 1: Audit + tighten** (this is the "clean/animated/smooth" ship bar): consistent Theme tokens (spacing 8pt grid, corner radius, colors) across ALL surfaces; spring animations on list insert/remove + tab switches; hover states on interactive rows; polished empty states with a friendly line + the dog glyph; consistent typography (title/body/secondary); window sizing/min-size sensible; the right-lane recorder + privacy sheet visually consistent with the activity/settings windows. No functional change — visual/interaction only.
+- [ ] **Step 1: Audit + tighten with CONCRETE acceptance (▲REV — not a vague brief):** (a) ZERO custom colors/spacing literals outside Theme (grep the SwiftUI files — every color/spacing references a Theme token); (b) 8pt spacing + named corner/animation tokens across ActivityView/ActionItemsView/SettingsView; (c) activity + action rows have hover + pressed states; (d) NO synchronous DB/decrypt/date-format in any SwiftUI `body` (all precomputed in view models — verify); (e) spring animation on list insert/remove + tab switches; (f) empty states = friendly line + dog glyph; (g) RightLane AppKit controls visually checked against the same Theme typography/colors (list the specific RightLanePanel properties changed — no blanket 'no functional change'). Each is a checkable item.
 - [ ] **Step 2: Build + full suite green** (views compile-checked; no logic change). If any Theme token change touches a tested view model, keep tests green.
 - [ ] **Step 3: Commit** `polish(ui): consistent Theme + spring animations + empty states across all windows (ship pass)`
 
