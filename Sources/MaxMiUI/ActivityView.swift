@@ -2,11 +2,13 @@ import SwiftUI
 
 public struct ActivityView: View {
     @Bindable var viewModel: ActivityViewModel
+    @Bindable var actionItemsViewModel: ActionItemsViewModel
     @State private var expandedRowId: String?
     @State private var selectedTab = 0
 
-    public init(viewModel: ActivityViewModel) {
+    public init(viewModel: ActivityViewModel, actionItemsViewModel: ActionItemsViewModel) {
         self.viewModel = viewModel
+        self.actionItemsViewModel = actionItemsViewModel
     }
 
     public var body: some View {
@@ -22,7 +24,7 @@ public struct ActivityView: View {
             if selectedTab == 0 {
                 activityTimeline
             } else {
-                comingSoon
+                ActionItemsView(viewModel: actionItemsViewModel)
             }
         }
         .frame(minWidth: 400, minHeight: 500)

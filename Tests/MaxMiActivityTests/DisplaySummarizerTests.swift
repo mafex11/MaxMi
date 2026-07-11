@@ -103,8 +103,8 @@ final class DisplaySummarizerTests: XCTestCase {
             evidence: ["screen content"],
             maxEvidenceChars: 1000
         )
-        XCTAssertTrue(prompt.contains("--- BEGIN CAPTURED EVIDENCE ---"))
-        XCTAssertTrue(prompt.contains("--- END CAPTURED EVIDENCE ---"))
-        XCTAssertTrue(prompt.contains("UNTRUSTED USER DATA"))
+        XCTAssertTrue(prompt.contains("BEGIN_UNTRUSTED_DATA_"))
+        XCTAssertTrue(prompt.contains("END_UNTRUSTED_DATA_"))
+        XCTAssertTrue(prompt.contains("UNTRUSTED"))
     }
 }

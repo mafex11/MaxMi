@@ -8,6 +8,18 @@ import MaxMiActivity
 import MaxMiMeetings
 import MaxMiUI
 
+/// Format a time interval in a human-readable format (e.g., "5m ago", "2h ago", "3d ago").
+fileprivate func formatTimeAgo(ms: EpochMs, nowMs: EpochMs) -> String {
+    let deltaSec = Int((nowMs - ms) / 1000)
+    if deltaSec < 60 { return "\(deltaSec)s ago" }
+    let deltaMin = deltaSec / 60
+    if deltaMin < 60 { return "\(deltaMin)m ago" }
+    let deltaHour = deltaMin / 60
+    if deltaHour < 24 { return "\(deltaHour)h ago" }
+    let deltaDay = deltaHour / 24
+    return "\(deltaDay)d ago"
+}
+
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
 final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is internally serialized by GRDB's DatabaseQueue
     let store: Store
@@ -69,6 +81,11 @@ final class AppWiring {
     var currentVisitID: String?
     let displaySummarizer: DisplaySummarizer
 
+    // Agent scheduler
+    let agentScheduler: AgentScheduler
+    var agentBackgroundScheduler: NSBackgroundActivityScheduler?
+    var lastSummarizedCount: Int = 0
+
     // Activity UI
     let activityWindow: ActivityWindow
     let activityPrivacyWindow: ActivityPrivacyWindow
@@ -111,6 +128,12 @@ final class AppWiring {
         let activityRelay = GeminiActivityRelay(geminiClient: relay, maxEvidenceChars: 12_000)
         displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay, maxEvidenceChars: 12_000)
 
+        // Initialize agent scheduler
+        let agentRepo = StoreAgentRepository(store: store)
+        let agentRelay = GeminiAgentRelay(geminiClient: relay)
+        let hourlyAgent = HourlyAgent(repo: agentRepo, relay: agentRelay)
+        agentScheduler = AgentScheduler(agent: hourlyAgent)
+
         // Initialize activity UI
         // Store is internally serialized by GRDB; we safely capture it via nonisolated(unsafe)
         nonisolated(unsafe) let activityStore = store
@@ -135,7 +158,48 @@ final class AppWiring {
             },
             now: { epochNowMs() }
         )
-        activityWindow = ActivityWindow(viewModel: viewModel)
+
+        let actionItemsViewModel = ActionItemsViewModel(
+            load: { @Sendable in
+                do {
+                    let nowMs = epochNowMs()
+                    let open = try activityStore.actionItems(status: "open", limit: 100)
+                    let resolved = try activityStore.actionItems(status: "resolved", limit: 50)
+                    let dismissed = try activityStore.actionItems(status: "dismissed", limit: 50)
+
+                    let openDTOs = open.map { item in
+                        ActionItemDTO(
+                            id: item.id,
+                            title: item.title,
+                            details: item.details,
+                            status: item.status,
+                            timeAgo: formatTimeAgo(ms: item.detectedAtMs, nowMs: nowMs)
+                        )
+                    }
+                    let archivedDTOs = (resolved + dismissed).map { item in
+                        ActionItemDTO(
+                            id: item.id,
+                            title: item.title,
+                            details: item.details,
+                            status: item.status,
+                            timeAgo: formatTimeAgo(ms: item.updatedAtMs, nowMs: nowMs)
+                        )
+                    }
+                    return (open: openDTOs, archived: archivedDTOs)
+                } catch {
+                    NSLog("MaxMi: failed to load action items: \(error)")
+                    return (open: [], archived: [])
+                }
+            },
+            onResolve: { @Sendable id in
+                try activityStore.resolveActionItem(id, nowMs: epochNowMs())
+            },
+            onDismiss: { @Sendable id in
+                try activityStore.dismissActionItem(id, nowMs: epochNowMs())
+            }
+        )
+
+        activityWindow = ActivityWindow(viewModel: viewModel, actionItemsViewModel: actionItemsViewModel)
         activityPrivacyWindow = ActivityPrivacyWindow(store: store)
     }
 
@@ -236,11 +300,22 @@ final class AppWiring {
                 // Summarize due sessions if activity enabled
                 if self.isActivitySynthesisEnabled() {
                     await self.displaySummarizer.summarizeDue(nowMs: epochNowMs())
+
+                    // Trigger agent when enough new summarized sessions exist
+                    await self.triggerAgentIfNeeded()
                 }
             }
         }
         RunLoop.main.add(t, forMode: .common)
         pipelineTimer = t
+
+        // Setup hourly background agent scheduler
+        setupAgentBackgroundScheduler()
+
+        // Run agent on launch if overdue (last run > 1h ago)
+        Task { @MainActor in
+            await self.runAgentIfOverdue()
+        }
 
         // Meeting capture wiring — guarded by same availability as regular capture
         wireMeetingCapture()
@@ -518,5 +593,111 @@ final class AppWiring {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft - 1, captureGeneration: captureGeneration)
         }
+    }
+
+    // MARK: - Agent Scheduling
+
+    private func setupAgentBackgroundScheduler() {
+        let scheduler = NSBackgroundActivityScheduler(identifier: "com.maxmi.agent.hourly")
+        scheduler.interval = 60 * 60  // ~1 hour
+        scheduler.tolerance = 10 * 60  // 10 min tolerance
+        scheduler.repeats = true
+        scheduler.qualityOfService = .utility
+
+        scheduler.schedule { [weak self] completion in
+            Task { @MainActor in
+                guard let self else {
+                    completion(.finished)
+                    return
+                }
+
+                // Gate on consent + enabled
+                guard self.isActivitySynthesisEnabled() else {
+                    completion(.finished)
+                    return
+                }
+
+                await self.agentScheduler.tick()
+                completion(.finished)
+            }
+        }
+
+        agentBackgroundScheduler = scheduler
+    }
+
+    private func runAgentIfOverdue() async {
+        guard isActivitySynthesisEnabled() else { return }
+
+        // Check last agent run time
+        do {
+            let nowMs = epochNowMs()
+            let oneHourAgo = nowMs - (60 * 60 * 1000)
+
+            // Query last completed run
+            let lastRunMs = try store.lastAgentRunStartedAt()
+
+            // If no run or last run > 1h ago, trigger now
+            if lastRunMs == nil || lastRunMs! < oneHourAgo {
+                await agentScheduler.tick()
+            }
+        } catch {
+            NSLog("MaxMi: failed to check agent overdue status: \(error)")
+        }
+    }
+
+    private func triggerAgentIfNeeded() async {
+        guard isActivitySynthesisEnabled() else { return }
+
+        do {
+            // Count summarized sessions since last check
+            let summarizedCount = try store.summarizedSessionCount()
+
+            // Trigger when >= 10 new summarized sessions exist
+            let newCount = summarizedCount - lastSummarizedCount
+            if newCount >= 10 {
+                await agentScheduler.tick()
+                lastSummarizedCount = summarizedCount
+            }
+        } catch {
+            NSLog("MaxMi: failed to check summarized session count: \(error)")
+        }
+    }
+}
+
+// MARK: - AgentScheduler Actor
+
+actor AgentScheduler {
+    private let agent: HourlyAgent
+    private var running = false
+    private var nextRetryAt: EpochMs?
+    private let initialBackoffMs: EpochMs = 60_000  // 1 minute
+    private let maxBackoffMs: EpochMs = 30 * 60_000  // 30 minutes
+    private var currentBackoffMs: EpochMs = 60_000
+
+    init(agent: HourlyAgent) {
+        self.agent = agent
+    }
+
+    func tick() async {
+        // Early return if already running (synchronous guard before first await)
+        guard !running else { return }
+
+        // Check backoff
+        if let retryAt = nextRetryAt {
+            let nowMs = epochNowMs()
+            guard nowMs >= retryAt else { return }
+        }
+
+        // Set running flag BEFORE first await
+        running = true
+        defer { running = false }
+
+        // Clear retry backoff on successful start
+        nextRetryAt = nil
+        currentBackoffMs = initialBackoffMs
+
+        // Run the agent (may process multiple pages)
+        // Note: HourlyAgent internally handles errors by calling repo.fail()
+        await agent.runIfDue()
     }
 }
