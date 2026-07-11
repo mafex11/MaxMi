@@ -8,6 +8,18 @@ import MaxMiActivity
 import MaxMiMeetings
 import MaxMiUI
 
+/// Format a time interval in a human-readable format (e.g., "5m ago", "2h ago", "3d ago").
+fileprivate func formatTimeAgo(ms: EpochMs, nowMs: EpochMs) -> String {
+    let deltaSec = Int((nowMs - ms) / 1000)
+    if deltaSec < 60 { return "\(deltaSec)s ago" }
+    let deltaMin = deltaSec / 60
+    if deltaMin < 60 { return "\(deltaMin)m ago" }
+    let deltaHour = deltaMin / 60
+    if deltaHour < 24 { return "\(deltaHour)h ago" }
+    let deltaDay = deltaHour / 24
+    return "\(deltaDay)d ago"
+}
+
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
 final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is internally serialized by GRDB's DatabaseQueue
     let store: Store
@@ -146,7 +158,49 @@ final class AppWiring {
             },
             now: { epochNowMs() }
         )
-        activityWindow = ActivityWindow(viewModel: viewModel)
+
+        let actionItemsViewModel = ActionItemsViewModel(
+            load: { @Sendable in
+                do {
+                    let nowMs = epochNowMs()
+                    let open = try activityStore.actionItems(status: "open", limit: 100)
+                    let resolved = try activityStore.actionItems(status: "resolved", limit: 50)
+                    let dismissed = try activityStore.actionItems(status: "dismissed", limit: 50)
+
+                    let openDTOs = open.map { item in
+                        ActionItemDTO(
+                            id: item.id,
+                            title: item.title,
+                            details: item.details,
+                            status: item.status,
+                            timeAgo: formatTimeAgo(ms: item.detectedAtMs, nowMs: nowMs)
+                        )
+                    }
+                    let archivedDTOs = (resolved + dismissed).map { item in
+                        ActionItemDTO(
+                            id: item.id,
+                            title: item.title,
+                            details: item.details,
+                            status: item.status,
+                            timeAgo: formatTimeAgo(ms: item.updatedAtMs, nowMs: nowMs)
+                        )
+                    }
+                    return (open: openDTOs, archived: archivedDTOs)
+                } catch {
+                    NSLog("MaxMi: failed to load action items: \(error)")
+                    return (open: [], archived: [])
+                }
+            },
+            onResolve: { @Sendable id in
+                try activityStore.resolveActionItem(id, nowMs: epochNowMs())
+            },
+            onDismiss: { @Sendable id in
+                try activityStore.dismissActionItem(id, nowMs: epochNowMs())
+            },
+            now: { epochNowMs() }
+        )
+
+        activityWindow = ActivityWindow(viewModel: viewModel, actionItemsViewModel: actionItemsViewModel)
         activityPrivacyWindow = ActivityPrivacyWindow(store: store)
     }
 

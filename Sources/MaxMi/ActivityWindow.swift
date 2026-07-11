@@ -6,9 +6,11 @@ import MaxMiUI
 final class ActivityWindow {
     private var window: NSWindow?
     private let viewModel: ActivityViewModel
+    private let actionItemsViewModel: ActionItemsViewModel
 
-    init(viewModel: ActivityViewModel) {
+    init(viewModel: ActivityViewModel, actionItemsViewModel: ActionItemsViewModel) {
         self.viewModel = viewModel
+        self.actionItemsViewModel = actionItemsViewModel
     }
 
     func show() {
@@ -21,14 +23,18 @@ final class ActivityWindow {
             )
             window.title = "MaxMi Activity"
             window.center()
-            window.contentViewController = NSHostingController(rootView: ActivityView(viewModel: viewModel))
+            window.contentViewController = NSHostingController(rootView: ActivityView(
+                viewModel: viewModel,
+                actionItemsViewModel: actionItemsViewModel
+            ))
             window.setFrameAutosaveName("ActivityWindow")
             self.window = window
         }
 
-        // Refresh the view model on show
+        // Refresh the view models on show
         Task {
             await viewModel.refresh()
+            await actionItemsViewModel.refresh()
         }
 
         NSApp.activate(ignoringOtherApps: true)
