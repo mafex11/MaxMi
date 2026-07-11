@@ -178,16 +178,13 @@ private struct ActivityPrivacyView: View {
     private func handleAppToggle(bundleID: String, included: Bool) {
         do {
             let excluded = !included
-            try store.setActivityExcluded(bundleID, excluded)
-            if excluded {
-                try store.deleteActivityForApp(bundleID)
-                // Refresh the recent apps list
-                loadState()
-            }
+            try store.setActivityExcludedAndDeleteActivity(bundleID, excluded: excluded)
 
             // Update local state
             if excluded {
                 excludedApps.insert(bundleID)
+                // Refresh the recent apps list since deleted apps may disappear
+                loadState()
             } else {
                 excludedApps.remove(bundleID)
             }

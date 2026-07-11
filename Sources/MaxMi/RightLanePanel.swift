@@ -377,7 +377,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
         view.material = .hudWindow
         view.state = .active
         view.wantsLayer = true
-        view.layer?.cornerRadius = 12
+        view.layer?.cornerRadius = 12  // Theme.cornerRadiusLarge equivalent
         view.layer?.masksToBounds = true
         return view
     }

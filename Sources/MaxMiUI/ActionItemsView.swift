@@ -3,19 +3,21 @@ import SwiftUI
 public struct ActionItemsView: View {
     @Bindable var viewModel: ActionItemsViewModel
     @State private var selectedSegment = 0
+    @State private var hoveredItemId: String?
 
     public init(viewModel: ActionItemsViewModel) {
         self.viewModel = viewModel
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: Theme.spacing0) {
             Picker("", selection: $selectedSegment) {
                 Text("Open").tag(0)
                 Text("Archived").tag(1)
             }
             .pickerStyle(.segmented)
             .padding(Theme.spacing2)
+            .animation(Theme.spring, value: selectedSegment)
 
             if selectedSegment == 0 {
                 openItemsList
@@ -73,15 +75,15 @@ public struct ActionItemsView: View {
     private func itemRow(_ item: ActionItemDTO, isArchived: Bool) -> some View {
         HStack(alignment: .top, spacing: Theme.spacing2) {
             VStack(alignment: .leading, spacing: Theme.spacing1) {
-                HStack(spacing: 4) {
+                HStack(spacing: Theme.spacingHalf) {
                     if isArchived {
                         Text(statusLabel(item.status))
                             .font(.caption)
                             .foregroundColor(statusColor(item.status))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(statusColor(item.status).opacity(0.2))
-                            .cornerRadius(4)
+                            .padding(.horizontal, Theme.spacing1)
+                            .padding(.vertical, Theme.spacingHalf)
+                            .background(Theme.badgeBackground)
+                            .cornerRadius(Theme.cornerRadiusSmall)
                     }
 
                     Text(item.title)
@@ -99,7 +101,7 @@ public struct ActionItemsView: View {
 
                 Text(item.timeAgo)
                     .font(.caption2)
-                    .foregroundColor(Theme.secondaryText.opacity(0.8))
+                    .foregroundColor(Theme.tertiaryText)
             }
 
             Spacer()
@@ -112,8 +114,8 @@ public struct ActionItemsView: View {
                         }
                     } label: {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.green)
+                            .font(.system(size: Theme.iconSizeSmall))
+                            .foregroundColor(Theme.success)
                     }
                     .buttonStyle(.plain)
                     .help("Resolve")
@@ -124,8 +126,8 @@ public struct ActionItemsView: View {
                         }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.red)
+                            .font(.system(size: Theme.iconSizeSmall))
+                            .foregroundColor(Theme.destructive)
                     }
                     .buttonStyle(.plain)
                     .help("Dismiss")
@@ -133,19 +135,26 @@ public struct ActionItemsView: View {
             }
         }
         .padding(Theme.spacing2)
-        .background(Theme.surface)
-        .cornerRadius(8)
+        .background(hoveredItemId == item.id ? Theme.surface.opacity(0.85) : Theme.surface)
+        .cornerRadius(Theme.cornerRadius)
+        .onHover { isHovering in
+            hoveredItemId = isHovering ? item.id : nil
+        }
     }
 
     private var emptyState: some View {
         VStack(spacing: Theme.spacing2) {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 48))
+            Image(systemName: "dog")
+                .font(.system(size: Theme.iconSizeLarge))
                 .foregroundColor(Theme.secondaryText)
 
             Text("No action items")
                 .font(.title3)
                 .foregroundColor(Theme.text)
+
+            Text("You're all caught up")
+                .font(.caption)
+                .foregroundColor(Theme.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -160,8 +169,8 @@ public struct ActionItemsView: View {
 
     private func statusColor(_ status: String) -> Color {
         switch status {
-        case "resolved": return .green
-        case "dismissed": return .red
+        case "resolved": return Theme.success
+        case "dismissed": return Theme.destructive
         default: return Theme.secondaryText
         }
     }

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ServiceManagement
 import MaxMiCore
 import MaxMiStore
 import MaxMiCapture
@@ -89,6 +90,7 @@ final class AppWiring {
     // Activity UI
     let activityWindow: ActivityWindow
     let activityPrivacyWindow: ActivityPrivacyWindow
+    let settingsWindow: SettingsWindow
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -201,6 +203,90 @@ final class AppWiring {
 
         activityWindow = ActivityWindow(viewModel: viewModel, actionItemsViewModel: actionItemsViewModel)
         activityPrivacyWindow = ActivityPrivacyWindow(store: store)
+
+        // Initialize settings window
+        // Capture values needed for settings load closure before self is fully initialized
+        let hasAPIKey = config.geminiAPIKey != nil
+        let encryptionOK = encryptionAvailable
+        nonisolated(unsafe) let mb = menuBar
+        nonisolated(unsafe) let privacyWindow = activityPrivacyWindow
+
+        let settingsViewModel = SettingsViewModel(
+            load: { @Sendable in
+                do {
+                    let launchStatus = LaunchAtLogin.status()
+                    let activityEnabled = try activityStore.activityEnabled()
+                    let consent = try activityStore.activityConsent()
+                    let excluded = try activityStore.activityExcludedApps()
+                    let observed = try activityStore.observedActivityApps()
+
+                    let excludedApps = observed.map { app in
+                        SettingsExcludedApp(id: app.bundle, name: app.label, excluded: excluded.contains(app.bundle))
+                    }
+
+                    let version = UpdateChecker.currentVersion()
+                    let accessGranted = await MainActor.run { mb.accessibilityGranted }
+                    let statusLines = [
+                        accessGranted ? "Accessibility: Granted" : "Accessibility: Required",
+                        hasAPIKey ? "API Key: Configured" : "API Key: Missing",
+                        encryptionOK ? "Encryption: Available" : "Encryption: Unavailable"
+                    ]
+
+                    return SettingsSnapshot(
+                        launchAtLoginStatus: launchStatus,
+                        activityEnabled: activityEnabled,
+                        consentGranted: consent == .granted,
+                        excludedApps: excludedApps,
+                        version: version,
+                        statusLines: statusLines
+                    )
+                } catch {
+                    NSLog("MaxMi: failed to load settings snapshot: \(error)")
+                    return SettingsSnapshot(
+                        launchAtLoginStatus: .unavailable,
+                        activityEnabled: false,
+                        consentGranted: false,
+                        excludedApps: [],
+                        version: UpdateChecker.currentVersion(),
+                        statusLines: []
+                    )
+                }
+            },
+            onSetLaunchAtLogin: { @Sendable on in
+                try await LaunchAtLogin.setEnabled(on)
+            },
+            onSetActivityEnabled: { @Sendable enabled in
+                do {
+                    // Consent gate: can't enable without consent
+                    if enabled {
+                        let consent = try activityStore.activityConsent()
+                        guard consent == .granted else { return }
+                    }
+                    try activityStore.setActivityEnabled(enabled)
+                } catch {
+                    NSLog("MaxMi: setActivityEnabled failed: \(error)")
+                }
+            },
+            onToggleExcluded: { @Sendable bundle, excluded in
+                do {
+                    try activityStore.setActivityExcludedAndDeleteActivity(bundle, excluded: excluded)
+                } catch {
+                    NSLog("MaxMi: setActivityExcludedAndDeleteActivity failed: \(error)")
+                }
+            },
+            onCheckUpdates: { @Sendable in
+                let version = UpdateChecker.currentVersion()
+                return "MaxMi \(version) · updates are manual"
+            },
+            onOpenPrivacy: { @MainActor in
+                privacyWindow.show()
+            },
+            onOpenLoginItems: { @MainActor in
+                SMAppService.openSystemSettingsLoginItems()
+            }
+        )
+
+        settingsWindow = SettingsWindow(viewModel: settingsViewModel)
     }
 
     func start() {
@@ -220,7 +306,8 @@ final class AppWiring {
                 try? self.store.setThreadPaused(key, paused: true, nowMs: epochNowMs())
             },
             onOpenActivity: { [weak self] in self?.activityWindow.show() },
-            onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() }
+            onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() },
+            onOpenSettings: { [weak self] in self?.settingsWindow.show() }
         )
         menuBar.encryptionAvailable = encryptionAvailable
         guard encryptionAvailable else { return }          // capture paused per §9

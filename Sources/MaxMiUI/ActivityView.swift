@@ -5,6 +5,7 @@ public struct ActivityView: View {
     @Bindable var actionItemsViewModel: ActionItemsViewModel
     @State private var expandedRowId: String?
     @State private var selectedTab = 0
+    @State private var hoveredRowId: String?
 
     public init(viewModel: ActivityViewModel, actionItemsViewModel: ActionItemsViewModel) {
         self.viewModel = viewModel
@@ -12,7 +13,7 @@ public struct ActivityView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: Theme.spacing0) {
             // Segmented control: Activity / Action Items
             Picker("", selection: $selectedTab) {
                 Text("Activity").tag(0)
@@ -20,6 +21,7 @@ public struct ActivityView: View {
             }
             .pickerStyle(.segmented)
             .padding(Theme.spacing2)
+            .animation(Theme.spring, value: selectedTab)
 
             if selectedTab == 0 {
                 activityTimeline
@@ -73,17 +75,17 @@ public struct ActivityView: View {
                 HStack(spacing: Theme.spacing1) {
                     // App glyph (SF Symbol)
                     Image(systemName: appIcon(for: row.appLabel))
-                        .font(.system(size: 20))
+                        .font(.system(size: Theme.iconSizeSmall))
                         .foregroundColor(Theme.accent)
-                        .frame(width: 28, height: 28)
+                        .frame(width: Theme.iconSizeMedium, height: Theme.iconSizeMedium)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: Theme.spacingHalf) {
                         Text(row.summary)
                             .font(.body)
                             .foregroundColor(Theme.text)
                             .lineLimit(expandedRowId == row.id ? nil : 2)
 
-                        HStack(spacing: 4) {
+                        HStack(spacing: Theme.spacingHalf) {
                             Text(row.appLabel)
                                 .font(.caption)
                                 .foregroundColor(Theme.secondaryText)
@@ -104,10 +106,13 @@ public struct ActivityView: View {
                     }
                 }
                 .padding(Theme.spacing2)
-                .background(Theme.surface)
-                .cornerRadius(8)
+                .background(hoveredRowId == row.id ? Theme.surface.opacity(0.85) : Theme.surface)
+                .cornerRadius(Theme.cornerRadius)
             }
             .buttonStyle(.plain)
+            .onHover { isHovering in
+                hoveredRowId = isHovering ? row.id : nil
+            }
 
             // Expanded evidence
             if expandedRowId == row.id && !row.evidence.isEmpty {
@@ -125,17 +130,18 @@ public struct ActivityView: View {
                 }
                 .padding(Theme.spacing2)
                 .background(Theme.background)
-                .cornerRadius(8)
+                .cornerRadius(Theme.cornerRadius)
                 .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
             }
         }
         .padding(.horizontal, Theme.spacing2)
+        .animation(Theme.spring, value: expandedRowId == row.id)
     }
 
     private var emptyState: some View {
         VStack(spacing: Theme.spacing2) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 48))
+            Image(systemName: "dog")
+                .font(.system(size: Theme.iconSizeLarge))
                 .foregroundColor(Theme.secondaryText)
 
             Text("Nothing captured yet")
@@ -153,7 +159,7 @@ public struct ActivityView: View {
     private var comingSoon: some View {
         VStack(spacing: Theme.spacing2) {
             Image(systemName: "sparkles")
-                .font(.system(size: 48))
+                .font(.system(size: Theme.iconSizeLarge))
                 .foregroundColor(Theme.accent)
 
             Text("Coming soon")
