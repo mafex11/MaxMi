@@ -9,15 +9,15 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: Theme.spacing0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.spacing3) {
                     generalSection
                     Divider()
-                        .background(Theme.secondaryText.opacity(0.2))
+                        .background(Theme.divider)
                     activitySection
                     Divider()
-                        .background(Theme.secondaryText.opacity(0.2))
+                        .background(Theme.divider)
                     aboutSection
                 }
                 .padding(Theme.spacing3)
@@ -49,7 +49,7 @@ public struct SettingsView: View {
             if viewModel.launchAtLoginStatus == .requiresApproval {
                 HStack(spacing: Theme.spacing1) {
                     Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(.orange)
+                        .foregroundColor(Theme.warning)
                     Text("Requires approval in System Settings")
                         .font(.caption)
                         .foregroundColor(Theme.secondaryText)
@@ -82,7 +82,7 @@ public struct SettingsView: View {
             if !viewModel.consentGranted {
                 HStack(spacing: Theme.spacing1) {
                     Image(systemName: "hand.raised")
-                        .foregroundColor(.orange)
+                        .foregroundColor(Theme.warning)
                     Text("Consent required")
                         .font(.caption)
                         .foregroundColor(Theme.secondaryText)
@@ -118,7 +118,7 @@ public struct SettingsView: View {
             HStack(spacing: Theme.spacing1) {
                 Image(systemName: "info.circle")
                     .foregroundColor(Theme.accent)
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Theme.spacingHalf) {
                     Text("MaxMi \(viewModel.version)")
                         .foregroundColor(Theme.text)
                     Text("Updates are manual")
@@ -139,7 +139,7 @@ public struct SettingsView: View {
             }
 
             if !viewModel.statusLines.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Theme.spacingHalf) {
                     Text("Status")
                         .font(.subheadline)
                         .foregroundColor(Theme.secondaryText)
