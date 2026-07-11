@@ -1,3 +1,39 @@
+Reading prompt from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/mafex/code/personal/MaxMi
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f4e1a-ef66-7851-87f6-cfd079f15197
+--------
+user
+Applied all 4 M6c must-fixes:
+1. Launch-at-login authoritative + async: LaunchAtLoginState enum (enabled/notRegistered/requiresApproval/unavailable) maps the FULL SMAppService.mainApp.status; setEnabled is async throws; SettingsViewModel.setLaunchAtLogin reloads status after + surfaces requiresApproval (route to Login Items), never leaves an optimistic toggle.
+2. Exclusion list + atomicity: added Store.observedActivityApps()->[(bundle,label)] merged with excluded ids; onToggleExcluded does persist-exclusion + deleteActivityForApp in ONE transaction (no crash-between-state).
+3. Consent in snapshot: SettingsSnapshot.consentGranted; the activityEnabled toggle is disabled unless consent==granted (routes to the Activity Privacy window otherwise) — can't show "on" while consent unset/declined.
+4. One honest update behavior: UpdateStatus = .unknownManual always; UI shows "MaxMi vX · updates are manual", never claims up-to-date; no endpoint/repo-open pretense.
+Plus Task 3 now has a concrete acceptance checklist (zero non-Theme color/spacing literals, hover/pressed states, no decrypt/format in body, spring animations, dog-glyph empty states, named RightLane props).
+
+I also noted your ship-readiness point: M6c makes MaxMi feature-complete for a dev/local build; true public distribution (Developer ID signing + notarization + stapled DMG + install/upgrade tests) is separate and out of M6c scope.
+
+GO for M6c subagent implementation, or remaining must-fixes?
+
+2026-07-11T00:21:44.985386Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"No authorization provided\", resource_metadata=\"https://mcp.vercel.com/.well-known/oauth-protected-resource\"" })
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Failed
+hook: SessionStart Failed
+hook: SessionStart Failed
+codex
+I’ll verify the revised M6c plan’s settings interfaces, atomic Store operation, update behavior, and polish acceptance criteria before issuing the implementation go/no-go.
+exec
+/bin/zsh -lc "sed -n '1,380p' docs/superpowers/plans/2026-07-11-maxmi-m6c-settings-polish.md" in /Users/mafex/code/personal/MaxMi
+ succeeded in 0ms:
 # MaxMi M6c Implementation Plan — Settings Window + Final Ship Polish
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Checkbox steps.
@@ -14,13 +50,11 @@
 - Always-dark branded Theme (reuse MaxMiUI Theme tokens); consistent with Activity/ActionItems windows.
 - UI logic (view models / pure helpers) unit-tested; SwiftUI views + AppKit windows compile-checked + live per M4/M6a precedent.
 - Honest scoping: "Check for Updates" — MaxMi is unsigned-for-distribution/no Sparkle; implement a truthful minimal version display + a manual check that reports current version (and, if a version endpoint is configured, compares) — do NOT fake an auto-updater. Document the limitation.
-- ▲REV2 (Codex): `LaunchAtLoginState` + `UpdateStatus` enums live in **MaxMiCore** so `SettingsViewModel` (MaxMiUI, deps Core only) references them without importing the app target — same DTO-boundary discipline as M6a/M6b. The `SMAppService` impl stays in the app target.
 - Commit conventional; NO Co-Authored-By/AI trailers. Branch `m6-settings` off main.
 
 ## File Structure
 ```
-Sources/MaxMiCore/LaunchAtLoginState.swift     NEW: LaunchAtLoginState + UpdateStatus enums (so MaxMiUI can reference w/o app-target dep)
-Sources/MaxMi/LaunchAtLogin.swift              NEW: SMAppService wrapper (app target; uses the Core enum)
+Sources/MaxMi/LaunchAtLogin.swift              NEW: SMAppService wrapper (register/unregister/isEnabled)
 Sources/MaxMi/UpdateChecker.swift              NEW: version string + optional latest-version check (honest)
 Sources/MaxMiUI/SettingsView.swift             NEW: SwiftUI settings (always-dark, sections)
 Sources/MaxMiUI/SettingsViewModel.swift        NEW: @MainActor @Observable over plain closures/DTOs
@@ -115,3 +149,135 @@ public struct SettingsSnapshot: Sendable { public let launchAtLoginStatus: Launc
 **Spec coverage:** M6c per spec §4 (settings window: launch-at-login, per-app disable, check-for-updates, status) → T1+T2; final animation/ship polish → T3; live → T4. Reuses M6a activityExcludedApps/activityEnabled store APIs + MaxMiUI Theme + the retained-window pattern from ActivityWindow. Honest about no-Sparkle (UpdateChecker returns .unknown, documented).
 **Placeholders:** none — the one honest limitation (no update server) is explicit, not a placeholder. LaunchAtLogin/SettingsWindow are live-glue (compile-checked), view models tested.
 **Type consistency:** SettingsSnapshot/SettingsExcludedApp/UpdateStatus used consistently T1↔T2; SettingsViewModel closures wired in T2; reuses Store.activityExcludedApps/activityEnabled/setActivityExcluded from M6a.
+
+codex
+## No-go
+
+The revised intent is sound, but the plan still has a target-boundary compile blocker and an unplanned Store change required for atomic exclusions.
+
+## Must-fix
+
+- **`LaunchAtLoginState` cannot live only in the `MaxMi` executable target.**  
+  `SettingsViewModel` is in `MaxMiUI`, which depends only on `MaxMiCore`. It cannot reference a type defined in `Sources/MaxMi/LaunchAtLogin.swift` without introducing the wrong target dependency.
+
+  Move `LaunchAtLoginState` to `MaxMiCore`, or define a Core/UI-neutral DTO. Keep the actual `SMAppService` wrapper in the app target.
+
+- **Atomic observed-app exclusion needs an explicit Store task and API.**  
+  The plan says exclusion is one transaction, but Task 1 does not modify `MaxMiStore`, and Task 2 has no Store API capable of opening its private `DatabaseQueue`.
+
+  Add to Task 1:
+
+  ```swift
+  observedActivityApps() throws -> [ObservedActivityApp]
+  setActivityExcludedAndDelete(bundleID: String, excluded: Bool, nowMs: EpochMs) throws
+  ```
+
+  with Store tests proving settings mutation plus session/visit/evidence deletion are atomic.
+
+  Also retain an excluded app in the Settings list after deletion. Once rows are deleted, `observedActivityApps()` no longer has its human label. Persist the label at exclusion time, or show the bundle ID as a fallback, so users can unexclude it.
+
+- **Make the activity toggle error-aware too.**  
+  `onSetActivityEnabled: (Bool) -> Void` cannot represent Store failure and risks optimistic UI drift. Make it `async throws`, refresh the snapshot after success, and preserve/revert state on failure—just as planned for Launch at Login.
+
+- **Add an explicit approval action to the view-model/window boundary.**  
+  The plan promises `requiresApproval` routes to Login Items, but exposes no `onOpenLoginItems` closure/action. Add it and call `SMAppService.openSystemSettingsLoginItems()` when appropriate. Apple documents registration as user-approval-subject and recommends checking actual status / letting users change it in Login Items. [SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice?language=objc), [register()](https://developer.apple.com/documentation/servicemanagement/smappservice/register%28%29)
+
+## Should-fix
+
+- Remove stale update-check language throughout the plan. The architecture/global constraints still mention endpoints and “up to date,” while `UpdateStatus` is now only `.unknownManual`. Delete the semver test suggestion too unless a real comparison function remains.
+
+- Use an explicit Toggle binding/action for Launch at Login, not a `didSet` property. Set UI state from the reloaded authoritative service status after the async operation; never infer it from the requested value.
+
+- The literal-free Theme rule needs an exception list for system/AppKit behavior and asset loading; otherwise “zero custom colors” is impractical for `RightLanePanel`. Name the exact RightLane properties to change before implementation.
+
+- A repo-built `.app` is adequate for development smoke testing, but do not treat it as release validation. There is no documented `/Applications` requirement for `SMAppService.mainApp`; it does require a genuine app bundle. Rebuilding, moving, or re-signing the dev bundle can make Login Item behavior differ from a distributed build.
+
+## Per-task notes
+
+### Task 1
+
+Good use of `SMAppService.mainApp` on macOS 13+. Make `status()` map all relevant states, avoid calling `register()` when already enabled, and return underlying errors to the UI.
+
+`UpdateChecker` returning only manual/unknown is the correct scoped choice. The visible text should be exactly the promised manual-update message.
+
+### Task 2
+
+The closure/DTO shape remains consistent with M6a/M6b once `LaunchAtLoginState` moves to Core and Store exclusion is added. Include consent state, an approval action, Store operation errors, and an observed/excluded app model that survives deletion.
+
+### Task 3
+
+The acceptance list is materially better. Add a short before/after checklist for `RightLanePanel` and a manual Instruments check for tab switching/list updates.
+
+### Task 4
+
+Verify Login Item success, approval-required, registration failure, and external System Settings changes. Verify exclusion’s atomic deletion and subsequent unexclude behavior.
+
+## Honest ship-readiness assessment
+
+After these fixes, M6c can be feature-complete for local/developer use. It still should not be described as public-distribution-ready until a separate release task provides Developer ID signing, hardened runtime, notarization/stapling, a signed DMG/ZIP, and clean-install/upgrade/Login-Item/TCC tests.
+tokens used
+5,34,705
+## No-go
+
+The revised intent is sound, but the plan still has a target-boundary compile blocker and an unplanned Store change required for atomic exclusions.
+
+## Must-fix
+
+- **`LaunchAtLoginState` cannot live only in the `MaxMi` executable target.**  
+  `SettingsViewModel` is in `MaxMiUI`, which depends only on `MaxMiCore`. It cannot reference a type defined in `Sources/MaxMi/LaunchAtLogin.swift` without introducing the wrong target dependency.
+
+  Move `LaunchAtLoginState` to `MaxMiCore`, or define a Core/UI-neutral DTO. Keep the actual `SMAppService` wrapper in the app target.
+
+- **Atomic observed-app exclusion needs an explicit Store task and API.**  
+  The plan says exclusion is one transaction, but Task 1 does not modify `MaxMiStore`, and Task 2 has no Store API capable of opening its private `DatabaseQueue`.
+
+  Add to Task 1:
+
+  ```swift
+  observedActivityApps() throws -> [ObservedActivityApp]
+  setActivityExcludedAndDelete(bundleID: String, excluded: Bool, nowMs: EpochMs) throws
+  ```
+
+  with Store tests proving settings mutation plus session/visit/evidence deletion are atomic.
+
+  Also retain an excluded app in the Settings list after deletion. Once rows are deleted, `observedActivityApps()` no longer has its human label. Persist the label at exclusion time, or show the bundle ID as a fallback, so users can unexclude it.
+
+- **Make the activity toggle error-aware too.**  
+  `onSetActivityEnabled: (Bool) -> Void` cannot represent Store failure and risks optimistic UI drift. Make it `async throws`, refresh the snapshot after success, and preserve/revert state on failure—just as planned for Launch at Login.
+
+- **Add an explicit approval action to the view-model/window boundary.**  
+  The plan promises `requiresApproval` routes to Login Items, but exposes no `onOpenLoginItems` closure/action. Add it and call `SMAppService.openSystemSettingsLoginItems()` when appropriate. Apple documents registration as user-approval-subject and recommends checking actual status / letting users change it in Login Items. [SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice?language=objc), [register()](https://developer.apple.com/documentation/servicemanagement/smappservice/register%28%29)
+
+## Should-fix
+
+- Remove stale update-check language throughout the plan. The architecture/global constraints still mention endpoints and “up to date,” while `UpdateStatus` is now only `.unknownManual`. Delete the semver test suggestion too unless a real comparison function remains.
+
+- Use an explicit Toggle binding/action for Launch at Login, not a `didSet` property. Set UI state from the reloaded authoritative service status after the async operation; never infer it from the requested value.
+
+- The literal-free Theme rule needs an exception list for system/AppKit behavior and asset loading; otherwise “zero custom colors” is impractical for `RightLanePanel`. Name the exact RightLane properties to change before implementation.
+
+- A repo-built `.app` is adequate for development smoke testing, but do not treat it as release validation. There is no documented `/Applications` requirement for `SMAppService.mainApp`; it does require a genuine app bundle. Rebuilding, moving, or re-signing the dev bundle can make Login Item behavior differ from a distributed build.
+
+## Per-task notes
+
+### Task 1
+
+Good use of `SMAppService.mainApp` on macOS 13+. Make `status()` map all relevant states, avoid calling `register()` when already enabled, and return underlying errors to the UI.
+
+`UpdateChecker` returning only manual/unknown is the correct scoped choice. The visible text should be exactly the promised manual-update message.
+
+### Task 2
+
+The closure/DTO shape remains consistent with M6a/M6b once `LaunchAtLoginState` moves to Core and Store exclusion is added. Include consent state, an approval action, Store operation errors, and an observed/excluded app model that survives deletion.
+
+### Task 3
+
+The acceptance list is materially better. Add a short before/after checklist for `RightLanePanel` and a manual Instruments check for tab switching/list updates.
+
+### Task 4
+
+Verify Login Item success, approval-required, registration failure, and external System Settings changes. Verify exclusion’s atomic deletion and subsequent unexclude behavior.
+
+## Honest ship-readiness assessment
+
+After these fixes, M6c can be feature-complete for local/developer use. It still should not be described as public-distribution-ready until a separate release task provides Developer ID signing, hardened runtime, notarization/stapling, a signed DMG/ZIP, and clean-install/upgrade/Login-Item/TCC tests.
