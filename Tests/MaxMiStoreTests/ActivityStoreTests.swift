@@ -52,4 +52,26 @@ final class ActivityStoreTests: XCTestCase {
             XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM activity_app_visits WHERE ended_at IS NULL"), 0)
         }
     }
+
+    func testObservedActivityApps() throws {
+        // Record sessions for multiple apps
+        let s1 = try store.recordActivityCapture(appBundle: "com.apple.Safari", appLabel: "Safari", versionID: nil, content: "browsing", nowMs: t0)
+        try store.closeSession(s1, nowMs: t0+1000)
+        let s2 = try store.recordActivityCapture(appBundle: "com.microsoft.VSCode", appLabel: "Visual Studio Code", versionID: nil, content: "coding", nowMs: t0+2000)
+        try store.closeSession(s2, nowMs: t0+3000)
+        // Same app again with updated label (most recent should win)
+        let s3 = try store.recordActivityCapture(appBundle: "com.apple.Safari", appLabel: "Safari (Updated)", versionID: nil, content: "more browsing", nowMs: t0+4000)
+        try store.closeSession(s3, nowMs: t0+5000)
+
+        let apps = try store.observedActivityApps()
+        XCTAssertEqual(apps.count, 2, "two distinct apps")
+
+        // Check Safari has updated label
+        let safari = apps.first { $0.bundle == "com.apple.Safari" }
+        XCTAssertEqual(safari?.label, "Safari (Updated)", "most recent label")
+
+        // Check VSCode
+        let vscode = apps.first { $0.bundle == "com.microsoft.VSCode" }
+        XCTAssertEqual(vscode?.label, "Visual Studio Code")
+    }
 }

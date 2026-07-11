@@ -284,6 +284,22 @@ extension Store {
         }
     }
 
+    public func observedActivityApps() throws -> [(bundle: String, label: String)] {
+        try db.dbQueue.read { d in
+            let rows = try Row.fetchAll(d, sql: """
+                SELECT app_bundle, app_label
+                FROM (
+                    SELECT app_bundle, app_label, started_at,
+                           ROW_NUMBER() OVER (PARTITION BY app_bundle ORDER BY started_at DESC) AS rn
+                    FROM activity_sessions
+                )
+                WHERE rn = 1
+                ORDER BY app_label
+                """)
+            return rows.map { (bundle: $0["app_bundle"], label: $0["app_label"]) }
+        }
+    }
+
     // MARK: - Helpers
 
     public static func dayBucket(forMs ms: EpochMs, timeZone: TimeZone) -> Int64 {

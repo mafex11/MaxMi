@@ -26,7 +26,8 @@ final class MenuBarController {
         lastSourceKey: @escaping () -> String?,
         onPauseCurrentThread: @escaping () -> Void,
         onOpenActivity: @escaping () -> Void,
-        onOpenPrivacy: @escaping () -> Void
+        onOpenPrivacy: @escaping () -> Void,
+        onOpenSettings: @escaping () -> Void
     ) {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -48,6 +49,10 @@ final class MenuBarController {
         let privacyItem = NSMenuItem(title: "Activity Privacy…", action: nil, keyEquivalent: "")
         privacyItem.setAction { onOpenPrivacy() }
         menu.addItem(privacyItem)
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ",")
+        settingsItem.setAction { onOpenSettings() }
+        menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
