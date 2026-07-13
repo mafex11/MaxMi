@@ -1,16 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- MaxMi tray template icon: solid black dog silhouette on transparent (macOS template image;
-     the system tints it for light/dark menu bars). No gradient, no eye/nose cutouts — pure shape. -->
+<!-- MaxMi tray template icon: solid black standing-dog silhouette on transparent
+     (macOS template image; the system tints it for light/dark menu bars).
+     No gradient, no eye/nose cutouts — pure shape, matching dog-appicon.svg. -->
 <svg width="44" height="44" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <g fill="#000000">
-    <ellipse cx="430" cy="600" rx="180" ry="185"/>
-    <ellipse cx="560" cy="560" rx="150" ry="200"/>
-    <rect x="300" y="700" width="360" height="90" rx="45"/>
-    <rect x="560" y="360" width="130" height="230" rx="60" transform="rotate(12 625 470)"/>
-    <circle cx="690" cy="360" r="120"/>
-    <rect x="760" y="360" width="150" height="90" rx="45"/>
-    <rect x="600" y="560" width="80" height="230" rx="40"/>
-    <path d="M648 300 l -30 -120 c -4 -14 8 -26 22 -22 l 96 44 c 12 6 12 22 0 30 l -66 66 z"/>
-    <path d="M262 610 c -46 -6 -84 22 -90 66 c -4 30 8 56 32 70 c 8 -12 10 -26 4 -42 c -8 -24 0 -46 22 -56 c 14 -6 28 -20 30 -38 z"/>
+    <rect x="300" y="440" width="380" height="170" rx="85"/>
+    <ellipse cx="640" cy="470" rx="110" ry="120"/>
+    <ellipse cx="330" cy="520" rx="110" ry="120"/>
+    <rect x="620" y="320" width="120" height="180" rx="55" transform="rotate(18 680 410)"/>
+    <circle cx="740" cy="320" r="92"/>
+    <path d="M812 300 q 96 8 116 60 q 8 30 -28 44 l -96 20 q -40 4 -44 -34 z"/>
+    <path d="M700 268 q -44 -34 -30 -92 q 10 -34 46 -24 q 44 14 60 66 q 12 44 -18 74 q -34 22 -58 -30 z"/>
+    <rect x="330" y="590" width="66" height="180" rx="30"/>
+    <rect x="420" y="600" width="60" height="170" rx="28"/>
+    <rect x="560" y="600" width="60" height="170" rx="28"/>
+    <rect x="640" y="590" width="66" height="180" rx="30"/>
+    <path d="M300 470 q -70 -20 -104 -78 q -16 -30 12 -48 q 26 -14 46 16 q 26 42 62 58 q 26 12 -16 52 z"/>
   </g>
 </svg>
