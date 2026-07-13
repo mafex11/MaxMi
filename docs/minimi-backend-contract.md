@@ -1,8 +1,27 @@
-# Minimi Backend API Contract (captured via Node inspector, 2026-07-07)
+# Minimi Backend API Contract (HTTP Toolkit + Node inspector, 2026-07-07)
 
-Captured by attaching to Minimi's Electron main process (`--inspect`) and hooking
-`globalThis.fetch`. All calls go to `https://backend.projectminimi.com`. Bodies below
-are STRUCTURE ONLY — private page content redacted.
+## Capture methodology
+
+This contract came from a two-part reverse-engineering effort:
+
+1. **HTTP Toolkit interception.** Minimi was launched through HTTP Toolkit with both
+   interception layers enabled: HTTP Toolkit's Node `NODE_OPTIONS` require hook for
+   Node-side requests, and Electron's `--proxy-server` flag for Chromium's network
+   service. The HTTP Toolkit CA was supplied through `NODE_EXTRA_CA_CERTS`, and the
+   standard/global-agent proxy variables were pointed at its local proxy. This was
+   necessary because Minimi uses more than one network stack. The reproducible launcher
+   is `tools/launch-minimi-intercepted.sh`; `tools/scrub-har.mjs` safely redacts and
+   truncates any HTTP Toolkit HAR export before it is shared.
+2. **Node-inspector fetch hook.** Minimi was also launched with `--inspect`, then
+   `tools/inspect-minimi-net.mjs` attached to its Electron main process and wrapped
+   `globalThis.fetch`. This captured the request/response bodies for the Minimi backend
+   calls that mattered to the memory contract when proxy-only inspection was incomplete.
+
+The preserved private capture is `captures/minimi-net-2026-07-07.log` (gitignored because
+it contains real browsing content). It contains 70 JSONL records: 1 capture-note record and
+69 successful requests—6 memory extracts, 26 memory embeddings, 1 display rewrite, and 36
+PostHog proxy events. No raw private content is reproduced here. All calls below go to
+`https://backend.projectminimi.com`; bodies are STRUCTURE ONLY.
 
 ## POST /api/memory/extract
 Turns a captured page/thread into atomic memory facts.
