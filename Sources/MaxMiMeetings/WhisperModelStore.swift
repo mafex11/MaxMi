@@ -17,6 +17,11 @@ public struct WhisperModelStore: Sendable {
     public func ensureModel(download: (URL) async throws -> URL) async throws {
         if isReady { return }
 
+        // Create the models directory up front. This must happen before the disk-space
+        // check below: attributesOfFileSystem(forPath:) throws Cocoa 260 if the path does
+        // not exist, which on a fresh install aborted model prep before any download.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
         // Check available disk space (model is ~140MB)
         let attrs = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
         let freeSpace = (attrs[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
@@ -35,10 +40,7 @@ public struct WhisperModelStore: Sendable {
             throw ModelStoreError.checksumMismatch(expected: Self.sha256, actual: downloadedSHA)
         }
 
-        // Create directory if needed
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        // Atomic install via moveItem
+        // Atomic install via moveItem (directory was created at the top of this method)
         let destination = modelURL
         if FileManager.default.fileExists(atPath: destination.path) {
             try FileManager.default.removeItem(at: destination)

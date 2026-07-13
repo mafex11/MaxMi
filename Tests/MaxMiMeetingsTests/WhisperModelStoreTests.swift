@@ -112,6 +112,37 @@ final class WhisperModelStoreTests: XCTestCase {
         XCTAssertTrue(downloadCalled, "Download should have been called")
     }
 
+    func testEnsureModelDownloadsWhenModelsDirDoesNotExist() async throws {
+        // Regression: on a fresh install, the models directory does not exist yet.
+        // ensureModel must not throw before reaching the download closure (previously
+        // the disk-space check ran attributesOfFileSystem on the missing dir → Cocoa 260).
+        let missingDir = tempDir.appendingPathComponent("models", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missingDir.path))
+
+        let store = WhisperModelStore(dir: missingDir)
+
+        var downloadCalled = false
+        let download: (URL) async throws -> URL = { _ in
+            downloadCalled = true
+            // Return a file whose checksum won't match; we only care that we got this far.
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try "stub".write(to: tmp, atomically: true, encoding: .utf8)
+            return tmp
+        }
+
+        do {
+            try await store.ensureModel(download: download)
+            XCTFail("Expected checksum mismatch")
+        } catch let error as ModelStoreError {
+            guard case .checksumMismatch = error else {
+                XCTFail("Expected checksumMismatch, got \(error)")
+                return
+            }
+        }
+
+        XCTAssertTrue(downloadCalled, "Download must be reached even when models dir is missing")
+    }
+
     func testEnsureModelSkipsWhenAlreadyReady() async throws {
         // This is hard to test without the real model file
         // But we can test the logic: if isReady returns true, download is NOT called
