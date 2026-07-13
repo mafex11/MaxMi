@@ -49,8 +49,13 @@ public final class MeetingDetector: MeetingDetecting {
 
     /// Pure testable evaluation logic
     public func evaluate(active: [AudioInputProcess]) {
-        // Filter to only meeting apps
-        let meetingProcs = active.filter { MeetingAppList.classify(bundleID: $0.bundleID) != nil }
+        // Audio-process activity is sufficient only for native meeting apps. Browsers require
+        // URL verification (Google Meet/Zoom/Teams/etc.) and must not fire merely because the
+        // browser is using a microphone for dictation or another recording site.
+        let meetingProcs = active.filter {
+            guard case .native? = MeetingAppList.classify(bundleID: $0.bundleID) else { return false }
+            return true
+        }
 
         // Group by bundle ID
         var currentBundleIDs = Set<String>()

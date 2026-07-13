@@ -269,6 +269,47 @@ extension Store {
         }
     }
 
+    /// Applies the user-facing synthesis toggle as one transaction.
+    ///
+    /// Enabling is an explicit consent action, so it always moves both `.unset` and
+    /// `.declined` to `.granted`. Disabling preserves a prior grant (the user can turn the
+    /// feature back on later without a fake first-run flow), but records `.declined` when the
+    /// user turns the first-run toggle off before ever granting consent. Open activity is
+    /// closed in the same transaction so no rows remain active after the feature is disabled.
+    public func setActivitySynthesisEnabled(_ on: Bool, nowMs: EpochMs) throws {
+        try db.dbQueue.write { d in
+            let currentRaw = try String.fetchOne(
+                d,
+                sql: "SELECT value FROM settings WHERE key='activity_consent'"
+            )
+            let currentConsent = currentRaw.flatMap(ActivityConsent.init(rawValue:)) ?? .unset
+
+            let nextConsent: ActivityConsent
+            if on {
+                nextConsent = .granted
+            } else {
+                nextConsent = currentConsent == .unset ? .declined : currentConsent
+                try d.execute(
+                    sql: "UPDATE activity_app_visits SET ended_at=? WHERE ended_at IS NULL",
+                    arguments: [nowMs]
+                )
+                try d.execute(
+                    sql: "UPDATE activity_sessions SET ended_at=?, updated_at=? WHERE ended_at IS NULL",
+                    arguments: [nowMs, nowMs]
+                )
+            }
+
+            try d.execute(
+                sql: "INSERT OR REPLACE INTO settings VALUES (?,?,?)",
+                arguments: ["activity_consent", nextConsent.rawValue, nowMs]
+            )
+            try d.execute(
+                sql: "INSERT OR REPLACE INTO settings VALUES (?,?,?)",
+                arguments: ["activity_enabled", on ? "true" : "false", nowMs]
+            )
+        }
+    }
+
     public func activityExcludedApps() throws -> Set<String> {
         try readSet("activity_excluded_apps")
     }

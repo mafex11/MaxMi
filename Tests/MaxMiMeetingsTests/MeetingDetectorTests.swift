@@ -21,6 +21,12 @@ final class MeetingDetectorTests: XCTestCase {
         d.evaluate(active: [AudioInputProcess(pid: 1, bundleID: "com.apple.VoiceMemos")])
         XCTAssertFalse(fired, "voice memo mic use is not a meeting")
     }
+    func testBrowserMicrophoneUseRequiresURLVerification() {
+        let d = MeetingDetector(); var fired = false
+        d.onCandidate = { _, _ in fired = true }
+        d.evaluate(active: [AudioInputProcess(pid: 2, bundleID: "com.google.Chrome")])
+        XCTAssertFalse(fired, "browser microphone use alone is not proof of a meeting")
+    }
     func testEndFiresOnlyWhenAllMeetingProcsStop() {
         let d = MeetingDetector(); var ended: String?
         d.onEnded = { ended = $0 }

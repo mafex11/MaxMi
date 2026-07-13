@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 public enum Denylist {
     // Seeded from the host list pulled out of Minimi's binary (spec §5).
@@ -7,11 +8,14 @@ public enum Denylist {
         "lastpass.com", "dashlane.com", "authy.com",
         "netbanking.hdfcbank.com", "onlinesbi.sbi", "icicibank.com", "axisbank.com",
         "chase.com", "bankofamerica.com", "wellsfargo.com",
-        "paypal.com", "stripe.com/login",
+        "paypal.com",
         "meet.google.com", "zoom.us", "teams.microsoft.com", "teams.live.com",
     ]
     static let blockedPathFragments: [String] = [
         "/reset-password", "/forgot-password", "/change-password", "/2fa", "/mfa", "/otp",
+    ]
+    static let blockedHostPathRules: [String: [String]] = [
+        "stripe.com": ["/login"],
     ]
 
     // Sensitive NATIVE apps never captured by the generic fallback (capture-by-default gate).
@@ -38,6 +42,7 @@ public enum Denylist {
     /// True if a native app should NEVER be captured (even by the generic fallback).
     /// The capture-by-default gate admits everything EXCEPT these.
     public static func isSensitiveApp(_ bundleID: String) -> Bool {
+        if ApplicationRegistry.isExcludedByDefault(bundleID) { return true }
         if sensitiveAppBundleIDs.contains(bundleID) { return true }
         let lower = bundleID.lowercased()
         return sensitiveAppSubstrings.contains { lower.contains($0) }
@@ -68,6 +73,10 @@ public enum Denylist {
         if isAdultHost(host) { return true }
         let path = url.path.lowercased()
         if blockedPathFragments.contains(where: { path.contains($0) }) { return true }
+        for (ruleHost, fragments) in blockedHostPathRules
+        where host == ruleHost || host.hasSuffix("." + ruleHost) {
+            if fragments.contains(where: { path.contains($0) }) { return true }
+        }
         // Adult search queries (e.g. google.com/search?q=...porn...) — host won't match, query will.
         if let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "q" })?.value?.lowercased() {

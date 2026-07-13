@@ -9,6 +9,8 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isBlocked("https://foo.okta.com/app"))
         XCTAssertTrue(Denylist.isBlocked("https://example.com/reset-password?token=x"))
         XCTAssertTrue(Denylist.isBlocked("https://netbanking.hdfcbank.com/netbanking"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("https://dashboard.stripe.com/login"))
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://stripe.com/docs"))
     }
     func testAllowedHosts() {
         XCTAssertFalse(Denylist.isBlocked("https://google.com/search?q=x"))
@@ -45,6 +47,9 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isSensitiveApp("com.apple.keychainaccess"))
         XCTAssertTrue(Denylist.isSensitiveApp("com.agilebits.onepassword7"))
         XCTAssertTrue(Denylist.isSensitiveApp("com.bitwarden.desktop"))
+        XCTAssertTrue(Denylist.isSensitiveApp("dev.mafex.maxmi"))
+        XCTAssertTrue(Denylist.isSensitiveApp("com.apple.loginwindow"))
+        XCTAssertTrue(Denylist.isSensitiveApp("com.apple.UserNotificationCenter"))
         // password-manager name substrings still match
         XCTAssertTrue(Denylist.isSensitiveApp("io.LastPass.helper"))
         XCTAssertTrue(Denylist.isSensitiveApp("com.example.1password-helper"))

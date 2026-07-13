@@ -53,6 +53,43 @@ final class ActivityStoreTests: XCTestCase {
         }
     }
 
+    func testActivitySynthesisCanBeGrantedAfterPriorDecline() throws {
+        try store.setActivityConsent(.declined)
+        try store.setActivityEnabled(false)
+
+        try store.setActivitySynthesisEnabled(true, nowMs: t0)
+
+        XCTAssertEqual(try store.activityConsent(), .granted)
+        XCTAssertTrue(try store.activityEnabled())
+    }
+
+    func testDisablingSynthesisClosesActivityButPreservesPriorGrant() throws {
+        try store.setActivitySynthesisEnabled(true, nowMs: t0)
+        _ = try store.openVisit(appBundle: "com.x", appLabel: "X", nowMs: t0 + 1)
+        _ = try store.recordActivityCapture(
+            appBundle: "com.x", appLabel: "X", versionID: nil,
+            content: "working", nowMs: t0 + 2
+        )
+
+        try store.setActivitySynthesisEnabled(false, nowMs: t0 + 3)
+
+        XCTAssertEqual(try store.activityConsent(), .granted)
+        XCTAssertFalse(try store.activityEnabled())
+        try db.dbQueue.read { d in
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM activity_app_visits WHERE ended_at IS NULL"), 0)
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM activity_sessions WHERE ended_at IS NULL"), 0)
+        }
+    }
+
+    func testFirstRunDisableRecordsDecline() throws {
+        XCTAssertEqual(try store.activityConsent(), .unset)
+
+        try store.setActivitySynthesisEnabled(false, nowMs: t0)
+
+        XCTAssertEqual(try store.activityConsent(), .declined)
+        XCTAssertFalse(try store.activityEnabled())
+    }
+
     func testObservedActivityApps() throws {
         // Record sessions for multiple apps
         let s1 = try store.recordActivityCapture(appBundle: "com.apple.Safari", appLabel: "Safari", versionID: nil, content: "browsing", nowMs: t0)

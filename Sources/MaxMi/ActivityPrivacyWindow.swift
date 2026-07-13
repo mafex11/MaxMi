@@ -151,27 +151,13 @@ private struct ActivityPrivacyView: View {
 
     private func handleEnableToggle(_ newValue: Bool) {
         do {
-            if newValue {
-                // First enable: set consent to granted
-                let consent = try store.activityConsent()
-                if consent == .unset {
-                    try store.setActivityConsent(.granted)
-                }
-                try store.setActivityEnabled(true)
-            } else {
-                // Disable: close active sessions/visits and persist the disable
-                let nowMs = epochNowMs()
-                try store.closeOpenVisits(nowMs: nowMs)
-                try store.closeActiveSession(nowMs: nowMs)
-
-                let consent = try store.activityConsent()
-                if consent == .unset {
-                    try store.setActivityConsent(.declined)
-                }
-                try store.setActivityEnabled(false)
-            }
+            // One transactional state transition. In particular, turning the toggle on after
+            // a prior decline must move consent to `.granted`; the old implementation only
+            // granted from `.unset`, permanently trapping declined users outside M6.
+            try store.setActivitySynthesisEnabled(newValue, nowMs: epochNowMs())
         } catch {
             NSLog("MaxMi: failed to update activity enabled state: \(error)")
+            loadState() // restore the persisted value after a failed toggle
         }
     }
 
