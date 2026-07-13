@@ -110,4 +110,15 @@ final class MigrationTests: XCTestCase {
             XCTAssertEqual(try Int.fetchOne(d, sql: "PRAGMA foreign_keys"), 1, "FK must be ON")
         }
     }
+    func testV6AddsCaptureHealthLedger() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.read { d in
+            XCTAssertTrue(try d.tableExists("capture_health_events"))
+            let columns = try Row.fetchAll(d, sql: "PRAGMA table_info(capture_health_events)")
+                .map { $0["name"] as String }
+            XCTAssertTrue(columns.contains("outcome"))
+            XCTAssertTrue(columns.contains("reason"))
+            XCTAssertFalse(columns.contains("content"))
+        }
+    }
 }

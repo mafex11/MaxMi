@@ -11,6 +11,10 @@ final class MenuBarController {
     private var menuDelegate: MenuDelegate?
     private var clickHandler: ClickHandler?
 
+    // Left-click activity popover, anchored to the status-item button.
+    private let popover = NSPopover()
+    private var onPopoverWillShow: (() -> Void)?
+
     var captureCount: Int = 0 { didSet { countItem.title = "Captures: \(captureCount)" } }
     var paused: Bool = false { didSet { pauseItem.title = paused ? "Resume Capture" : "Pause Capture" } }
     var hasAPIKey: Bool = true { didSet { keyItem.isHidden = hasAPIKey } }
@@ -26,6 +30,7 @@ final class MenuBarController {
         lastSourceKey: @escaping () -> String?,
         onPauseCurrentThread: @escaping () -> Void,
         onOpenActivity: @escaping () -> Void,
+        onOpenCaptureHealth: @escaping () -> Void,
         onOpenPrivacy: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void
     ) {
@@ -45,6 +50,10 @@ final class MenuBarController {
         let openActivityItem = NSMenuItem(title: "Open MaxMi", action: nil, keyEquivalent: "")
         openActivityItem.setAction { onOpenActivity() }
         menu.addItem(openActivityItem)
+
+        let captureHealthItem = NSMenuItem(title: "Capture Health…", action: nil, keyEquivalent: "")
+        captureHealthItem.setAction { onOpenCaptureHealth() }
+        menu.addItem(captureHealthItem)
 
         let privacyItem = NSMenuItem(title: "Activity Privacy…", action: nil, keyEquivalent: "")
         privacyItem.setAction { onOpenPrivacy() }
@@ -116,7 +125,7 @@ final class MenuBarController {
         if let button = item.button {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             let handler = ClickHandler(
-                onLeftClick: { onOpenActivity() },
+                onLeftClick: { [weak self] in self?.togglePopover() },
                 onRightClick: { @MainActor [weak item] in
                     guard let item else { return }
                     item.popUpMenu(menu)
@@ -126,6 +135,27 @@ final class MenuBarController {
             button.target = handler
             button.action = #selector(ClickHandler.handleClick)
         }
+    }
+
+    /// Provide the SwiftUI content shown in the left-click popover. `onWillShow` runs
+    /// each time the popover is about to appear (e.g. to refresh the view models).
+    func setPopoverContent(_ viewController: NSViewController, onWillShow: @escaping () -> Void) {
+        popover.contentViewController = viewController
+        popover.behavior = .transient   // auto-close when the user clicks away
+        popover.animates = true
+        onPopoverWillShow = onWillShow
+    }
+
+    private func togglePopover() {
+        guard let button = statusItem?.button else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        guard popover.contentViewController != nil else { return }
+        onPopoverWillShow?()
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 }
 

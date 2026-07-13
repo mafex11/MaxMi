@@ -15,6 +15,19 @@ final class CaptureDispatchTests: XCTestCase {
     func testShouldCommit_denylistedKeySkipped() {
         let parsed = ParsedCapture(sourceApp: "Web", sourceKey: "chrome://settings", sourceTitle: "Settings", content: "foo")
         XCTAssertFalse(CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: "chrome://settings", pausedThreads: []))
+        XCTAssertEqual(CaptureDispatch.decision(parsed: parsed, cleanKey: "chrome://settings", pausedThreads: []), .blocked)
+    }
+
+    func testDecisionDistinguishesPauseFromBlock() {
+        let parsed = ParsedCapture(sourceApp: "Slack", sourceKey: "slack:acme/general", sourceTitle: nil, content: "x")
+        XCTAssertEqual(
+            CaptureDispatch.decision(parsed: parsed, cleanKey: parsed.sourceKey, pausedThreads: [parsed.sourceKey]),
+            .paused
+        )
+        XCTAssertEqual(
+            CaptureDispatch.decision(parsed: parsed, cleanKey: parsed.sourceKey, pausedThreads: []),
+            .commit
+        )
     }
 
     func testShouldCommit_unpausedThreadAllowed() {

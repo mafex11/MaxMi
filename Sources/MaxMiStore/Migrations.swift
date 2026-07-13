@@ -158,6 +158,26 @@ enum Migrations {
             CREATE UNIQUE INDEX idx_one_running ON agent_runs(status) WHERE status='running';
             """)
         }
+        m.registerMigration("v6") { db in
+            try db.execute(sql: """
+            CREATE TABLE capture_health_events (
+              id              TEXT PRIMARY KEY,
+              at_ms           INTEGER NOT NULL,
+              app_bundle      TEXT NOT NULL,
+              app_label       TEXT NOT NULL,
+              trigger         TEXT NOT NULL,
+              parser          TEXT NOT NULL,
+              outcome         TEXT NOT NULL CHECK(outcome IN ('captured','deduplicated','skipped','failed')),
+              reason          TEXT,
+              character_count INTEGER NOT NULL DEFAULT 0,
+              duration_ms     INTEGER NOT NULL DEFAULT 0,
+              truncated       INTEGER NOT NULL DEFAULT 0,
+              version_id      TEXT
+            );
+            CREATE INDEX idx_capture_health_recent ON capture_health_events(at_ms DESC, id DESC);
+            CREATE INDEX idx_capture_health_app ON capture_health_events(app_bundle, at_ms DESC);
+            """)
+        }
         return m
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 import ServiceManagement
 import MaxMiCore
 import MaxMiStore
@@ -90,6 +91,7 @@ final class AppWiring {
     // Activity UI
     let activityWindow: ActivityWindow
     let activityPrivacyWindow: ActivityPrivacyWindow
+    let captureHealthWindow: CaptureHealthWindow
     let settingsWindow: SettingsWindow
 
     init() throws {
@@ -204,6 +206,46 @@ final class AppWiring {
         activityWindow = ActivityWindow(viewModel: viewModel, actionItemsViewModel: actionItemsViewModel)
         activityPrivacyWindow = ActivityPrivacyWindow(store: store)
 
+        let captureHealthViewModel = CaptureHealthViewModel(
+            load: { @Sendable in
+                do {
+                    return try activityStore.recentCaptureHealth(limit: 100).map { event in
+                        CaptureHealthDTO(
+                            id: event.id,
+                            atMs: event.atMs,
+                            appLabel: event.appLabel,
+                            trigger: event.trigger,
+                            parser: event.parser,
+                            outcome: event.outcome,
+                            reason: event.reason,
+                            characterCount: event.characterCount,
+                            durationMs: event.durationMs,
+                            truncated: event.truncated
+                        )
+                    }
+                } catch {
+                    NSLog("MaxMi: failed to load capture health: \(error)")
+                    return []
+                }
+            },
+            now: { epochNowMs() }
+        )
+        captureHealthWindow = CaptureHealthWindow(viewModel: captureHealthViewModel)
+
+        // Left-click menu-bar popover: a compact activity view anchored to the icon,
+        // reusing the same view models as the full window. "Open MaxMi" still opens the window.
+        let popoverController = NSHostingController(rootView: ActivityView(
+            viewModel: viewModel,
+            actionItemsViewModel: actionItemsViewModel
+        ))
+        popoverController.view.frame = NSRect(x: 0, y: 0, width: 380, height: 520)
+        menuBar.setPopoverContent(popoverController) {
+            Task {
+                await viewModel.refresh()
+                await actionItemsViewModel.refresh()
+            }
+        }
+
         // Initialize settings window
         // Capture values needed for settings load closure before self is fully initialized
         let hasAPIKey = config.geminiAPIKey != nil
@@ -306,6 +348,7 @@ final class AppWiring {
                 try? self.store.setThreadPaused(key, paused: true, nowMs: epochNowMs())
             },
             onOpenActivity: { [weak self] in self?.activityWindow.show() },
+            onOpenCaptureHealth: { [weak self] in self?.captureHealthWindow.show() },
             onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() },
             onOpenSettings: { [weak self] in self?.settingsWindow.show() }
         )
@@ -365,11 +408,12 @@ final class AppWiring {
                 // Settings, password managers, keychain, banking). Browsers and registered
                 // parsers always pass; everything else rides the generic fallback unless it's
                 // on the sensitive-app denylist. (Was an allowlist — too narrow, missed Cursor/etc.)
-                if Browser(rawValue: bid) != nil || registry.parser(for: bid) != nil { return true }
+                if ApplicationRegistry.isExcludedByDefault(bid) { return false }
+                if ApplicationRegistry.isBrowser(bid) || registry.parser(for: bid) != nil { return true }
                 return !Denylist.isSensitiveApp(bid)
             },
-            onCapture: { [weak self] app, pid in
-                self?.captureFrontmost(app: app, pid: pid)
+            onCapture: { [weak self] app, pid, trigger in
+                self?.captureFrontmost(app: app, pid: pid, trigger: trigger)
             }
         )
         observer.onFocusChanged = { [weak self] app, isCapturable, pid in
@@ -421,6 +465,16 @@ final class AppWiring {
             currentVisitID = nil
         } catch {
             NSLog("MaxMi: activity close failed on focus change: \(error)")
+        }
+
+        if !isCapturable {
+            recordCaptureHealth(
+                app: app,
+                trigger: .appActivated,
+                parser: "PolicyGate",
+                outcome: .skipped(.excludedApp),
+                startedAtMs: nowMs
+            )
         }
 
         // Open new visit ONLY if eligible
@@ -550,13 +604,31 @@ final class AppWiring {
         }
     }
 
-    func captureFrontmost(app: AppInfo, pid: pid_t) {
-        guard !paused else { return }
+    func captureFrontmost(app: AppInfo, pid: pid_t, trigger: CaptureTrigger = .unknown) {
+        let startedAtMs = epochNowMs()
+        let parser = captureParserName(for: app.bundleID)
+        guard !paused else {
+            recordCaptureHealth(
+                app: app, trigger: trigger, parser: parser,
+                outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
+            )
+            return
+        }
         // Pause gate: fail closed on DB error (privacy-safe).
         do {
-            if try store.pausedApps().contains(app.bundleID) { return }
+            if try store.pausedApps().contains(app.bundleID) {
+                recordCaptureHealth(
+                    app: app, trigger: trigger, parser: parser,
+                    outcome: .skipped(.appPaused), startedAtMs: startedAtMs
+                )
+                return
+            }
         } catch {
             NSLog("MaxMi: pausedApps read failed, skipping capture: \(error)")
+            recordCaptureHealth(
+                app: app, trigger: trigger, parser: parser,
+                outcome: .failed(.appPauseReadFailed), startedAtMs: startedAtMs
+            )
             return
         }
 
@@ -573,26 +645,53 @@ final class AppWiring {
         // Chromium browsers and Slack need retry-shortly for post-kick empty trees (spec §10).
         let needsRetry = Browser(rawValue: app.bundleID)?.isChromium == true || app.bundleID == ParserRegistry.slackBundleID
         let attemptsLeft = needsRetry ? 3 : 1
-        attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: gen)
+        attemptCapture(
+            app: app, pid: pid, attemptsLeft: attemptsLeft,
+            captureGeneration: gen, trigger: trigger, startedAtMs: startedAtMs
+        )
     }
 
-    private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int, captureGeneration: Int) {
-        guard !paused else { return }
+    private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int,
+                                captureGeneration: Int, trigger: CaptureTrigger,
+                                startedAtMs: EpochMs) {
+        guard !paused else {
+            recordCaptureHealth(
+                app: app, trigger: trigger, parser: captureParserName(for: app.bundleID),
+                outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
+            )
+            return
+        }
         // The AX tree read is synchronous cross-process IPC — for heavy trees (Mail ~3600 nodes)
         // it must NOT run on the main thread, or it freezes the menu-bar UI. Read off-main, then
         // resume on the main actor for the DB commit. AXNode is Sendable so the snapshot crosses
         // the actor boundary safely.
         Task.detached(priority: .utility) { [weak self] in
             let snapshot = AXReader.snapshotFrontmostWindow(pid: pid)
-            await self?.finishCapture(app: app, pid: pid, attemptsLeft: attemptsLeft, snapshot: snapshot, captureGeneration: captureGeneration)
+            await self?.finishCapture(
+                app: app, pid: pid, attemptsLeft: attemptsLeft, snapshot: snapshot,
+                captureGeneration: captureGeneration, trigger: trigger, startedAtMs: startedAtMs
+            )
         }
     }
 
     private func finishCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int,
-                               snapshot: (window: AXNode, title: String?)?, captureGeneration: Int) {
-        guard !paused else { return }
+                               snapshot: (window: AXNode, title: String?)?, captureGeneration: Int,
+                               trigger: CaptureTrigger, startedAtMs: EpochMs) {
+        let parserName = captureParserName(for: app.bundleID)
+        guard !paused else {
+            recordCaptureHealth(
+                app: app, trigger: trigger, parser: parserName,
+                outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
+            )
+            return
+        }
         guard let (window, title) = snapshot else {
-            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: captureGeneration); return
+            retryOrGiveUp(
+                app: app, pid: pid, attemptsLeft: attemptsLeft,
+                captureGeneration: captureGeneration, trigger: trigger,
+                startedAtMs: startedAtMs, terminalOutcome: .skipped(.noWindow)
+            )
+            return
         }
 
         // Build AppInfo with authoritative AXReader title
@@ -604,19 +703,45 @@ final class AppWiring {
             // Browsers: preserve exact behavior using BrowserTabExtractor
             if Browser(rawValue: app.bundleID) != nil {
                 let cap = try BrowserTabExtractor.extract(window: window, windowTitle: title)
-                guard !Denylist.isBlockedWebURL(cap.url) else { return }
+                guard !Denylist.isBlockedWebURL(cap.url) else {
+                    recordCaptureHealth(
+                        app: appInfo, trigger: trigger, parser: parserName,
+                        outcome: .skipped(.blockedURL), startedAtMs: startedAtMs
+                    )
+                    return
+                }
                 // Normalize the URL into a stable thread key so volatile URL state (map coords,
                 // tracking params, doc tabs) doesn't fracture one page into many threads.
                 let key = URLKeyNormalizer.normalize(cap.url)
                 parsed = ParsedCapture(sourceApp: "Web", sourceKey: key, sourceTitle: cap.title, content: cap.content)
             } else {
                 // Non-browsers: dispatch through CaptureDispatch
-                parsed = CaptureDispatch.parse(window: window, app: appInfo, registry: registry)
+                switch CaptureDispatch.parseDetailed(window: window, app: appInfo, registry: registry) {
+                case .parsed(let capture):
+                    parsed = capture
+                case .noContent:
+                    retryOrGiveUp(
+                        app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
+                        captureGeneration: captureGeneration, trigger: trigger,
+                        startedAtMs: startedAtMs, terminalOutcome: .skipped(.parserNoContent)
+                    )
+                    return
+                case .failed:
+                    recordCaptureHealth(
+                        app: appInfo, trigger: trigger, parser: parserName,
+                        outcome: .failed(.parserFailed), startedAtMs: startedAtMs
+                    )
+                    return
+                }
             }
 
             // Shared tail: guard parsed, check denylist + pause, commit
             guard let parsed else {
-                retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: captureGeneration)
+                retryOrGiveUp(
+                    app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
+                    captureGeneration: captureGeneration, trigger: trigger,
+                    startedAtMs: startedAtMs, terminalOutcome: .skipped(.parserNoContent)
+                )
                 return
             }
 
@@ -630,9 +755,28 @@ final class AppWiring {
                 pausedThreads = try store.pausedThreads()
             } catch {
                 NSLog("MaxMi: pausedThreads read failed, skipping capture: \(error)")
+                recordCaptureHealth(
+                    app: appInfo, trigger: trigger, parser: parserName,
+                    outcome: .failed(.threadPauseReadFailed), startedAtMs: startedAtMs
+                )
                 return
             }
-            guard CaptureDispatch.shouldCommit(parsed: parsed, cleanKey: cleanKey, pausedThreads: pausedThreads) else { return }
+            switch CaptureDispatch.decision(parsed: parsed, cleanKey: cleanKey, pausedThreads: pausedThreads) {
+            case .blocked:
+                recordCaptureHealth(
+                    app: appInfo, trigger: trigger, parser: parserName,
+                    outcome: .skipped(.blockedURL), startedAtMs: startedAtMs
+                )
+                return
+            case .paused:
+                recordCaptureHealth(
+                    app: appInfo, trigger: trigger, parser: parserName,
+                    outcome: .skipped(.pausedThread), startedAtMs: startedAtMs
+                )
+                return
+            case .commit:
+                break
+            }
             let nowMs = epochNowMs()
             let result = try store.commitCapture(
                 CaptureInput(sourceApp: parsed.sourceApp, sourceKey: cleanKey,
@@ -659,26 +803,97 @@ final class AppWiring {
             }
 
             switch result {
-            case .committed:
+            case .committed(let versionID, _):
                 captureCount += 1
                 menuBar.captureCount = captureCount
                 lastSourceKey = cleanKey
+                recordCaptureHealth(
+                    app: appInfo, trigger: trigger, parser: parserName,
+                    outcome: .captured(
+                        versionID: versionID,
+                        characterCount: parsed.content.count,
+                        truncated: parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil
+                    ),
+                    startedAtMs: startedAtMs
+                )
             case .deduplicated:
                 // Update lastSourceKey even on dedup so "Pause current thread" targets the right thread.
                 lastSourceKey = cleanKey
+                recordCaptureHealth(
+                    app: appInfo, trigger: trigger, parser: parserName,
+                    outcome: .deduplicated(
+                        characterCount: parsed.content.count,
+                        truncated: parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil
+                    ),
+                    startedAtMs: startedAtMs
+                )
             }
+        } catch ExtractionError.addressFieldFocused {
+            recordCaptureHealth(
+                app: appInfo, trigger: trigger, parser: parserName,
+                outcome: .skipped(.addressFieldFocused), startedAtMs: startedAtMs
+            )
         } catch ExtractionError.emptyContent, ExtractionError.noWebArea, ExtractionError.noURL {
-            // Browser extraction errors: retry
-            retryOrGiveUp(app: app, pid: pid, attemptsLeft: attemptsLeft, captureGeneration: captureGeneration)
+            retryOrGiveUp(
+                app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
+                captureGeneration: captureGeneration, trigger: trigger,
+                startedAtMs: startedAtMs, terminalOutcome: .skipped(.emptyContent)
+            )
         } catch {
             NSLog("MaxMi capture skipped: \(error)")             // logged, skipped, never crash (spec §10)
+            recordCaptureHealth(
+                app: appInfo, trigger: trigger, parser: parserName,
+                outcome: .failed(.storeCommitFailed), startedAtMs: startedAtMs
+            )
         }
     }
 
-    private func retryOrGiveUp(app: AppInfo, pid: pid_t, attemptsLeft: Int, captureGeneration: Int) {
-        guard attemptsLeft > 1 else { return }
+    private func retryOrGiveUp(app: AppInfo, pid: pid_t, attemptsLeft: Int,
+                               captureGeneration: Int, trigger: CaptureTrigger,
+                               startedAtMs: EpochMs, terminalOutcome: CaptureOutcome) {
+        guard attemptsLeft > 1 else {
+            recordCaptureHealth(
+                app: app, trigger: trigger, parser: captureParserName(for: app.bundleID),
+                outcome: terminalOutcome, startedAtMs: startedAtMs
+            )
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.attemptCapture(app: app, pid: pid, attemptsLeft: attemptsLeft - 1, captureGeneration: captureGeneration)
+            self?.attemptCapture(
+                app: app, pid: pid, attemptsLeft: attemptsLeft - 1,
+                captureGeneration: captureGeneration, trigger: .retry,
+                startedAtMs: epochNowMs()
+            )
+        }
+    }
+
+    private func captureParserName(for bundleID: String) -> String {
+        ApplicationRegistry.isBrowser(bundleID)
+            ? "BrowserTabExtractor"
+            : registry.parserName(for: bundleID)
+    }
+
+    private func recordCaptureHealth(
+        app: AppInfo,
+        trigger: CaptureTrigger,
+        parser: String,
+        outcome: CaptureOutcome,
+        startedAtMs: EpochMs
+    ) {
+        let nowMs = epochNowMs()
+        do {
+            try store.recordCaptureHealth(
+                appBundle: app.bundleID,
+                appLabel: app.name,
+                trigger: trigger,
+                parser: parser,
+                outcome: outcome,
+                durationMs: Int(max(0, nowMs - startedAtMs)),
+                atMs: nowMs
+            )
+        } catch {
+            // Diagnostics must never break capture or recursively record their own failure.
+            NSLog("MaxMi: capture health write failed")
         }
     }
 

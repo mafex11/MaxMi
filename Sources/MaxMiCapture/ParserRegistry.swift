@@ -33,33 +33,74 @@ public struct ParserRegistry: Sendable {
 }
 
 public enum CaptureDispatch {
+    public enum ParseResult: Sendable, Equatable {
+        case parsed(ParsedCapture)
+        case noContent
+        case failed
+    }
+
+    public enum CommitDecision: Sendable, Equatable {
+        case commit
+        case blocked
+        case paused
+    }
+
     /// Decide what to store for a frontmost app's window. Returns nil = skip.
     /// registeredParser nil => use generic. A registered parser returning nil/throwing
     /// => nil (NEVER fall through to generic) — the no-silent-fallback rule.
     public static func parse(window: AXNode, app: AppInfo, registry: ParserRegistry) -> ParsedCapture? {
+        guard case .parsed(let parsed) = parseDetailed(window: window, app: app, registry: registry) else {
+            return nil
+        }
+        return parsed
+    }
+
+    /// Diagnostic form of `parse`: distinguishes empty/not-handled from a parser failure
+    /// without ever carrying captured content into logs or the health ledger.
+    public static func parseDetailed(window: AXNode, app: AppInfo, registry: ParserRegistry) -> ParseResult {
         if let parser = registry.parser(for: app.bundleID) {
             // No-silent-fallback: registered parser owns this app. nil/throw -> skip, never generic.
             do {
                 guard let result = try parser.parse(window: window, app: app) else {
                     FileHandle.standardError.write(Data("maxmi: parser for \(app.bundleID) returned nil (skipped)\n".utf8))
-                    return nil
+                    return .noContent
                 }
-                return result
+                return .parsed(result)
             } catch {
                 FileHandle.standardError.write(Data("maxmi: parser for \(app.bundleID) threw: \(error)\n".utf8))
-                return nil
+                return .failed
             }
         }
-        return (try? GenericAXParser().parse(window: window, app: app)) ?? nil
+        do {
+            guard let result = try GenericAXParser().parse(window: window, app: app) else {
+                return .noContent
+            }
+            return .parsed(result)
+        } catch {
+            return .failed
+        }
     }
 
     /// Pure decision: should this parsed capture commit or be skipped?
     /// Checks native denylist (on raw key) and per-thread pause set (on clean key + compat raw key).
     public static func shouldCommit(parsed: ParsedCapture, cleanKey: String, pausedThreads: Set<String>) -> Bool {
+        decision(parsed: parsed, cleanKey: cleanKey, pausedThreads: pausedThreads) == .commit
+    }
+
+    public static func decision(parsed: ParsedCapture, cleanKey: String, pausedThreads: Set<String>) -> CommitDecision {
         // Denylist: match on raw key (adult-URL denylist must match raw URLs)
-        if Denylist.isBlocked(parsed.sourceKey) { return false }
+        if Denylist.isBlocked(parsed.sourceKey) { return .blocked }
         // Pause: match on clean key (new pauses) OR raw key (compat: pre-existing pauses from before this branch)
-        if pausedThreads.contains(cleanKey) || pausedThreads.contains(parsed.sourceKey) { return false }
-        return true
+        if pausedThreads.contains(cleanKey) || pausedThreads.contains(parsed.sourceKey) { return .paused }
+        return .commit
+    }
+}
+
+public extension ParserRegistry {
+    func parserName(for bundleID: String) -> String {
+        if let parser = parser(for: bundleID) {
+            return String(describing: type(of: parser))
+        }
+        return "GenericAXParser"
     }
 }

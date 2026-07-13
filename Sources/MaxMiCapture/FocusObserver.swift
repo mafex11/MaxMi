@@ -1,15 +1,19 @@
 import AppKit
 import ApplicationServices
+import MaxMiCore
 
-public enum Browser: String, CaseIterable, Sendable {
-    case chrome = "com.google.Chrome"
-    case arc = "company.thebrowser.Browser"
-    case zen = "app.zen-browser.zen"
-    case safari = "com.apple.Safari"
-    case brave = "com.brave.Browser"
-    case edge = "com.microsoft.edgemac"
+/// Compatibility wrapper around MaxMiCore's canonical application registry.
+/// AppWiring and meeting detection now share the same browser inventory.
+public struct Browser: RawRepresentable, Sendable, Equatable {
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        guard ApplicationRegistry.isBrowser(rawValue) else { return nil }
+        self.rawValue = rawValue
+    }
+
     public var isChromium: Bool {
-        switch self { case .safari, .zen: return false; default: return true }
+        ApplicationRegistry.browser(for: rawValue)?.browserEngine == .chromium
     }
 }
 
@@ -20,7 +24,7 @@ public final class FocusObserver {
     let debounceMs: Int
     let recaptureIntervalSec: Double
     let isCapturable: @Sendable (String) -> Bool
-    let onCapture: @MainActor (AppInfo, pid_t) -> Void
+    let onCapture: @MainActor (AppInfo, pid_t, CaptureTrigger) -> Void
     public var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?
 
     var debounceTask: Task<Void, Never>?
@@ -33,7 +37,7 @@ public final class FocusObserver {
 
     public init(debounceMs: Int = 1_000, recaptureIntervalSec: Double = 45,
                 isCapturable: @escaping @Sendable (String) -> Bool,
-                onCapture: @escaping @MainActor (AppInfo, pid_t) -> Void) {
+                onCapture: @escaping @MainActor (AppInfo, pid_t, CaptureTrigger) -> Void) {
         self.debounceMs = debounceMs
         self.recaptureIntervalSec = recaptureIntervalSec
         self.isCapturable = isCapturable
@@ -77,7 +81,7 @@ public final class FocusObserver {
             current = nil; return
         }
         if let cur = current, cur.bundleID == bid, cur.pid == newPid {
-            scheduleCapture(); return   // same app/pid -> no observer churn
+            scheduleCapture(trigger: .appActivated); return   // same app/pid -> no observer churn
         }
         detachAXObserver()
         current = (bundleID: bid, pid: newPid)
@@ -88,19 +92,19 @@ public final class FocusObserver {
         attachAXObserver(pid: newPid)
         recaptureTimer?.invalidate()
         recaptureTimer = Timer.scheduledTimer(withTimeInterval: recaptureIntervalSec, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.scheduleCapture() }
+            Task { @MainActor in self?.scheduleCapture(trigger: .periodic) }
         }
-        scheduleCapture()
+        scheduleCapture(trigger: .appActivated)
     }
 
-    func scheduleCapture() {
+    func scheduleCapture(trigger: CaptureTrigger) {
         debounceTask?.cancel()
         let ms = debounceMs
         debounceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(ms))
             guard !Task.isCancelled, let self, let cur = self.current else { return }
             let title: String? = nil
-            self.onCapture(AppInfo(bundleID: cur.bundleID, name: self.appName, windowTitle: title), cur.pid)
+            self.onCapture(AppInfo(bundleID: cur.bundleID, name: self.appName, windowTitle: title), cur.pid, trigger)
         }
     }
 
@@ -109,7 +113,7 @@ public final class FocusObserver {
         let cb: AXObserverCallback = { _, _, _, refcon in
             guard let refcon else { return }
             let me = Unmanaged<FocusObserver>.fromOpaque(refcon).takeUnretainedValue()
-            Task { @MainActor in me.scheduleCapture() }
+            Task { @MainActor in me.scheduleCapture(trigger: .accessibilityChanged) }
         }
         guard AXObserverCreate(pid, cb, &observer) == .success, let observer else { return }
         let appEl = AXUIElementCreateApplication(pid)
