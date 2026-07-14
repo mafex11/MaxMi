@@ -682,21 +682,18 @@ Implemented and verified:
 
 MaxMi currently exposes:
 
-- `search_memory(query, limit)`;
-- `list_active_threads(limit)`;
-- `meeting_memory(action, query)`.
+- `search_memory` with semantic query, app/time filters, and cursors;
+- `list_active_threads` with app/time filters and cursors;
+- `get_latest_context` with app, kind, thread, time, and cursor filters;
+- `meeting_memory` with list/search/context actions plus explicit recording/thread identity.
 
-Meeting actions are `list`, `search`, and `get_context`. The implementation is real, but the parameter shape overloads `query` as the meeting ID for `get_context` and does not match current Minimi's explicit `thread_id` shape.
+All paged responses carry a fixed `as_of` boundary, absolute timestamps, relative timestamps, and timezone metadata. Meeting actions are `list`, `search`, and `get_context`; the old `query`-as-ID shape remains compatible, while `meeting_id` and `thread_id` are now explicit.
 
-Missing relative to Minimi 1.0.59:
+Remaining retrieval work relative to Minimi 1.0.59:
 
-- `get_latest_context`;
-- source-app filters;
-- time ranges/look-back duration;
-- pagination/cursor support;
-- timezone/as-of metadata;
-- richer latest/raw-context responses;
-- guided connection and Claude Desktop configuration.
+- live Claude recall validation against this Mac's corpus;
+- product UI for MCP connection state (Phase 6);
+- any additional structured retrieval surface proven necessary by real recall tests.
 
 ### 5.7 UI and settings
 
@@ -971,11 +968,11 @@ This should be a policy layer with user overrides, not a growing collection of h
 | Voice notes | Yes | No | Add on-device voice-note mode |
 | Activity | Visits + semantic conversations | App sessions/summaries, currently blocked | Fix consent; consider conversation model |
 | Action items | UI/schema/agent surface | Implemented, no live runs | Unlock activity and live-verify |
-| Semantic search | Yes | Yes | Keep; add filters/pagination |
-| Latest context | Dedicated MCP tool | Missing | Add raw freshness-ranked tool |
-| Meeting MCP | Rich list/search/context | Basic list/search/context | Align schema/time filters/pagination |
+| Semantic search | Yes | Filtered/cursor-paged | Live recall validation |
+| Latest context | Dedicated MCP tool | Full context with app/kind/thread/time filters | Live recall validation |
+| Meeting MCP | Rich list/search/context | Explicit IDs, time filters, pagination | Live meeting recall validation |
 | Memory UI | Recent/search | Missing | Add tray recent/search/latest |
-| Claude setup | Guided connector/local MCP | Manual | Add safe guided setup |
+| Claude setup | Guided connector/local MCP | Validated dry-run/apply helper | Add connection status UI in Phase 6 |
 | Capture privacy | Blocked apps/domains, pause | Hard-coded domains + partial pauses | Unified editable capture privacy |
 | Permissions | Guided UI | Basic prompts/status | Full onboarding/status/remediation |
 | Updates | Auto-update | Manual | Optional signed update path |
@@ -1366,6 +1363,23 @@ Acceptance criteria:
 - "What happened in yesterday's meeting?" uses meeting retrieval;
 - filters and pagination are deterministic;
 - MCP remains read-only and never blocks capture.
+
+#### Phase 5 implementation status — 2026-07-14
+
+Implemented in reviewable batches:
+
+- exact `source_apps` filters across semantic facts, active threads, latest context, and recordings;
+- `lookback_minutes` or explicit inclusive RFC3339 `start_time`/`end_time` filters;
+- opaque, scope-checked cursors that retain a fixed `as_of` read boundary and reject reuse with another query/filter/tool;
+- deterministic tie-break ordering in Store queries and bounded page sizes;
+- IANA timezone selection plus absolute, relative, and `as_of` metadata in responses;
+- `get_latest_context` full encrypted-context retrieval by app, fuzzy source, exact thread, and structured content kind;
+- structured conversation/calendar/task retrieval through `content_kinds` without semantic embedding;
+- explicit meeting `meeting_id` and `thread_id`, app/time filtering, recording pagination, and transcript retrieval;
+- deduplicated meeting semantic results with the same similarity floor as general memory search;
+- a read-only Claude Code/Desktop setup helper with preflight MCP handshake, dry-run default, explicit apply/replace, and Desktop backup/validation.
+
+The full suite passes 420 tests. Automated acceptance covers filter isolation, RFC3339 and relative time handling, cursor continuity/scope rejection, structured raw context without embedding, explicit meeting-thread retrieval, read-only stdio handshakes, and isolated Claude Desktop config creation/replacement. See `docs/PHASE5_RETRIEVAL_MCP.md`. Real Claude recall prompts remain the live acceptance gate.
 
 ### Phase 6 — product UX and privacy
 

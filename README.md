@@ -31,22 +31,39 @@ MaxMi encrypts memory content using AES-256-GCM (`enc:v1:` wire format). The enc
 
 ## Connect to Claude (MCP)
 
-The app bundles `maxmi-mcp`, a local MCP server that lets Claude search your memory.
+The app bundles `maxmi-mcp`, a local, read-only MCP server that lets Claude search your memory.
 
-**Claude Code:**
+The guided setup validates the MCP handshake first and defaults to a dry run:
+
+```bash
+tools/setup-mcp.sh --target claude-code
+tools/setup-mcp.sh --target claude-code --apply
+
+tools/setup-mcp.sh --target claude-desktop
+tools/setup-mcp.sh --target claude-desktop --apply
+```
+
+Claude Desktop configuration is backed up before modification. Existing `maxmi` entries are
+left untouched unless `--replace` is explicitly supplied; non-user-scoped Claude Code entries
+are never removed automatically.
+
+Manual **Claude Code** registration:
 ```bash
 claude mcp add maxmi -- /path/to/MaxMi.app/Contents/MacOS/maxmi-mcp
 ```
 
-**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Manual **Claude Desktop** registration — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 { "mcpServers": { "maxmi": { "command": "/path/to/MaxMi.app/Contents/MacOS/maxmi-mcp" } } }
 ```
 
-Tools: `search_memory` (semantic search over captured facts), `list_active_threads`
-(recent pages), `get_latest_context` (fresh encrypted raw context without embedding), and
-`meeting_memory` (meeting list/search/context). Reads the DB read-only;
-never interferes with capture. Uses the same `.env` Gemini key to embed queries.
+Tools: `search_memory` (semantic facts), `list_active_threads` (recent sources),
+`get_latest_context` (fresh full context without embedding), and `meeting_memory`
+(meeting/voice-note list, search, and transcript context). All tools support exact app and time
+filters; list/search tools return deterministic opaque cursors. Raw context can additionally be
+filtered by thread and structured kind (`conversation`, `calendar`, `task`, and others).
+Responses include a fixed `as_of` time and timezone. The server reads the DB read-only and never
+interferes with capture. Semantic searches use the same `.env` Gemini key to embed queries.
 Optional: `MAXMI_DB_PATH` env var overrides the DB location.
 
 ## Documentation
@@ -54,5 +71,6 @@ Optional: `MAXMI_DB_PATH` env var overrides the DB location.
 See `docs/MINIMI_MAXMI_PARITY_BLUEPRINT.md` for the parity roadmap,
 `docs/PHASE2_BROWSER_COVERAGE.md` for browser coverage,
 `docs/PHASE3_NATIVE_COVERAGE.md` for structured native-app coverage,
-`docs/PHASE4_MEETINGS_VOICE.md` for meeting and voice-note verification, and
+`docs/PHASE4_MEETINGS_VOICE.md` for meeting and voice-note verification,
+`docs/PHASE5_RETRIEVAL_MCP.md` for retrieval filters, cursors, and Claude setup, and
 `docs/superpowers/` for the original technical specifications and implementation plans.
