@@ -112,7 +112,7 @@ final class AppWiring {
     let activityWindow: ActivityWindow
     let activityPrivacyWindow: ActivityPrivacyWindow
     let captureHealthWindow: CaptureHealthWindow
-    let settingsWindow: SettingsWindow
+    let menuPopoverNavigation: MenuPopoverViewModel
     var trayHomeViewModel: TrayHomeViewModel!
 
     init() throws {
@@ -627,12 +627,7 @@ final class AppWiring {
             }
         )
 
-        settingsWindow = SettingsWindow(
-            viewModel: settingsViewModel,
-            capturePrivacyViewModel: capturePrivacyViewModel,
-            dataControlsViewModel: dataControlsViewModel,
-            setupViewModel: setupViewModel
-        )
+        menuPopoverNavigation = MenuPopoverViewModel()
 
         // Purpose-built tray home: live state, recent summaries, and private lexical search.
         trayHomeViewModel = TrayHomeViewModel(
@@ -682,20 +677,35 @@ final class AppWiring {
                 }.value
             }
         )
-        let popoverController = NSHostingController(rootView: TrayHomeView(
-            viewModel: trayHomeViewModel,
+        let popoverController = NSHostingController(rootView: MenuPopoverView(
+            navigation: menuPopoverNavigation,
+            trayHomeViewModel: trayHomeViewModel,
             recentCapturesViewModel: recentCapturesViewModel,
+            settingsViewModel: settingsViewModel,
+            capturePrivacyViewModel: capturePrivacyViewModel,
+            dataControlsViewModel: dataControlsViewModel,
+            setupViewModel: setupViewModel,
             onTogglePause: { @MainActor [weak self] in
                 self?.toggleGlobalPause()
             },
-            onOpenMaxMi: { @MainActor [weak self] in self?.activityWindow.show() },
-            onOpenSettings: { @MainActor [weak self] in self?.settingsWindow.show() }
+            onOpenMaxMi: { @MainActor [weak self] in self?.activityWindow.show() }
         ))
-        popoverController.view.frame = NSRect(x: 0, y: 0, width: 380, height: 520)
-        menuBar.setPopoverContent(popoverController) { [weak self] in
+        popoverController.view.frame = NSRect(x: 0, y: 0, width: 520, height: 650)
+        menuBar.setPopoverContent(
+            popoverController,
+            onPrimaryShow: { [weak self] in self?.menuPopoverNavigation.showHome() }
+        ) { [weak self] in
             Task {
-                await recentCapturesViewModel.refresh()
-                await self?.trayHomeViewModel.refresh()
+                guard let self else { return }
+                switch self.menuPopoverNavigation.page {
+                case .home:
+                    await recentCapturesViewModel.refresh()
+                    await self.trayHomeViewModel.refresh()
+                case .settings:
+                    await settingsViewModel.refresh()
+                    await capturePrivacyViewModel.refresh()
+                    await setupViewModel.refresh()
+                }
             }
         }
     }
@@ -724,7 +734,11 @@ final class AppWiring {
                 Task { await self?.meetingSession?.startVoiceNote() }
             },
             onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() },
-            onOpenSettings: { [weak self] in self?.settingsWindow.show() }
+            onOpenSettings: { [weak self] in
+                guard let self else { return }
+                self.menuPopoverNavigation.showSettings()
+                DispatchQueue.main.async { [weak self] in self?.menuBar.showPopover() }
+            }
         )
         menuBar.encryptionAvailable = encryptionAvailable
         guard encryptionAvailable else { return }          // capture paused per §9

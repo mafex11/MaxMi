@@ -11,8 +11,12 @@ Phase 6 makes MaxMi understandable and controllable from the menu-bar app. The p
 | Left-click tray home | Current capture state, recent memory, local search, pause/resume |
 | Open MaxMi | Captures, synthesized Activity, Action Items, and Recordings |
 | Capture Health | Content-free captured/deduplicated/skipped/failed diagnostics |
-| Settings | Setup, privacy, cloud review, retention, export, deletion, and application preferences |
+| Settings page in the tray popover | Setup, privacy, cloud review, retention, export, deletion, and application preferences |
 | Right-click tray menu | Voice note, current-app/thread pause, diagnostics, Settings, quit |
+
+Settings stays inside the status-item popover. The home gear and the right-click
+**Settings…** action both navigate to that page, and **Back** returns to the tray home;
+MaxMi does not create a separate Settings window.
 
 The app remains useful when Activity Synthesis is disabled: local capture summaries, local search, recording history, privacy controls, and MCP retrieval do not depend on the Activity timeline.
 
@@ -104,4 +108,3 @@ The backup is mode `0600`. No source name, title, URL, raw context, fact, summar
 | Permission remediation buttons | correct prompt/System Settings pane opens | pending live |
 | Validate a replacement API key | content-free validation, secure save, restart message | pending live; existing key untouched |
 | Open Settings MCP status | exact bundled server reports connected | backend verified; pending visual |
-

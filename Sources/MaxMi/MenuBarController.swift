@@ -14,6 +14,7 @@ final class MenuBarController {
     // Left-click activity popover, anchored to the status-item button.
     private let popover = NSPopover()
     private var onPopoverWillShow: (() -> Void)?
+    private var onPrimaryPopoverWillShow: (() -> Void)?
 
     var captureCount: Int = 0 { didSet { countItem.title = "Captures: \(captureCount)" } }
     var paused: Bool = false { didSet { pauseItem.title = paused ? "Resume Capture" : "Pause Capture" } }
@@ -144,19 +145,29 @@ final class MenuBarController {
 
     /// Provide the SwiftUI content shown in the left-click popover. `onWillShow` runs
     /// each time the popover is about to appear (e.g. to refresh the view models).
-    func setPopoverContent(_ viewController: NSViewController, onWillShow: @escaping () -> Void) {
+    func setPopoverContent(
+        _ viewController: NSViewController,
+        onPrimaryShow: @escaping () -> Void = {},
+        onWillShow: @escaping () -> Void
+    ) {
         popover.contentViewController = viewController
         popover.behavior = .transient   // auto-close when the user clicks away
         popover.animates = true
         onPopoverWillShow = onWillShow
+        onPrimaryPopoverWillShow = onPrimaryShow
     }
 
     private func togglePopover() {
-        guard let button = statusItem?.button else { return }
         if popover.isShown {
             popover.performClose(nil)
             return
         }
+        onPrimaryPopoverWillShow?()
+        showPopover()
+    }
+
+    func showPopover() {
+        guard !popover.isShown, let button = statusItem?.button else { return }
         guard popover.contentViewController != nil else { return }
         onPopoverWillShow?()
         NSApp.activate(ignoringOtherApps: true)

@@ -37,7 +37,7 @@ public struct SettingsView: View {
                 .padding(Theme.spacing3)
             }
         }
-        .frame(minWidth: 620, minHeight: 650)
+        .frame(minWidth: 460, minHeight: 560)
         .background(Theme.background)
         .preferredColorScheme(.dark)
     }
