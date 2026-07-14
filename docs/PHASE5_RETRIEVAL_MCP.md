@@ -95,4 +95,4 @@ Do not paste the returned private context into an issue or commit it as a fixtur
 
 ## Content-free live status
 
-The signed `MaxMi.app` was rebuilt and relaunched with the Phase 5 binary. Its bundled `maxmi-mcp` passed initialize and tool-list preflight. The installed Claude Code CLI reports the existing project-local `maxmi` registration as connected and pointing at this exact bundled executable. No retrieval tool was called against the live database, so no title, URL, fact, context, transcript, or summary was read during this verification.
+The signed `MaxMi.app` was rebuilt and relaunched with the Phase 5 binary. Its bundled `maxmi-mcp` passed initialize and tool-list preflight. The installed Claude Code CLI reports the existing project-local `maxmi` registration as connected and pointing at this exact bundled executable. A live `get_latest_context` call used an exact deliberately nonexistent app plus a one-minute lookback; it returned the expected empty response with `as_of` and timezone metadata. No captured row was selected, so no title, URL, fact, context, transcript, or summary was read during this verification.
