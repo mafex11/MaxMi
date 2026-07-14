@@ -5,12 +5,14 @@ public struct SettingsView: View {
     @Bindable var viewModel: SettingsViewModel
     @Bindable var capturePrivacyViewModel: CapturePrivacyViewModel
     @Bindable var dataControlsViewModel: DataControlsViewModel
+    @Bindable var setupViewModel: SetupViewModel
 
     public init(viewModel: SettingsViewModel, capturePrivacyViewModel: CapturePrivacyViewModel,
-                dataControlsViewModel: DataControlsViewModel) {
+                dataControlsViewModel: DataControlsViewModel, setupViewModel: SetupViewModel) {
         self.viewModel = viewModel
         self.capturePrivacyViewModel = capturePrivacyViewModel
         self.dataControlsViewModel = dataControlsViewModel
+        self.setupViewModel = setupViewModel
     }
 
     public var body: some View {
@@ -18,6 +20,9 @@ public struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.spacing3) {
                     generalSection
+                    Divider()
+                        .background(Theme.divider)
+                    SetupView(viewModel: setupViewModel)
                     Divider()
                         .background(Theme.divider)
                     activitySection

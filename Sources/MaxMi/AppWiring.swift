@@ -3,6 +3,9 @@ import AppKit
 import SwiftUI
 import ServiceManagement
 import UniformTypeIdentifiers
+import AVFoundation
+import CoreGraphics
+import ApplicationServices
 import MaxMiCore
 import MaxMiStore
 import MaxMiCapture
@@ -29,6 +32,12 @@ fileprivate func safeFileTimestamp(_ date: Date = Date()) -> String {
     formatter.timeZone = .current
     formatter.dateFormat = "yyyyMMdd-HHmmss"
     return formatter.string(from: date)
+}
+
+@MainActor
+fileprivate func openPrivacySettings(_ pane: String) {
+    guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
+    NSWorkspace.shared.open(url)
 }
 
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
@@ -515,10 +524,97 @@ final class AppWiring {
             }
         )
 
+        let envURL = appSupport.appendingPathComponent(".env")
+        let mcpURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/maxmi-mcp")
+        let setupViewModel = SetupViewModel(
+            load: { @MainActor in
+                let microphone = AVCaptureDevice.authorizationStatus(for: .audio)
+                let microphoneReady = microphone == .authorized
+                let microphoneDetail: String
+                switch microphone {
+                case .authorized: microphoneDetail = "Granted for meetings and voice notes"
+                case .notDetermined: microphoneDetail = "Not requested"
+                case .denied: microphoneDetail = "Denied in System Settings"
+                case .restricted: microphoneDetail = "Restricted by macOS policy"
+                @unknown default: microphoneDetail = "Unknown"
+                }
+                let accessReady = AXIsProcessTrusted()
+                let screenReady = CGPreflightScreenCaptureAccess()
+                let mcp = await MCPStatusProbe.status(executableURL: mcpURL)
+                let configured = EnvConfig.load(searchPaths: [envURL]).geminiAPIKey != nil
+                return SetupSnapshot(
+                    permissions: [
+                        SetupStatusItem(
+                            id: "accessibility", title: "Accessibility",
+                            detail: accessReady ? "Granted for visible app context" : "Required for capture",
+                            state: accessReady ? .ready : .attention,
+                            actionTitle: accessReady ? nil : "Grant…"
+                        ),
+                        SetupStatusItem(
+                            id: "microphone", title: "Microphone", detail: microphoneDetail,
+                            state: microphoneReady ? .ready : .attention,
+                            actionTitle: microphoneReady ? nil : "Request…"
+                        ),
+                        SetupStatusItem(
+                            id: "screenRecording", title: "Screen Recording",
+                            detail: screenReady ? "Granted for meeting system audio" : "Optional; meetings fall back to mic only",
+                            state: screenReady ? .ready : .attention,
+                            actionTitle: screenReady ? nil : "Request…"
+                        ),
+                    ],
+                    apiKeyConfigured: configured,
+                    encryption: SetupStatusItem(
+                        id: "encryption", title: "Local encryption",
+                        detail: encryptionOK ? "AES-256-GCM key available" : "Keychain key unavailable; capture is stopped",
+                        state: encryptionOK ? .ready : .unavailable
+                    ),
+                    mcp: SetupStatusItem(
+                        id: "mcp", title: "Claude MCP",
+                        detail: mcp.claudeConnected ? "Connected to the bundled read-only server"
+                            : (mcp.healthy ? "Server healthy; Claude is not connected to this path" : "Bundled server health check failed"),
+                        state: mcp.claudeConnected ? .ready : (mcp.healthy ? .attention : .unavailable)
+                    )
+                )
+            },
+            onPermission: { @MainActor permission in
+                switch permission {
+                case .accessibility:
+                    _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+                    openPrivacySettings("Privacy_Accessibility")
+                case .microphone:
+                    if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+                        _ = await MeetingPermissions().requestMicrophone()
+                    } else {
+                        openPrivacySettings("Privacy_Microphone")
+                    }
+                case .screenRecording:
+                    if !CGRequestScreenCaptureAccess() { openPrivacySettings("Privacy_ScreenCapture") }
+                }
+            },
+            onSaveAPIKey: { @Sendable key in
+                try await APIKeyManager.validateAndSave(key, at: envURL, baseConfig: config)
+                await MainActor.run { mb.hasAPIKey = true }
+                return "API key validated and saved securely. Restart MaxMi to activate it."
+            },
+            onCopyMCPSetup: { @MainActor target in
+                let text: String
+                switch target {
+                case .claudeCode:
+                    text = "claude mcp add --scope user maxmi -- \"\(mcpURL.path)\""
+                case .claudeDesktop:
+                    text = "{ \"mcpServers\": { \"maxmi\": { \"command\": \"\(mcpURL.path)\" } } }"
+                }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                return "Copied Claude setup to the clipboard"
+            }
+        )
+
         settingsWindow = SettingsWindow(
             viewModel: settingsViewModel,
             capturePrivacyViewModel: capturePrivacyViewModel,
-            dataControlsViewModel: dataControlsViewModel
+            dataControlsViewModel: dataControlsViewModel,
+            setupViewModel: setupViewModel
         )
 
         // Purpose-built tray home: live state, recent summaries, and private lexical search.

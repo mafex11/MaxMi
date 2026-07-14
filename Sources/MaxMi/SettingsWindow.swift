@@ -8,12 +8,14 @@ final class SettingsWindow {
     private let viewModel: SettingsViewModel
     private let capturePrivacyViewModel: CapturePrivacyViewModel
     private let dataControlsViewModel: DataControlsViewModel
+    private let setupViewModel: SetupViewModel
 
     init(viewModel: SettingsViewModel, capturePrivacyViewModel: CapturePrivacyViewModel,
-         dataControlsViewModel: DataControlsViewModel) {
+         dataControlsViewModel: DataControlsViewModel, setupViewModel: SetupViewModel) {
         self.viewModel = viewModel
         self.capturePrivacyViewModel = capturePrivacyViewModel
         self.dataControlsViewModel = dataControlsViewModel
+        self.setupViewModel = setupViewModel
     }
 
     func show() {
@@ -29,7 +31,8 @@ final class SettingsWindow {
             window.contentViewController = NSHostingController(rootView: SettingsView(
                 viewModel: viewModel,
                 capturePrivacyViewModel: capturePrivacyViewModel,
-                dataControlsViewModel: dataControlsViewModel
+                dataControlsViewModel: dataControlsViewModel,
+                setupViewModel: setupViewModel
             ))
             window.setFrameAutosaveName("SettingsWindow")
             self.window = window
@@ -39,6 +42,7 @@ final class SettingsWindow {
         Task {
             await viewModel.refresh()
             await capturePrivacyViewModel.refresh()
+            await setupViewModel.refresh()
         }
 
         NSApp.activate(ignoringOtherApps: true)
