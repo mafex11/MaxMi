@@ -27,6 +27,7 @@ public struct SystemMeetingClock: MeetingClock {
 public final class MeetingDetector: MeetingDetecting {
     private let clock: MeetingClock
     private let debounceMs: Int
+    private let browserURLProvider: (_ bundleID: String, _ pid: pid_t) -> String?
 
     // State tracking for multi-process detection
     private var activeBundleIDs: Set<String> = []
@@ -42,9 +43,14 @@ public final class MeetingDetector: MeetingDetecting {
     public var onCandidate: ((_ bundleID: String, _ pid: pid_t) -> Void)?
     public var onEnded: ((_ bundleID: String) -> Void)?
 
-    public init(clock: MeetingClock = SystemMeetingClock(), debounceMs: Int = 1500) {
+    public init(
+        clock: MeetingClock = SystemMeetingClock(),
+        debounceMs: Int = 1500,
+        browserURLProvider: @escaping (_ bundleID: String, _ pid: pid_t) -> String? = { _, _ in nil }
+    ) {
         self.clock = clock
         self.debounceMs = debounceMs
+        self.browserURLProvider = browserURLProvider
     }
 
     /// Pure testable evaluation logic
@@ -52,9 +58,16 @@ public final class MeetingDetector: MeetingDetecting {
         // Audio-process activity is sufficient only for native meeting apps. Browsers require
         // URL verification (Google Meet/Zoom/Teams/etc.) and must not fire merely because the
         // browser is using a microphone for dictation or another recording site.
-        let meetingProcs = active.filter {
-            guard case .native? = MeetingAppList.classify(bundleID: $0.bundleID) else { return false }
-            return true
+        let meetingProcs = active.filter { process in
+            switch MeetingAppList.classify(bundleID: process.bundleID) {
+            case .native?:
+                return true
+            case .browser?:
+                guard let url = browserURLProvider(process.bundleID, process.pid) else { return false }
+                return MeetingURLClassifier.classify(url) != nil
+            case nil:
+                return false
+            }
         }
 
         // Group by bundle ID

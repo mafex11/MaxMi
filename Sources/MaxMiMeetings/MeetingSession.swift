@@ -11,6 +11,7 @@ private struct UnsafeTransfer<T>: @unchecked Sendable {
 public enum MeetingState: Equatable, Sendable {
     case idle
     case prompting
+    case authorizing
     case recording
     case finishing
     case failed
@@ -27,6 +28,9 @@ public actor MeetingSession {
     private let makeCapture: @Sendable () -> any AudioCaptureControlling
     private let makeTranscriber: @Sendable () -> any Transcribing
     private let clock: any MeetingClock
+    private let stopGraceMs: Int
+    private let promptCooldownMs: Int
+    private let maxDurationMs: Int?
 
     private var _state: MeetingState = .idle
     public var state: MeetingState { _state }
@@ -42,6 +46,9 @@ public actor MeetingSession {
     private var capture: (any AudioCaptureControlling)?
     private var transcriber: (any Transcribing)?
     private var levelTask: Task<Void, Never>?
+    private var maxDurationTask: Task<Void, Never>?
+    private var endSuggestionGeneration = 0
+    private var lastTerminalAtMs: Int64?
 
     public init(
         panel: any MeetingPanelPresenting,
@@ -49,7 +56,10 @@ public actor MeetingSession {
         authorizer: any MeetingAuthorizing,
         makeCapture: @Sendable @escaping () -> any AudioCaptureControlling,
         makeTranscriber: @Sendable @escaping () -> any Transcribing,
-        clock: any MeetingClock
+        clock: any MeetingClock,
+        stopGraceMs: Int = 8_000,
+        promptCooldownMs: Int = 5_000,
+        maxDurationMs: Int? = nil
     ) {
         self.panel = panel
         self.persister = persister
@@ -57,10 +67,22 @@ public actor MeetingSession {
         self.makeCapture = makeCapture
         self.makeTranscriber = makeTranscriber
         self.clock = clock
+        self.stopGraceMs = max(0, stopGraceMs)
+        self.promptCooldownMs = max(0, promptCooldownMs)
+        self.maxDurationMs = maxDurationMs.map { max(1_000, $0) }
     }
 
     /// Candidate detected -> prompting state, show prompt UI
     public func candidateDetected(bundleID: String, pid: pid_t, title: String?) {
+        if _state == .recording {
+            guard bundleID == currentBundleID else { return }
+            endSuggestionGeneration += 1
+            Task { @MainActor in panel.showRecording() }
+            return
+        }
+        guard _state == .idle || _state == .failed || _state == .skipped else { return }
+        if let lastTerminalAtMs,
+           clock.nowMs() - lastTerminalAtMs < Int64(promptCooldownMs) { return }
         _state = .prompting
         currentBundleID = bundleID
         currentPid = pid
@@ -78,11 +100,13 @@ public actor MeetingSession {
               let pid = currentPid else {
             return
         }
+        _state = .authorizing
 
         // Request microphone permission
         let micGranted = await authorizer.requestMicrophone()
         guard micGranted else {
             _state = .failed
+            lastTerminalAtMs = clock.nowMs()
             await MainActor.run {
                 panel.showError("Microphone access is required to record meetings")
                 panel.hidePanel()
@@ -146,12 +170,14 @@ public actor MeetingSession {
 
             // Reposition panel if window frame is available
             if let windowFrame = await captureInstance.resolvedWindowFrame() {
-                // Panel repositioning happens in the UI layer - just note it's available
-                _ = windowFrame
+                await MainActor.run {
+                    panel.repositionToMeetingScreen(windowFrame: windowFrame)
+                }
             }
 
             // Transition to recording
             _state = .recording
+            startMaximumDurationTimer()
             await MainActor.run {
                 panel.showRecording()
             }
@@ -159,8 +185,12 @@ public actor MeetingSession {
         } catch {
             _state = .failed
             levelTask?.cancel()
+            maxDurationTask?.cancel()
+            await captureInstance.stop()
+            _ = await transcriberInstance.finish()
             capture = nil
             transcriber = nil
+            lastTerminalAtMs = clock.nowMs()
             await MainActor.run {
                 panel.hidePanel()
             }
@@ -173,12 +203,16 @@ public actor MeetingSession {
         // tear down capture/transcriber + the level poll so nothing leaks.
         levelTask?.cancel()
         levelTask = nil
-        if _state == .recording {
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
+        endSuggestionGeneration += 1
+        if capture != nil {
             await capture?.stop()
         }
         capture = nil
         transcriber = nil
         _state = .skipped
+        lastTerminalAtMs = clock.nowMs()
         await MainActor.run {
             panel.hidePanel()
         }
@@ -195,6 +229,8 @@ public actor MeetingSession {
 
         // Cancel level polling
         levelTask?.cancel()
+        maxDurationTask?.cancel()
+        endSuggestionGeneration += 1
 
         // Stop capture
         if let capture = capture {
@@ -221,7 +257,8 @@ public actor MeetingSession {
                 startedAtMs: startMs,
                 endedAtMs: endMs,
                 captureMode: mode,
-                transcriptionStatus: "complete"
+                transcriptionStatus: transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "partial" : "complete"
             )
         }
 
@@ -229,6 +266,8 @@ public actor MeetingSession {
         capture = nil
         transcriber = nil
         _state = .idle
+        lastTerminalAtMs = clock.nowMs()
+        clearCurrentContext()
 
         await MainActor.run {
             panel.hidePanel()
@@ -239,8 +278,10 @@ public actor MeetingSession {
     public func inputStopped() async {
         guard _state == .recording else { return }
 
-        // Debounce
-        await clock.sleep(ms: 1500)
+        endSuggestionGeneration += 1
+        let generation = endSuggestionGeneration
+        await clock.sleep(ms: stopGraceMs)
+        guard _state == .recording, generation == endSuggestionGeneration else { return }
 
         // Show end suggestion but stay in recording state
         await MainActor.run {
@@ -251,6 +292,7 @@ public actor MeetingSession {
     /// User chose to keep recording after end suggestion
     public func userKeptRecording() async {
         guard _state == .recording else { return }
+        endSuggestionGeneration += 1
 
         await MainActor.run {
             panel.showRecording()
@@ -272,5 +314,25 @@ public actor MeetingSession {
                 await clock.sleep(ms: 100) // 10Hz
             }
         }
+    }
+
+    private func startMaximumDurationTimer() {
+        guard let maxDurationMs else { return }
+        maxDurationTask?.cancel()
+        maxDurationTask = Task { [weak self, clock] in
+            await clock.sleep(ms: maxDurationMs)
+            guard !Task.isCancelled else { return }
+            await self?.userStopped()
+        }
+    }
+
+    private func clearCurrentContext() {
+        currentBundleID = nil
+        currentPid = nil
+        currentTitle = nil
+        startedAtMs = nil
+        captureMode = nil
+        levelTask = nil
+        maxDurationTask = nil
     }
 }

@@ -56,6 +56,7 @@ public protocol Transcribing: Actor {
     func hidePanel()
     func updateLevel(_ level: Float)       // 10Hz live meter (polled, not tied to transcription windows)
     func updateTranscript(_ text: String)  // running stitched transcript (~30s cadence)
+    func repositionToMeetingScreen(windowFrame: CGRect)
 }
 public protocol MeetingPersisting: Sendable {   // adapter over Store; actor or audited @unchecked Sendable
     func persist(app: String, title: String?, transcript: String, startedAtMs: Int64,

@@ -15,6 +15,7 @@ final class MockPanel: MeetingPanelPresenting {
     var hideCalled = false
     var lastLevel: Float = 0
     var lastTranscript: String = ""
+    var repositionedFrame: CGRect?
 
     func showPreparing() { preparingCalled = true }
     func showPrompt(app: String) { promptApp = app }
@@ -25,6 +26,7 @@ final class MockPanel: MeetingPanelPresenting {
     func hidePanel() { hideCalled = true }
     func updateLevel(_ level: Float) { lastLevel = level }
     func updateTranscript(_ text: String) { lastTranscript = text }
+    func repositionToMeetingScreen(windowFrame: CGRect) { repositionedFrame = windowFrame }
 }
 
 actor MockPersister: MeetingPersisting {
@@ -174,6 +176,61 @@ final class MeetingSessionTests: XCTestCase {
         let state = await session.state
         XCTAssertEqual(state, .prompting)
         XCTAssertEqual(panel.promptApp, "us.zoom.xos")
+    }
+
+    @MainActor
+    func testSecondCandidateCannotOverwriteActivePrompt() async throws {
+        let panel = MockPanel()
+        let persister = MockPersister()
+        let authorizer = MockAuthorizer()
+        let capture = MockCapture()
+        let transcriber = MockSessionTranscriber()
+        let session = MeetingSession(
+            panel: panel, persister: persister, authorizer: authorizer,
+            makeCapture: { capture }, makeTranscriber: { transcriber }, clock: FakeClock()
+        )
+        await session.candidateDetected(bundleID: "us.zoom.xos", pid: 10, title: "First")
+        await session.candidateDetected(bundleID: "com.microsoft.teams2", pid: 20, title: "Second")
+        await session.userAcceptedRecord()
+        let request = await capture.startRequest
+        XCTAssertEqual(request?.bundleID, "us.zoom.xos")
+        XCTAssertEqual(request?.pid, 10)
+        XCTAssertEqual(request?.title, "First")
+    }
+
+    @MainActor
+    func testDifferentCandidateCannotOverwriteRecording() async throws {
+        let panel = MockPanel()
+        let persister = MockPersister()
+        let authorizer = MockAuthorizer()
+        let capture = MockCapture()
+        let transcriber = MockSessionTranscriber()
+        let session = MeetingSession(
+            panel: panel, persister: persister, authorizer: authorizer,
+            makeCapture: { capture }, makeTranscriber: { transcriber }, clock: FakeClock()
+        )
+        await session.candidateDetected(bundleID: "us.zoom.xos", pid: 10, title: "First")
+        await session.userAcceptedRecord()
+        await session.candidateDetected(bundleID: "com.microsoft.teams2", pid: 20, title: "Second")
+        await session.userStopped()
+        let meetings = await persister.persistedMeetings
+        XCTAssertEqual(meetings.first?.app, "us.zoom.xos")
+        XCTAssertEqual(meetings.first?.title, "First")
+    }
+
+    @MainActor
+    func testResolvedMeetingWindowRepositionsPanel() async throws {
+        let panel = MockPanel()
+        let capture = MockCapture()
+        let expected = CGRect(x: 1200, y: 100, width: 800, height: 600)
+        await capture.setWindowFrame(expected)
+        let session = MeetingSession(
+            panel: panel, persister: MockPersister(), authorizer: MockAuthorizer(),
+            makeCapture: { capture }, makeTranscriber: { MockSessionTranscriber() }, clock: FakeClock()
+        )
+        await session.candidateDetected(bundleID: "us.zoom.xos", pid: 10, title: "Meeting")
+        await session.userAcceptedRecord()
+        XCTAssertEqual(panel.repositionedFrame, expected)
     }
 
     @MainActor
@@ -598,5 +655,9 @@ extension MockCapture {
 
     func setLevel(_ level: Float) {
         currentLevel = level
+    }
+
+    func setWindowFrame(_ frame: CGRect) {
+        windowFrame = frame
     }
 }

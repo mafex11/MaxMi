@@ -601,7 +601,10 @@ final class AppWiring {
             authorizer: MeetingPermissions(),
             makeCapture: { AudioCapture(mixer: AudioMixer()) },
             makeTranscriber: { WhisperTranscriber(modelURL: modelStore.modelURL) },
-            clock: SystemMeetingClock()
+            clock: SystemMeetingClock(),
+            stopGraceMs: 8_000,
+            promptCooldownMs: 5_000,
+            maxDurationMs: 4 * 60 * 60 * 1_000
         )
         self.meetingSession = session
 
@@ -643,7 +646,16 @@ final class AppWiring {
                 panel.hidePanel()  // Model ready, hide preparing UI
 
                 // Now start the detector
-                let detector = MeetingDetector()
+                let detector = MeetingDetector(browserURLProvider: { bundleID, pid in
+                    guard let browser = ApplicationRegistry.browser(for: bundleID),
+                          let snapshot = AXReader.snapshotFrontmostWindow(pid: pid),
+                          let tab = try? BrowserTabExtractor.extract(
+                            window: snapshot.window,
+                            windowTitle: snapshot.title,
+                            engine: browser.browserEngine
+                          ) else { return nil }
+                    return tab.url
+                })
                 self.meetingDetector = detector
 
                 // Wire detector callbacks
