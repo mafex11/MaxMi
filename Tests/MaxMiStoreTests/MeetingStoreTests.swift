@@ -38,4 +38,25 @@ final class MeetingStoreTests: XCTestCase {
         _ = try store.commitMeeting(id: "new", app: "Teams", title: "B", transcript: "y", startedAtMs: t0+10_000, endedAtMs: t0+11_000, captureMode: "mic-only", transcriptionStatus: "complete", nowMs: t0+11_000)
         XCTAssertEqual(try store.recentMeetings(limit: 10).first?.id, "new")
     }
+
+    func testVoiceNoteUsesDistinctSearchableEncryptedThread() throws {
+        _ = try store.commitMeeting(
+            id: "voice-1", app: "Voice Note", title: "Idea", transcript: "remember this thought",
+            startedAtMs: t0, endedAtMs: t0 + 2_000, captureMode: "voice-note-mic",
+            transcriptionStatus: "complete", nowMs: t0 + 2_000
+        )
+        try db.dbQueue.read { database in
+            let row = try XCTUnwrap(Row.fetchOne(database, sql: """
+                SELECT t.source_app, t.source_key, v.content
+                FROM meetings m
+                JOIN threads t ON t.id = m.thread_id
+                JOIN versions v ON v.id = m.version_id
+                WHERE m.id = 'voice-1'
+                """))
+            XCTAssertEqual(row["source_app"] as String, "Voice Note")
+            XCTAssertTrue((row["source_key"] as String).hasPrefix("voice-note:"))
+            XCTAssertTrue((row["content"] as String).hasPrefix("enc:v1:"))
+        }
+        XCTAssertEqual(try store.meetingContext(id: "voice-1")?.transcript, "remember this thought")
+    }
 }

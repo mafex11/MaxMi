@@ -238,10 +238,35 @@ final class AppWiring {
             now: { epochNowMs() }
         )
 
+        let meetingHistoryViewModel = MeetingHistoryViewModel(
+            load: { @Sendable in
+                do {
+                    return try activityStore.recentMeetings(limit: 100).map { meeting in
+                        let label = ApplicationRegistry.descriptor(for: meeting.app)?.displayName
+                            ?? meeting.app
+                        return MeetingHistoryDTO(
+                            id: meeting.id,
+                            appLabel: label,
+                            title: meeting.title,
+                            startedAtMs: meeting.startedAtMs,
+                            endedAtMs: meeting.endedAtMs,
+                            captureMode: meeting.captureMode,
+                            transcriptionStatus: meeting.transcriptionStatus
+                        )
+                    }
+                } catch {
+                    NSLog("MaxMi: failed to load meeting history")
+                    return []
+                }
+            },
+            now: { epochNowMs() }
+        )
+
         activityWindow = ActivityWindow(
             viewModel: viewModel,
             actionItemsViewModel: actionItemsViewModel,
-            recentCapturesViewModel: recentCapturesViewModel
+            recentCapturesViewModel: recentCapturesViewModel,
+            meetingHistoryViewModel: meetingHistoryViewModel
         )
         activityPrivacyWindow = ActivityPrivacyWindow(store: store)
 
@@ -276,7 +301,8 @@ final class AppWiring {
         let popoverController = NSHostingController(rootView: ActivityView(
             viewModel: viewModel,
             actionItemsViewModel: actionItemsViewModel,
-            recentCapturesViewModel: recentCapturesViewModel
+            recentCapturesViewModel: recentCapturesViewModel,
+            meetingHistoryViewModel: meetingHistoryViewModel
         ))
         popoverController.view.frame = NSRect(x: 0, y: 0, width: 380, height: 520)
         menuBar.setPopoverContent(popoverController) {
@@ -284,6 +310,7 @@ final class AppWiring {
                 await viewModel.refresh()
                 await actionItemsViewModel.refresh()
                 await recentCapturesViewModel.refresh()
+                await meetingHistoryViewModel.refresh()
             }
         }
 
@@ -390,6 +417,9 @@ final class AppWiring {
             },
             onOpenActivity: { [weak self] in self?.activityWindow.show() },
             onOpenCaptureHealth: { [weak self] in self?.captureHealthWindow.show() },
+            onStartVoiceNote: { [weak self] in
+                Task { await self?.meetingSession?.startVoiceNote() }
+            },
             onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() },
             onOpenSettings: { [weak self] in self?.settingsWindow.show() }
         )

@@ -9,6 +9,7 @@ final class MockPanel: MeetingPanelPresenting {
     var preparingCalled = false
     var promptApp: String?
     var recordingCalled = false
+    var voiceNoteRecordingCalled = false
     var endSuggestionCalled = false
     var finishingCalled = false
     var errorMessage: String?
@@ -20,6 +21,7 @@ final class MockPanel: MeetingPanelPresenting {
     func showPreparing() { preparingCalled = true }
     func showPrompt(app: String) { promptApp = app }
     func showRecording() { recordingCalled = true }
+    func showVoiceNoteRecording() { voiceNoteRecordingCalled = true }
     func showEndSuggestion() { endSuggestionCalled = true }
     func showFinishing() { finishingCalled = true }
     func showError(_ message: String) { errorMessage = message }
@@ -269,6 +271,36 @@ final class MeetingSessionTests: XCTestCase {
         // Verify transcriber was started
         let transcriberStarted = await transcriber.startCalled
         XCTAssertTrue(transcriberStarted)
+    }
+
+    @MainActor
+    func testVoiceNoteUsesMicOnlySharedPipelineAndPersists() async throws {
+        let panel = MockPanel()
+        let persister = MockPersister()
+        let authorizer = MockAuthorizer()
+        let capture = MockCapture()
+        let transcriber = MockSessionTranscriber()
+        let session = MeetingSession(
+            panel: panel, persister: persister, authorizer: authorizer,
+            makeCapture: { capture }, makeTranscriber: { transcriber }, clock: FakeClock()
+        )
+
+        await session.startVoiceNote(title: "Idea")
+        let state = await session.state
+        XCTAssertEqual(state, .recording)
+        XCTAssertTrue(panel.voiceNoteRecordingCalled)
+        let request = await capture.startRequest
+        XCTAssertEqual(request?.bundleID, "Voice Note")
+        XCTAssertFalse(request?.captureSystem ?? true)
+        let screenPermissionChecked = await authorizer.screenRecordingAuthorizedCalled
+        XCTAssertFalse(screenPermissionChecked)
+
+        await session.userStopped()
+        let recordings = await persister.persistedMeetings
+        XCTAssertEqual(recordings.count, 1)
+        XCTAssertEqual(recordings[0].app, "Voice Note")
+        XCTAssertEqual(recordings[0].title, "Idea")
+        XCTAssertEqual(recordings[0].captureMode, "voice-note-mic")
     }
 
     @MainActor

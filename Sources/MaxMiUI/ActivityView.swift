@@ -4,6 +4,7 @@ public struct ActivityView: View {
     @Bindable var viewModel: ActivityViewModel
     @Bindable var actionItemsViewModel: ActionItemsViewModel
     @Bindable var recentCapturesViewModel: RecentCapturesViewModel
+    @Bindable var meetingHistoryViewModel: MeetingHistoryViewModel
     @State private var expandedRowId: String?
     @State private var selectedTab = 0
     @State private var hoveredRowId: String?
@@ -11,11 +12,13 @@ public struct ActivityView: View {
     public init(
         viewModel: ActivityViewModel,
         actionItemsViewModel: ActionItemsViewModel,
-        recentCapturesViewModel: RecentCapturesViewModel
+        recentCapturesViewModel: RecentCapturesViewModel,
+        meetingHistoryViewModel: MeetingHistoryViewModel
     ) {
         self.viewModel = viewModel
         self.actionItemsViewModel = actionItemsViewModel
         self.recentCapturesViewModel = recentCapturesViewModel
+        self.meetingHistoryViewModel = meetingHistoryViewModel
     }
 
     public var body: some View {
@@ -25,6 +28,7 @@ public struct ActivityView: View {
                 Text("Captures").tag(0)
                 Text("Activity").tag(1)
                 Text("Actions").tag(2)
+                Text("Recordings").tag(3)
             }
             .pickerStyle(.segmented)
             .padding(Theme.spacing2)
@@ -34,8 +38,10 @@ public struct ActivityView: View {
                 RecentCapturesView(viewModel: recentCapturesViewModel)
             } else if selectedTab == 1 {
                 activityTimeline
-            } else {
+            } else if selectedTab == 2 {
                 ActionItemsView(viewModel: actionItemsViewModel)
+            } else {
+                MeetingHistoryView(viewModel: meetingHistoryViewModel)
             }
         }
         .frame(minWidth: 400, minHeight: 500)

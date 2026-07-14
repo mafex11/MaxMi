@@ -13,6 +13,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     private var timerLabel: NSTextField?
     private var levelBar: NSLevelIndicator?
     private var transcriptLabel: NSTextField?
+    private var recordingLabel = "Meeting"
 
     // Button action closures (wired by AppWiring)
     var onRecord: (() -> Void)?
@@ -75,9 +76,19 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     }
 
     func showRecording() {
+        showRecording(label: "Meeting")
+    }
+
+    func showVoiceNoteRecording() {
+        showRecording(label: "Voice note")
+    }
+
+    private func showRecording(label: String) {
+        recordingLabel = label
+        let continuing = currentState == .recording || currentState == .endSuggestion
         currentState = .recording
-        startTime = Date()
-        buildRecordingView()
+        if !continuing { startTime = Date() }
+        buildRecordingView(label: label)
         positionPanel(meetingWindow: nil)  // Will reposition when session provides window frame
         panel.orderFront(nil)
         startTimerUpdates()
@@ -228,8 +239,12 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
         setContent(container)
     }
 
-    private func buildRecordingView() {
+    private func buildRecordingView(label: String) {
         let container = makeContainer()
+
+        let modeLabel = makeLabel(label)
+        modeLabel.font = .boldSystemFont(ofSize: 11)
+        container.addSubview(modeLabel)
 
         let dotView = NSView()
         dotView.translatesAutoresizingMaskIntoConstraints = false
@@ -265,6 +280,9 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
         container.addSubview(transcriptLabelView)
 
         NSLayoutConstraint.activate([
+            modeLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            modeLabel.centerYAnchor.constraint(equalTo: dotView.centerYAnchor),
+
             dotView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
             dotView.topAnchor.constraint(equalTo: container.topAnchor, constant: 20),
             dotView.widthAnchor.constraint(equalToConstant: 12),
@@ -329,7 +347,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
         spinner.startAnimation(nil)
         container.addSubview(spinner)
 
-        let label = makeLabel("Saving meeting...")
+        let label = makeLabel(recordingLabel == "Voice note" ? "Saving voice note..." : "Saving meeting...")
         container.addSubview(label)
 
         NSLayoutConstraint.activate([

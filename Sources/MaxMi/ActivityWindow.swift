@@ -8,15 +8,18 @@ final class ActivityWindow {
     private let viewModel: ActivityViewModel
     private let actionItemsViewModel: ActionItemsViewModel
     private let recentCapturesViewModel: RecentCapturesViewModel
+    private let meetingHistoryViewModel: MeetingHistoryViewModel
 
     init(
         viewModel: ActivityViewModel,
         actionItemsViewModel: ActionItemsViewModel,
-        recentCapturesViewModel: RecentCapturesViewModel
+        recentCapturesViewModel: RecentCapturesViewModel,
+        meetingHistoryViewModel: MeetingHistoryViewModel
     ) {
         self.viewModel = viewModel
         self.actionItemsViewModel = actionItemsViewModel
         self.recentCapturesViewModel = recentCapturesViewModel
+        self.meetingHistoryViewModel = meetingHistoryViewModel
     }
 
     func show() {
@@ -32,7 +35,8 @@ final class ActivityWindow {
             window.contentViewController = NSHostingController(rootView: ActivityView(
                 viewModel: viewModel,
                 actionItemsViewModel: actionItemsViewModel,
-                recentCapturesViewModel: recentCapturesViewModel
+                recentCapturesViewModel: recentCapturesViewModel,
+                meetingHistoryViewModel: meetingHistoryViewModel
             ))
             window.setFrameAutosaveName("ActivityWindow")
             self.window = window
@@ -43,6 +47,7 @@ final class ActivityWindow {
             await viewModel.refresh()
             await actionItemsViewModel.refresh()
             await recentCapturesViewModel.refresh()
+            await meetingHistoryViewModel.refresh()
         }
 
         NSApp.activate(ignoringOtherApps: true)

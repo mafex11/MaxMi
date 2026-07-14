@@ -25,7 +25,9 @@ extension Store {
     public func commitMeeting(id: String, app: String, title: String?, transcript: String,
                               startedAtMs: EpochMs, endedAtMs: EpochMs, captureMode: String,
                               transcriptionStatus: String, nowMs: EpochMs) throws -> String {
-        let threadKey = "meeting:\(id)"
+        let isVoiceNote = app == "Voice Note" || captureMode.hasPrefix("voice-note")
+        let threadKey = isVoiceNote ? "voice-note:\(id)" : "meeting:\(id)"
+        let sourceApp = isVoiceNote ? "Voice Note" : "Meeting"
         let hash = ContentHash.sha256Hex(transcript)
         let bucket = HourBucket.bucket(forMs: startedAtMs)
         let words = transcript.split(whereSeparator: \.isWhitespace).count
@@ -36,7 +38,7 @@ extension Store {
             try d.execute(sql: """
                 INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
                 VALUES (?,?,?,?,?,?,?)
-                """, arguments: [threadID, "Meeting", threadKey, title, hash, startedAtMs, endedAtMs])
+                """, arguments: [threadID, sourceApp, threadKey, title, hash, startedAtMs, endedAtMs])
             let vid = Ident.uuidv7(nowMs: nowMs)
             try d.execute(sql: """
                 INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status, metadata)

@@ -31,6 +31,7 @@ final class MenuBarController {
         onPauseCurrentThread: @escaping () -> Void,
         onOpenActivity: @escaping () -> Void,
         onOpenCaptureHealth: @escaping () -> Void,
+        onStartVoiceNote: @escaping () -> Void,
         onOpenPrivacy: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void
     ) {
@@ -54,6 +55,10 @@ final class MenuBarController {
         let captureHealthItem = NSMenuItem(title: "Capture Health…", action: nil, keyEquivalent: "")
         captureHealthItem.setAction { onOpenCaptureHealth() }
         menu.addItem(captureHealthItem)
+
+        let voiceNoteItem = NSMenuItem(title: "Start Voice Note", action: nil, keyEquivalent: "v")
+        voiceNoteItem.setAction { onStartVoiceNote() }
+        menu.addItem(voiceNoteItem)
 
         let privacyItem = NSMenuItem(title: "Activity Privacy…", action: nil, keyEquivalent: "")
         privacyItem.setAction { onOpenPrivacy() }

@@ -50,6 +50,7 @@ public protocol Transcribing: Actor {
     func showPreparing()                       // whisper model downloading
     func showPrompt(app: String)               // Record / Don't record
     func showRecording()                       // ● + timer + level + Stop
+    func showVoiceNoteRecording()
     func showEndSuggestion()                    // debounced "Finish or keep recording?"
     func showFinishing()                        // saving spinner
     func showError(_ message: String)

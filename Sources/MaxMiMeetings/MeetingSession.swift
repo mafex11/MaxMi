@@ -22,6 +22,7 @@ public enum MeetingState: Equatable, Sendable {
 /// All capture/transcriber objects are created inside the actor via @Sendable factories and never escape.
 /// Panel calls hop to @MainActor; PCMFrame (Sendable) is the only audio type crossing boundaries.
 public actor MeetingSession {
+    private enum RecordingKind { case meeting, voiceNote }
     private nonisolated(unsafe) let panel: any MeetingPanelPresenting
     private let persister: any MeetingPersisting
     private let authorizer: any MeetingAuthorizing
@@ -41,6 +42,7 @@ public actor MeetingSession {
     private var currentTitle: String?
     private var startedAtMs: Int64?
     private var captureMode: String?
+    private var recordingKind: RecordingKind = .meeting
 
     // Active objects during recording
     private var capture: (any AudioCaptureControlling)?
@@ -84,6 +86,7 @@ public actor MeetingSession {
         if let lastTerminalAtMs,
            clock.nowMs() - lastTerminalAtMs < Int64(promptCooldownMs) { return }
         _state = .prompting
+        recordingKind = .meeting
         currentBundleID = bundleID
         currentPid = pid
         currentTitle = title
@@ -91,6 +94,21 @@ public actor MeetingSession {
         Task { @MainActor in
             panel.showPrompt(app: bundleID)
         }
+    }
+
+    /// Starts an explicit mic-only voice note through the same Whisper and persistence path.
+    public func startVoiceNote(title: String? = nil) async {
+        guard _state == .idle || _state == .failed || _state == .skipped else { return }
+        if let lastTerminalAtMs,
+           clock.nowMs() - lastTerminalAtMs < Int64(promptCooldownMs) { return }
+        recordingKind = .voiceNote
+        currentBundleID = "Voice Note"
+        currentPid = getpid()
+        currentTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? title : "Voice note"
+        _state = .prompting
+        await MainActor.run { panel.showPreparing() }
+        await userAcceptedRecord()
     }
 
     /// User accepted record -> authorize, create capture/transcriber, wire audio->text, start recording
@@ -115,13 +133,15 @@ public actor MeetingSession {
         }
 
         // Check screen recording permission, request if needed
-        var captureSystem = true
-        let screenGranted = await authorizer.screenRecordingAuthorized()
-        if !screenGranted {
-            let requested = await authorizer.requestScreenRecordingAccess()
-            if !requested {
-                // Degrade to mic-only
-                captureSystem = false
+        var captureSystem = recordingKind == .meeting
+        if captureSystem {
+            let screenGranted = await authorizer.screenRecordingAuthorized()
+            if !screenGranted {
+                let requested = await authorizer.requestScreenRecordingAccess()
+                if !requested {
+                    // Degrade to mic-only
+                    captureSystem = false
+                }
             }
         }
 
@@ -158,7 +178,7 @@ public actor MeetingSession {
             )
 
             let mode = try await captureInstance.start(request)
-            captureMode = mode
+            captureMode = recordingKind == .voiceNote ? "voice-note-mic" : mode
             startedAtMs = clock.nowMs()
 
             // Store active objects
@@ -178,8 +198,13 @@ public actor MeetingSession {
             // Transition to recording
             _state = .recording
             startMaximumDurationTimer()
+            let kind = recordingKind
             await MainActor.run {
-                panel.showRecording()
+                if kind == .voiceNote {
+                    panel.showVoiceNoteRecording()
+                } else {
+                    panel.showRecording()
+                }
             }
 
         } catch {
@@ -332,6 +357,7 @@ public actor MeetingSession {
         currentTitle = nil
         startedAtMs = nil
         captureMode = nil
+        recordingKind = .meeting
         levelTask = nil
         maxDurationTask = nil
     }
