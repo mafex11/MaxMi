@@ -1412,6 +1412,25 @@ Acceptance criteria:
 - no paused thread becomes permanently unmanageable;
 - the app remains useful when Activity synthesis is disabled.
 
+#### Phase 6 implementation status — 2026-07-14
+
+Implemented in reviewable batches:
+
+- a dedicated left-click tray home with live capture/paused/attention state, latest source, session capture count, recent display summaries, and links to the full app and Settings;
+- private lexical search over a bounded set of encrypted latest context and facts; queries/results remain local and do not invoke Gemini;
+- existing Activity, Action Items, Capture Health, meeting/voice controls, and Recordings history retained as full-window product surfaces;
+- durable global pause with 15-minute, one-hour, until-tomorrow, indefinite, automatic-expiry, and resume behavior;
+- exact app pauses, resumable paused-thread management, and normalized user-domain blocking enforced before browser storage;
+- a first-seen source review gate: existing source types are grandfathered once, while a new source stays encrypted/local and is excluded from display summaries, fact extraction, embeddings, and Activity synthesis until **Allow AI** or **Keep Local** is selected;
+- local-only source management plus explicit disclosure of which paths use Gemini and which remain local;
+- retention preference plus confirmed apply-now cleanup, plaintext JSON export, and confirmed delete-all controls;
+- automatic consistent mode-`0600` database backups before destructive cleanup/deletion, with privacy settings retained after delete-all;
+- typed Accessibility, microphone, Screen Recording, encryption, Gemini-key, and MCP status/remediation rows;
+- content-free Gemini API-key validation before atomic mode-`0600` `.env` storage, with restart disclosure;
+- bounded bundled-MCP handshake/Claude-path status and copyable Claude Code/Desktop setup without silent config mutation.
+
+The full automated suite passes 446 tests. The signed app was launched against 646 threads, 973 versions, and 646 latest contexts with an `ok` integrity check. The one-time review bootstrap grandfathered all 21 existing source types and left zero local-only types; no source names or captured content were printed. See `docs/PHASE6_PRODUCT_PRIVACY.md`. Destructive controls, API-key replacement, permission prompts, and a genuinely new-source review remain manual live acceptance items.
+
 ### Phase 7 — reliability and distribution
 
 **Goal:** make routine use and optional distribution safe.

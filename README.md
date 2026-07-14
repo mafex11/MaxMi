@@ -72,5 +72,6 @@ See `docs/MINIMI_MAXMI_PARITY_BLUEPRINT.md` for the parity roadmap,
 `docs/PHASE2_BROWSER_COVERAGE.md` for browser coverage,
 `docs/PHASE3_NATIVE_COVERAGE.md` for structured native-app coverage,
 `docs/PHASE4_MEETINGS_VOICE.md` for meeting and voice-note verification,
-`docs/PHASE5_RETRIEVAL_MCP.md` for retrieval filters, cursors, and Claude setup, and
+`docs/PHASE5_RETRIEVAL_MCP.md` for retrieval filters, cursors, and Claude setup,
+`docs/PHASE6_PRODUCT_PRIVACY.md` for tray UX, privacy, data controls, and onboarding, and
 `docs/superpowers/` for the original technical specifications and implementation plans.
