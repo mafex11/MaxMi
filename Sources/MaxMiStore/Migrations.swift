@@ -240,6 +240,65 @@ enum Migrations {
               CASE WHEN parser_id='legacy' THEN 'skipped' ELSE 'pending' END;
             """)
         }
+        m.registerMigration("v9") { db in
+            try db.execute(sql: """
+            CREATE TABLE latest_contexts_v9 (
+              thread_id            TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+              version_id           TEXT REFERENCES versions(id),
+              content_ciphertext   TEXT NOT NULL,
+              content_hash         TEXT NOT NULL,
+              content_kind         TEXT NOT NULL
+                CHECK(content_kind IN (
+                  'webpage','conversation','document','terminal','email','calendar','task',
+                  'meeting','voiceNote','generic'
+                )),
+              parser_id            TEXT NOT NULL,
+              parser_version       INTEGER NOT NULL,
+              accumulation_policy  TEXT NOT NULL
+                CHECK(accumulation_policy IN ('replace','appendItems','rollingText')),
+              offscreen_mode       TEXT NOT NULL
+                CHECK(offscreen_mode IN ('visibleOnly','accessibilityScroll')),
+              offscreen_max_steps  INTEGER NOT NULL DEFAULT 0,
+              offscreen_max_chars  INTEGER NOT NULL DEFAULT 32000,
+              trigger              TEXT NOT NULL,
+              captured_at          INTEGER NOT NULL,
+              character_count      INTEGER NOT NULL DEFAULT 0,
+              truncated            INTEGER NOT NULL DEFAULT 0,
+              display_summary_ciphertext TEXT,
+              summary_status       TEXT NOT NULL DEFAULT 'pending'
+                CHECK(summary_status IN ('pending','completed','failed','skipped')),
+              summary_source_hash  TEXT,
+              summary_attempts     INTEGER NOT NULL DEFAULT 0,
+              summary_next_attempt_at INTEGER,
+              summary_model_id     TEXT,
+              summary_prompt_version TEXT
+            );
+
+            INSERT INTO latest_contexts_v9 (
+              thread_id, version_id, content_ciphertext, content_hash, content_kind,
+              parser_id, parser_version, accumulation_policy, offscreen_mode,
+              offscreen_max_steps, offscreen_max_chars, trigger, captured_at,
+              character_count, truncated, display_summary_ciphertext, summary_status,
+              summary_source_hash, summary_attempts, summary_next_attempt_at,
+              summary_model_id, summary_prompt_version
+            )
+            SELECT
+              thread_id, version_id, content_ciphertext, content_hash, content_kind,
+              parser_id, parser_version, accumulation_policy, offscreen_mode,
+              offscreen_max_steps, offscreen_max_chars, trigger, captured_at,
+              character_count, truncated, display_summary_ciphertext, summary_status,
+              summary_source_hash, summary_attempts, summary_next_attempt_at,
+              summary_model_id, summary_prompt_version
+            FROM latest_contexts;
+
+            DROP TABLE latest_contexts;
+            ALTER TABLE latest_contexts_v9 RENAME TO latest_contexts;
+            CREATE INDEX idx_latest_contexts_recent
+              ON latest_contexts(captured_at DESC, thread_id);
+            CREATE INDEX idx_latest_contexts_summary_due
+              ON latest_contexts(summary_status, summary_next_attempt_at, captured_at);
+            """)
+        }
         return m
     }
 }

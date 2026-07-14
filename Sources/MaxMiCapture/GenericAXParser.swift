@@ -22,7 +22,7 @@ public struct GenericAXParser: SourceParser {
         default: .generic
         }
         let offscreen: OffscreenCapturePolicy = switch kind {
-        case .document, .conversation, .calendar, .task:
+        case .document, .conversation, .calendar, .task, .meeting, .voiceNote:
             .accessibilityScroll(maxSteps: 3)
         default:
             .visibleOnly(maxCharacters: 32_000)

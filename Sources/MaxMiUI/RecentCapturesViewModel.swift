@@ -70,6 +70,8 @@ public final class RecentCapturesViewModel {
         case .email: return "Email"
         case .calendar: return "Calendar"
         case .task: return "Task"
+        case .meeting: return "Meeting"
+        case .voiceNote: return "Voice Note"
         case .generic: return "Capture"
         }
     }

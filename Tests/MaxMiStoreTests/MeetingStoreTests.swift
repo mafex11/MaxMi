@@ -24,6 +24,10 @@ final class MeetingStoreTests: XCTestCase {
             // metadata links version -> meeting
             let meta = try String.fetchOne(d, sql: "SELECT metadata FROM versions WHERE id=?", arguments: [vid])!
             XCTAssertTrue(meta.contains("m-1"))
+            let latest = try Row.fetchOne(d, sql: "SELECT content_kind, parser_id, summary_status FROM latest_contexts WHERE thread_id=?", arguments: [m["thread_id"] as String])!
+            XCTAssertEqual(latest["content_kind"] as String, "meeting")
+            XCTAssertEqual(latest["parser_id"] as String, "MeetingTranscriber")
+            XCTAssertEqual(latest["summary_status"] as String, "pending")
         }
     }
     func testTwoSameTitleMeetingsStayDistinct() throws {
@@ -57,6 +61,9 @@ final class MeetingStoreTests: XCTestCase {
             XCTAssertTrue((row["source_key"] as String).hasPrefix("voice-note:"))
             XCTAssertTrue((row["content"] as String).hasPrefix("enc:v1:"))
         }
+        let contexts = try store.latestContexts(limit: 10)
+        XCTAssertEqual(contexts.first?.contentKind, .voiceNote)
+        XCTAssertEqual(contexts.first?.parserID, "VoiceNoteTranscriber")
         XCTAssertEqual(try store.meetingContext(id: "voice-1")?.transcript, "remember this thought")
     }
 }

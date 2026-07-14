@@ -690,8 +690,9 @@ final class AppWiring {
 
                 // Wire detector callbacks
                 detector.onCandidate = { [weak session] bundleID, pid in
+                    let title = AXReader.snapshotFrontmostWindow(pid: pid)?.title
                     Task {
-                        await session?.candidateDetected(bundleID: bundleID, pid: pid, title: nil)
+                        await session?.candidateDetected(bundleID: bundleID, pid: pid, title: title)
                     }
                 }
                 detector.onEnded = { [weak session] bundleID in

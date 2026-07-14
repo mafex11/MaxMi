@@ -8,6 +8,8 @@ public enum CaptureContentKind: String, Sendable, Codable, CaseIterable {
     case email
     case calendar
     case task
+    case meeting
+    case voiceNote
     case generic
 }
 

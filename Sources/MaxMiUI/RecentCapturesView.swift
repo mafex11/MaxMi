@@ -75,6 +75,8 @@ public struct RecentCapturesView: View {
         case .email: return "envelope.fill"
         case .calendar: return "calendar"
         case .task: return "checkmark.circle.fill"
+        case .meeting: return "person.2.wave.2.fill"
+        case .voiceNote: return "mic.fill"
         case .generic: return "app.fill"
         }
     }

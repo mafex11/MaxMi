@@ -49,6 +49,20 @@ extension Store {
                 VALUES (?,?,?,?,?,?,?,?,?,?)
                 """, arguments: [id, threadID, vid, app, title, startedAtMs, endedAtMs,
                                  transcriptionStatus == "partial" ? "failed" : "completed", captureMode, transcriptionStatus])
+            try d.execute(sql: """
+                INSERT INTO latest_contexts (
+                  thread_id, version_id, content_ciphertext, content_hash, content_kind,
+                  parser_id, parser_version, accumulation_policy, offscreen_mode,
+                  offscreen_max_steps, offscreen_max_chars, trigger, captured_at,
+                  character_count, truncated, summary_status
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'pending')
+                """, arguments: [
+                    threadID, vid, storedContent, hash,
+                    isVoiceNote ? CaptureContentKind.voiceNote.rawValue : CaptureContentKind.meeting.rawValue,
+                    isVoiceNote ? "VoiceNoteTranscriber" : "MeetingTranscriber", 1,
+                    CaptureAccumulationPolicy.replace.rawValue, OffscreenCaptureMode.visibleOnly.rawValue,
+                    0, 128_000, CaptureTrigger.unknown.rawValue, endedAtMs, transcript.count,
+                ])
             return id
         }
     }

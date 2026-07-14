@@ -142,4 +142,22 @@ final class MigrationTests: XCTestCase {
             XCTAssertTrue(columns.contains("summary_source_hash"))
         }
     }
+    func testV9AllowsStructuredAndRecordingContextKinds() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.write { database in
+            for (index, kind) in ["calendar", "task", "meeting", "voiceNote"].enumerated() {
+                let threadID = "t\(index)"
+                try database.execute(
+                    sql: "INSERT INTO threads VALUES (?,?,?,NULL,NULL,1,1)",
+                    arguments: [threadID, "Test", "test:\(index)"]
+                )
+                try database.execute(sql: """
+                    INSERT INTO latest_contexts (
+                      thread_id, content_ciphertext, content_hash, content_kind, parser_id,
+                      parser_version, accumulation_policy, offscreen_mode, trigger, captured_at
+                    ) VALUES (?,?,?,?,?,1,'replace','visibleOnly','unknown',1)
+                    """, arguments: [threadID, "enc", "h\(index)", kind, "test"])
+            }
+        }
+    }
 }
