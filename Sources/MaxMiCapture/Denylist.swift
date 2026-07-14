@@ -100,6 +100,15 @@ public enum Denylist {
         return isBlockedHostOrPath(url)
     }
 
+    /// User policy layered on top of the non-editable safety denylist.
+    public static func isBlockedByUser(_ urlString: String, blockedDomains: Set<String>) -> Bool {
+        guard let host = URL(string: urlString)?.host?.lowercased(), !host.isEmpty else { return true }
+        return blockedDomains.contains { domain in
+            let normalized = domain.lowercased()
+            return host == normalized || host.hasSuffix("." + normalized)
+        }
+    }
+
     public static func isBlocked(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString) else { return false }
         // Block browser-internal pages, not native-app source keys (slack:, whatsapp:, bundleid:title).

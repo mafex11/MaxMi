@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import SwiftUI
 import ServiceManagement
+import UniformTypeIdentifiers
 import MaxMiCore
 import MaxMiStore
 import MaxMiCapture
@@ -20,6 +21,14 @@ fileprivate func formatTimeAgo(ms: EpochMs, nowMs: EpochMs) -> String {
     if deltaHour < 24 { return "\(deltaHour)h ago" }
     let deltaDay = deltaHour / 24
     return "\(deltaDay)d ago"
+}
+
+fileprivate func safeFileTimestamp(_ date: Date = Date()) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = .current
+    formatter.dateFormat = "yyyyMMdd-HHmmss"
+    return formatter.string(from: date)
 }
 
 /// Adapts MaxMiStore.Store (concrete rows) to MaxMiCore.MemoryStore (pipeline types).
@@ -379,7 +388,138 @@ final class AppWiring {
             }
         )
 
-        settingsWindow = SettingsWindow(viewModel: settingsViewModel)
+        let capturePrivacyViewModel = CapturePrivacyViewModel(
+            load: { @Sendable in
+                let nowMs = epochNowMs()
+                do {
+                    let pause = try activityStore.capturePauseState(nowMs: nowMs)
+                    let pauseDescription: String
+                    switch pause {
+                    case .inactive:
+                        pauseDescription = "Capture is active"
+                    case .active(nil):
+                        pauseDescription = "Capture paused indefinitely"
+                    case .active(let untilMs?):
+                        let formatter = DateFormatter()
+                        formatter.dateStyle = .none
+                        formatter.timeStyle = .short
+                        pauseDescription = "Capture paused until \(formatter.string(from: Date(timeIntervalSince1970: Double(untilMs) / 1000)))"
+                    }
+                    let blockedApps = try activityStore.pausedApps().sorted().map { bundleID in
+                        PrivacyBlockedApp(
+                            id: bundleID,
+                            name: ApplicationRegistry.descriptor(for: bundleID)?.displayName ?? bundleID
+                        )
+                    }
+                    let threads = try activityStore.pausedThreadInfo().map { thread in
+                        PrivacyPausedThread(
+                            id: thread.id,
+                            label: thread.sourceTitle?.isEmpty == false ? thread.sourceTitle! : thread.id,
+                            sourceApp: thread.sourceApp ?? "Unknown source"
+                        )
+                    }
+                    return CapturePrivacySnapshot(
+                        isPaused: pause.isPaused(at: nowMs),
+                        pauseDescription: pauseDescription,
+                        blockedDomains: try activityStore.blockedDomains().sorted(),
+                        blockedApps: blockedApps,
+                        pausedThreads: threads,
+                        retentionDays: try activityStore.retentionDays()
+                    )
+                } catch {
+                    NSLog("MaxMi: failed to load capture privacy: \(error)")
+                    return CapturePrivacySnapshot(
+                        isPaused: true, pauseDescription: "Privacy settings unavailable — capture fails closed",
+                        blockedDomains: [], blockedApps: [], pausedThreads: [], retentionDays: nil
+                    )
+                }
+            },
+            onPause: { @Sendable choice in
+                let nowMs = epochNowMs()
+                switch choice {
+                case .minutes(let minutes):
+                    try activityStore.setCapturePaused(untilMs: nowMs + EpochMs(minutes) * 60_000, nowMs: nowMs)
+                case .untilTomorrow:
+                    let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))!
+                    try activityStore.setCapturePaused(untilMs: EpochMs(tomorrow.timeIntervalSince1970 * 1000), nowMs: nowMs)
+                case .indefinite:
+                    try activityStore.setCapturePaused(untilMs: nil, nowMs: nowMs)
+                case .resume:
+                    try activityStore.clearCapturePause(nowMs: nowMs)
+                }
+                let isPaused = try activityStore.capturePauseState(nowMs: nowMs).isPaused(at: nowMs)
+                await MainActor.run { mb.paused = isPaused }
+            },
+            onSetDomain: { @Sendable domain, blocked in
+                try activityStore.setDomain(domain, blocked: blocked, nowMs: epochNowMs()) != nil
+            },
+            onResumeApp: { @Sendable bundleID in
+                try activityStore.setAppPaused(bundleID, paused: false, nowMs: epochNowMs())
+            },
+            onResumeThread: { @Sendable sourceKey in
+                try activityStore.setThreadPaused(sourceKey, paused: false, nowMs: epochNowMs())
+            },
+            onSetRetention: { @Sendable days in
+                try activityStore.setRetentionDays(days, nowMs: epochNowMs())
+            }
+        )
+
+        let backupDirectory = appSupport.appendingPathComponent("Backups", isDirectory: true)
+        let dataControlsViewModel = DataControlsViewModel(
+            onExport: { @MainActor in
+                let panel = NSSavePanel()
+                panel.title = "Export MaxMi Memory as Plaintext"
+                panel.nameFieldStringValue = "MaxMi Memory Export.json"
+                panel.allowedContentTypes = [.json]
+                panel.canCreateDirectories = true
+                guard panel.runModal() == .OK, let url = panel.url else { return "Export cancelled" }
+                let count = try await Task.detached(priority: .userInitiated) {
+                    try activityStore.exportMemory(to: url)
+                }.value
+                return "Exported \(count) memory threads as plaintext JSON"
+            },
+            onApplyRetention: { @MainActor in
+                guard let days = try activityStore.retentionDays() else {
+                    return "Retention is set to Forever; nothing was deleted"
+                }
+                let alert = NSAlert()
+                alert.messageText = "Apply \(days)-day retention now?"
+                alert.informativeText = "MaxMi will create a private database backup, then delete memories last updated before the cutoff. This cannot be undone inside the app."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Apply Retention")
+                guard alert.runModal() == .alertSecondButtonReturn else { return "Retention cleanup cancelled" }
+                let nowMs = epochNowMs()
+                let cutoff = nowMs - EpochMs(days) * 86_400_000
+                let backupURL = backupDirectory.appendingPathComponent("maxmi-before-retention-\(safeFileTimestamp()).db")
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try activityStore.backupDatabase(to: backupURL)
+                    return try activityStore.pruneMemory(olderThan: cutoff)
+                }.value
+                return "Removed \(result.threads) stale threads; backup: \(backupURL.lastPathComponent)"
+            },
+            onDeleteAll: { @MainActor in
+                let alert = NSAlert()
+                alert.messageText = "Delete all MaxMi memory?"
+                alert.informativeText = "This removes captured context, facts, recordings, activity, action items, and diagnostics. Privacy settings remain. A private database backup is created first."
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Delete All Memory")
+                guard alert.runModal() == .alertSecondButtonReturn else { return "Deletion cancelled" }
+                let backupURL = backupDirectory.appendingPathComponent("maxmi-before-delete-all-\(safeFileTimestamp()).db")
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try activityStore.backupDatabase(to: backupURL)
+                    return try activityStore.deleteAllMemory()
+                }.value
+                return "Deleted \(result.threads) threads and \(result.facts) facts; backup: \(backupURL.lastPathComponent)"
+            }
+        )
+
+        settingsWindow = SettingsWindow(
+            viewModel: settingsViewModel,
+            capturePrivacyViewModel: capturePrivacyViewModel,
+            dataControlsViewModel: dataControlsViewModel
+        )
 
         // Purpose-built tray home: live state, recent summaries, and private lexical search.
         trayHomeViewModel = TrayHomeViewModel(
@@ -399,7 +539,7 @@ final class AppWiring {
                         detail: "Grant permission in System Settings", captureCount: self.captureCount
                     )
                 }
-                if self.paused {
+                if self.captureIsPaused(nowMs: epochNowMs()) {
                     return TrayStatusDTO(
                         state: .paused, title: "Capture paused",
                         detail: "Local memory is unchanged until you resume", captureCount: self.captureCount
@@ -433,9 +573,7 @@ final class AppWiring {
             viewModel: trayHomeViewModel,
             recentCapturesViewModel: recentCapturesViewModel,
             onTogglePause: { @MainActor [weak self] in
-                self?.paused.toggle()
-                self?.menuBar.paused = self?.paused ?? false
-                Task { await self?.trayHomeViewModel.refresh() }
+                self?.toggleGlobalPause()
             },
             onOpenMaxMi: { @MainActor [weak self] in self?.activityWindow.show() },
             onOpenSettings: { @MainActor [weak self] in self?.settingsWindow.show() }
@@ -450,8 +588,10 @@ final class AppWiring {
     }
 
     func start() {
+        paused = (try? store.capturePauseState(nowMs: epochNowMs()).isPaused(at: epochNowMs())) ?? true
+        menuBar.paused = paused
         menuBar.install(
-            onTogglePause: { [weak self] in self?.paused.toggle(); self?.menuBar.paused = self?.paused ?? false },
+            onTogglePause: { [weak self] in self?.toggleGlobalPause() },
             onQuit: { NSApp.terminate(nil) },
             recentApps: { [weak self] in self?.recentApps ?? [] },
             pausedApps: { [weak self] in (try? self?.store.pausedApps()) ?? [] },
@@ -762,7 +902,7 @@ final class AppWiring {
     func captureFrontmost(app: AppInfo, pid: pid_t, trigger: CaptureTrigger = .unknown) {
         let startedAtMs = epochNowMs()
         let parser = captureParserName(for: app.bundleID)
-        guard !paused else {
+        guard !captureIsPaused(nowMs: startedAtMs) else {
             recordCaptureHealth(
                 app: app, trigger: trigger, parser: parser,
                 outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
@@ -810,7 +950,7 @@ final class AppWiring {
     private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int,
                                 captureGeneration: Int, trigger: CaptureTrigger,
                                 startedAtMs: EpochMs) {
-        guard !paused else {
+        guard !captureIsPaused(nowMs: epochNowMs()) else {
             recordCaptureHealth(
                 app: app, trigger: trigger, parser: captureParserName(for: app.bundleID),
                 outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
@@ -834,7 +974,7 @@ final class AppWiring {
                                snapshot: (window: AXNode, title: String?)?, captureGeneration: Int,
                                trigger: CaptureTrigger, startedAtMs: EpochMs) {
         let parserName = captureParserName(for: app.bundleID)
-        guard !paused else {
+        guard !captureIsPaused(nowMs: epochNowMs()) else {
             recordCaptureHealth(
                 app: app, trigger: trigger, parser: parserName,
                 outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
@@ -869,6 +1009,22 @@ final class AppWiring {
                     recordCaptureHealth(
                         app: appInfo, trigger: trigger, parser: effectiveParserName,
                         outcome: .skipped(.blockedURL), startedAtMs: startedAtMs
+                    )
+                    return
+                }
+                do {
+                    if Denylist.isBlockedByUser(result.url, blockedDomains: try store.blockedDomains()) {
+                        recordCaptureHealth(
+                            app: appInfo, trigger: trigger, parser: effectiveParserName,
+                            outcome: .skipped(.userBlockedDomain), startedAtMs: startedAtMs
+                        )
+                        return
+                    }
+                } catch {
+                    NSLog("MaxMi: blockedDomains read failed, skipping capture: \(error)")
+                    recordCaptureHealth(
+                        app: appInfo, trigger: trigger, parser: effectiveParserName,
+                        outcome: .failed(.privacySettingsReadFailed), startedAtMs: startedAtMs
                     )
                     return
                 }
@@ -1010,6 +1166,39 @@ final class AppWiring {
                 app: appInfo, trigger: trigger, parser: parserName,
                 outcome: .failed(.storeCommitFailed), startedAtMs: startedAtMs
             )
+        }
+    }
+
+    private func captureIsPaused(nowMs: EpochMs) -> Bool {
+        do {
+            let persisted = try store.capturePauseState(nowMs: nowMs).isPaused(at: nowMs)
+            paused = persisted
+            menuBar.paused = persisted
+            return persisted
+        } catch {
+            NSLog("MaxMi: capture pause read failed; failing closed: \(error)")
+            paused = true
+            menuBar.paused = true
+            return true
+        }
+    }
+
+    private func toggleGlobalPause() {
+        let nowMs = epochNowMs()
+        do {
+            if try store.capturePauseState(nowMs: nowMs).isPaused(at: nowMs) {
+                try store.clearCapturePause(nowMs: nowMs)
+                paused = false
+            } else {
+                try store.setCapturePaused(untilMs: nil, nowMs: nowMs)
+                paused = true
+            }
+            menuBar.paused = paused
+            Task { await trayHomeViewModel?.refresh() }
+        } catch {
+            NSLog("MaxMi: failed to change capture pause: \(error)")
+            paused = true
+            menuBar.paused = true
         }
     }
 

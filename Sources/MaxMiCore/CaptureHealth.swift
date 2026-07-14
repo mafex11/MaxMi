@@ -22,6 +22,7 @@ public enum CaptureSkipReason: String, Sendable, Codable, CaseIterable {
     case appPaused
     case excludedApp
     case blockedURL
+    case userBlockedDomain
     case pausedThread
     case noWindow
     case emptyContent
@@ -33,6 +34,7 @@ public enum CaptureSkipReason: String, Sendable, Codable, CaseIterable {
 public enum CaptureFailureReason: String, Sendable, Codable, CaseIterable {
     case appPauseReadFailed
     case threadPauseReadFailed
+    case privacySettingsReadFailed
     case browserExtractionFailed
     case parserFailed
     case storeCommitFailed

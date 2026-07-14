@@ -2,6 +2,14 @@ import XCTest
 @testable import MaxMiCapture
 
 final class DenylistTests: XCTestCase {
+    func testUserBlockedDomainsMatchExactHostAndSubdomains() {
+        let blocked: Set<String> = ["example.com", "private.test"]
+        XCTAssertTrue(Denylist.isBlockedByUser("https://example.com/page", blockedDomains: blocked))
+        XCTAssertTrue(Denylist.isBlockedByUser("https://docs.example.com/page", blockedDomains: blocked))
+        XCTAssertFalse(Denylist.isBlockedByUser("https://notexample.com", blockedDomains: blocked))
+        XCTAssertFalse(Denylist.isBlockedByUser("https://example.org", blockedDomains: blocked))
+        XCTAssertTrue(Denylist.isBlockedByUser("not a url", blockedDomains: blocked), "malformed browser values fail closed")
+    }
     func testBlockedHostsAndPatterns() {
         XCTAssertTrue(Denylist.isBlocked("https://accounts.google.com/signin"))
         XCTAssertTrue(Denylist.isBlocked("https://vault.bitwarden.com/#/vault"))

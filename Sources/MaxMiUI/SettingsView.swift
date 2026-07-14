@@ -3,9 +3,14 @@ import MaxMiCore
 
 public struct SettingsView: View {
     @Bindable var viewModel: SettingsViewModel
+    @Bindable var capturePrivacyViewModel: CapturePrivacyViewModel
+    @Bindable var dataControlsViewModel: DataControlsViewModel
 
-    public init(viewModel: SettingsViewModel) {
+    public init(viewModel: SettingsViewModel, capturePrivacyViewModel: CapturePrivacyViewModel,
+                dataControlsViewModel: DataControlsViewModel) {
         self.viewModel = viewModel
+        self.capturePrivacyViewModel = capturePrivacyViewModel
+        self.dataControlsViewModel = dataControlsViewModel
     }
 
     public var body: some View {
@@ -18,12 +23,16 @@ public struct SettingsView: View {
                     activitySection
                     Divider()
                         .background(Theme.divider)
+                    CapturePrivacyView(viewModel: capturePrivacyViewModel)
+                    DataControlsView(viewModel: dataControlsViewModel)
+                    Divider()
+                        .background(Theme.divider)
                     aboutSection
                 }
                 .padding(Theme.spacing3)
             }
         }
-        .frame(minWidth: 500, minHeight: 400)
+        .frame(minWidth: 620, minHeight: 650)
         .background(Theme.background)
         .preferredColorScheme(.dark)
     }

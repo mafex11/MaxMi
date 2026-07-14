@@ -24,4 +24,45 @@ final class PauseSettingsTests: XCTestCase {
         try store.setThreadPaused("whatsapp:Mom", paused: true, nowMs: t0 + 2)
         XCTAssertEqual(try store.pausedThreads(), ["slack:acme/general", "whatsapp:Mom"])
     }
+
+    func testGlobalPauseSupportsExpiryIndefiniteAndResume() throws {
+        XCTAssertEqual(try store.capturePauseState(nowMs: t0), .inactive)
+        try store.setCapturePaused(untilMs: t0 + 60_000, nowMs: t0)
+        XCTAssertTrue(try store.capturePauseState(nowMs: t0 + 1).isPaused(at: t0 + 1))
+        XCTAssertEqual(try store.capturePauseState(nowMs: t0 + 60_000), .inactive)
+
+        try store.setCapturePaused(untilMs: nil, nowMs: t0)
+        XCTAssertEqual(try store.capturePauseState(nowMs: t0 + 1_000_000), .active(untilMs: nil))
+        try store.clearCapturePause(nowMs: t0 + 1)
+        XCTAssertEqual(try store.capturePauseState(nowMs: t0 + 1), .inactive)
+    }
+
+    func testBlockedDomainsAreNormalizedAndDurable() throws {
+        XCTAssertEqual(try store.setDomain("https://Sub.Example.com/path", blocked: true, nowMs: t0), "sub.example.com")
+        XCTAssertEqual(try store.setDomain("*.example.org", blocked: true, nowMs: t0 + 1), "example.org")
+        XCTAssertEqual(try store.blockedDomains(), ["sub.example.com", "example.org"])
+        XCTAssertNil(try store.setDomain("not a domain", blocked: true, nowMs: t0 + 2))
+        _ = try store.setDomain("example.org", blocked: false, nowMs: t0 + 3)
+        XCTAssertEqual(try store.blockedDomains(), ["sub.example.com"])
+    }
+
+    func testPausedThreadInfoCanAlwaysBeManaged() throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Slack", sourceKey: "slack:acme/general", sourceTitle: "General", content: "hello"),
+            nowMs: t0
+        )
+        try store.setThreadPaused("slack:acme/general", paused: true, nowMs: t0 + 1)
+        try store.setThreadPaused("missing:key", paused: true, nowMs: t0 + 2)
+        let info = try store.pausedThreadInfo()
+        XCTAssertEqual(info.map(\.id), ["missing:key", "slack:acme/general"])
+        XCTAssertEqual(info.last?.sourceTitle, "General")
+    }
+
+    func testRetentionSettingRoundTrips() throws {
+        XCTAssertNil(try store.retentionDays())
+        try store.setRetentionDays(90, nowMs: t0)
+        XCTAssertEqual(try store.retentionDays(), 90)
+        try store.setRetentionDays(nil, nowMs: t0 + 1)
+        XCTAssertNil(try store.retentionDays())
+    }
 }
