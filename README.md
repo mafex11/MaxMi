@@ -44,7 +44,8 @@ claude mcp add maxmi -- /path/to/MaxMi.app/Contents/MacOS/maxmi-mcp
 ```
 
 Tools: `search_memory` (semantic search over captured facts), `list_active_threads`
-(recent pages), `meeting_memory` (stub until meetings ship). Reads the DB read-only;
+(recent pages), `get_latest_context` (fresh encrypted raw context without embedding), and
+`meeting_memory` (meeting list/search/context). Reads the DB read-only;
 never interferes with capture. Uses the same `.env` Gemini key to embed queries.
 Optional: `MAXMI_DB_PATH` env var overrides the DB location.
 

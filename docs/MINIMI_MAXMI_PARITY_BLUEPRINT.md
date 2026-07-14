@@ -1183,6 +1183,21 @@ Acceptance criteria:
 - latest-context retrieval returns the most recent raw material;
 - migrations are reversible or backed up and idempotent.
 
+#### Phase 1 implementation status — 2026-07-14
+
+Implemented and unit-tested in the working tree:
+
+- `CaptureEnvelope` with content kind, parser identity/version, accumulation policy, off-screen bounds, trigger, and truncation metadata;
+- conversation/terminal item accumulation plus rolling document/web accumulation, including overlap in either scroll direction and bounded retention;
+- encrypted `latest_contexts` storage, independent from semantic derivatives, with v7 backfill from every existing thread's newest encrypted version;
+- parser profiles for web, conversation, document, terminal, email, and generic sources;
+- adaptive 30/60-second safety recapture cadence while retaining activation/AX-change triggers;
+- read-only latest-context Store API and MCP `get_latest_context` tool;
+- current-version scrubbed Cursor fixture and live fix for Cursor's `AXTextArea`/Electron warm-up failure;
+- content-free corpus review script and live baseline in `docs/PHASE1_LIVE_BASELINE.md`.
+
+Live v7 migration preserved the existing corpus and backfilled all 603 current threads. Cursor changed from `parserNoContent` to successful document capture. Remaining Phase 1 acceptance work is the broader app/scroll matrix and reviewed handling of five historical self/system-noise candidates plus one key-collision group; no historical data has been deleted automatically.
+
 ### Phase 2 — browser parity
 
 **Goal:** reliable, privacy-safe capture across the browsers actually used on this Mac.
