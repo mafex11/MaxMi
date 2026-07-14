@@ -1323,6 +1323,26 @@ Acceptance criteria:
 - a persisted meeting is searchable and retrievable through MCP;
 - voice notes are recordable and searchable.
 
+#### Phase 4 implementation status — 2026-07-14
+
+Implemented in reviewable batches:
+
+- strict browser meeting URL classification for Google Meet, Zoom, Teams, Slack Huddles, and Webex;
+- active browser URLs are resolved through the Phase 2 engine-aware Accessibility extractor, so ordinary browser microphone use is ignored while a Zen Google Meet is eligible;
+- native audio detection continues to cover Zoom, Teams, Webex, Slack, and WhatsApp through the canonical application registry;
+- guarded session transitions prevent a second candidate from overwriting an active prompt or recording;
+- 8-second input-stop grace, 5-second post-session prompt cooldown, resumed-input cancellation, and a four-hour maximum recording duration;
+- meeting-window-aware multi-monitor panel placement is now invoked by the session and kept on the main actor;
+- system and microphone sources are resampled separately, timestamp-aligned into shared 100 ms frames, overlap-mixed once, held briefly for counterpart arrival, and flushed on stop;
+- ScreenCaptureKit failure and screen-recording denial degrade to mic-only capture without retaining a partial stream;
+- input-device configuration changes rebuild the microphone tap without leaking the prior engine observer/tap;
+- explicit mic-only voice notes reuse the meeting capture, Whisper, encrypted persistence, fact extraction, MCP retrieval, and display-summary pipeline;
+- **Start Voice Note** is available in the tray menu, with stop/level/transcript feedback in the recorder panel;
+- a **Recordings** tab lists meeting and voice-note history, duration, source, and transcription status;
+- v9 expands structured context kinds to calendar, task, meeting, and voice note while preserving prior contexts and their encrypted summaries.
+
+The full suite passes 407 tests. The live v9 migration preserved 631 threads, 951 versions, and 631 latest contexts with an `ok` integrity check. A consistent pre-migration backup is recorded in `docs/PHASE4_MEETINGS_VOICE.md`. Real microphone/system-audio acceptance remains intentionally pending: automated tests cannot prove device switching, permission prompts, or two-person audio on this Mac.
+
 ### Phase 5 — retrieval and MCP parity
 
 **Goal:** make captured context useful to Claude in the same situations Minimi handles.
