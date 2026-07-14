@@ -56,14 +56,18 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
             let appWindows = content.windows.filter { $0.owningApplication?.processID == app.processID }
             let window = appWindows.first(where: { $0.isOnScreen })
 
+            guard let fallbackDisplay = content.displays.first else {
+                try await startMicOnly()
+                return "mic-only"
+            }
             let display: SCDisplay
             if let win = window {
                 // Map window frame to the display it's on
                 resolvedFrame = win.frame
-                display = content.displays.first { displayContains($0, window: win) } ?? content.displays.first!
+                display = content.displays.first { displayContains($0, window: win) } ?? fallbackDisplay
             } else {
                 // Fallback: use the app's main display (first display)
-                display = content.displays.first!
+                display = fallbackDisplay
             }
 
             // 4. Build SCContentFilter scoped to the display+app
@@ -88,6 +92,18 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
             return "system+mic"
         } catch {
             // SCStream failed (permission denied, app not shareable, etc.) -> degrade to mic-only
+            if let stream {
+                try? await stream.stopCapture()
+                self.stream = nil
+            }
+            if let engine {
+                engine.inputNode.removeTap(onBus: 0)
+                engine.stop()
+                NotificationCenter.default.removeObserver(
+                    self, name: .AVAudioEngineConfigurationChange, object: engine
+                )
+                self.engine = nil
+            }
             try await startMicOnly()
             return "mic-only"
         }
@@ -106,16 +122,16 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
         }
 
         // Stop AVAudioEngine
+        engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
 
         NotificationCenter.default.removeObserver(self)
+        mixer.flush()
     }
 
     public func setFrameHandler(_ cb: @escaping @Sendable (PCMFrame) -> Void) async {
-        await MainActor.run {
-            mixer.onFrame = cb
-        }
+        mixer.onFrame = cb
     }
 
     public func level() async -> Float {
@@ -147,7 +163,9 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
         // Install tap on input node to capture mic audio
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
             guard let self = self else { return }
-            self.mixer.mixMic(buffer, at: time)
+            let duration = UInt64(Double(buffer.frameLength) / buffer.format.sampleRate * 1_000_000_000)
+            let now = DispatchTime.now().uptimeNanoseconds
+            self.mixer.mixMic(buffer, timestampNs: now - min(now, duration))
         }
 
         // Observe configuration changes (device switch)
@@ -165,7 +183,12 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
         // Restart mic tap on device change
         Task { @MainActor in
             guard let engine = self.engine else { return }
+            engine.inputNode.removeTap(onBus: 0)
             engine.stop()
+            NotificationCenter.default.removeObserver(
+                self, name: .AVAudioEngineConfigurationChange, object: engine
+            )
+            self.engine = nil
             do {
                 try await startMicTap()
             } catch {
@@ -206,11 +229,9 @@ extension AudioCapture: SCStreamOutput {
         guard let audioBuffer = convertToAVAudioPCMBuffer(sampleBuffer) else { return }
 
         // Extract timestamp from sample buffer
-        let timestamp = CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer)
-        let time = AVAudioTime(hostTime: UInt64(bitPattern: timestamp.value))
-
-        // Feed into mixer
-        mixer.mixSystem(audioBuffer, at: time)
+        let duration = UInt64(Double(audioBuffer.frameLength) / audioBuffer.format.sampleRate * 1_000_000_000)
+        let now = DispatchTime.now().uptimeNanoseconds
+        mixer.mixSystem(audioBuffer, timestampNs: now - min(now, duration))
     }
 
     /// Convert CMSampleBuffer to AVAudioPCMBuffer

@@ -3,10 +3,64 @@ import XCTest
 @testable import MaxMiMeetings
 
 final class AudioMixerTests: XCTestCase {
+    func testPureAlignerMixesOverlappingSourcesOnce() {
+        var aligner = TimestampAlignedAudioBuffer(
+            sampleRate: 16_000, frameDurationMs: 100, holdbackMs: 150
+        )
+        let system = [Float](repeating: 0.2, count: 1_600)
+        let mic = [Float](repeating: 0.6, count: 1_600)
+        XCTAssertTrue(aligner.ingest(source: .system, samples: system, timestampNs: 1_000_000_000).isEmpty)
+        let frames = aligner.ingest(source: .microphone, samples: mic, timestampNs: 1_000_000_000)
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertEqual(frames[0].samples.count, 1_600)
+        XCTAssertEqual(frames[0].samples[800], 0.4, accuracy: 0.0001)
+        XCTAssertTrue(aligner.flush().isEmpty, "overlapping sources must not double the timeline")
+    }
+
+    func testPureAlignerKeepsNonOverlappingSourcesChronological() {
+        var aligner = TimestampAlignedAudioBuffer(
+            sampleRate: 16_000, frameDurationMs: 100, holdbackMs: 150
+        )
+        _ = aligner.ingest(
+            source: .system,
+            samples: [Float](repeating: 0.25, count: 1_600),
+            timestampNs: 1_000_000_000
+        )
+        _ = aligner.ingest(
+            source: .microphone,
+            samples: [Float](repeating: 0.75, count: 1_600),
+            timestampNs: 1_100_000_000
+        )
+        let frames = aligner.flush()
+        XCTAssertEqual(frames.count, 2)
+        XCTAssertLessThan(frames[0].hostTimeNs, frames[1].hostTimeNs)
+        XCTAssertEqual(frames[0].samples[800], 0.25, accuracy: 0.0001)
+        XCTAssertEqual(frames[1].samples[800], 0.75, accuracy: 0.0001)
+    }
+
+    func testPureAlignerPartialOverlapDoesNotAttenuateSingleSourceRegions() {
+        var aligner = TimestampAlignedAudioBuffer(
+            sampleRate: 16_000, frameDurationMs: 100, holdbackMs: 150
+        )
+        _ = aligner.ingest(
+            source: .system,
+            samples: [Float](repeating: 0.2, count: 1_600),
+            timestampNs: 1_000_000_000
+        )
+        let frames = aligner.ingest(
+            source: .microphone,
+            samples: [Float](repeating: 0.6, count: 800),
+            timestampNs: 1_050_000_000
+        )
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertEqual(frames[0].samples[200], 0.2, accuracy: 0.0001)
+        XCTAssertEqual(frames[0].samples[1_000], 0.4, accuracy: 0.0001)
+    }
+
     func testMixesSystemAndMicBuffersTo16kHzMono() throws {
         let mixer = AudioMixer(targetSampleRate: 16_000)
         let expectation = self.expectation(description: "frame emitted")
-        expectation.assertForOverFulfill = false   // two buffers (system+mic) each emit a frame
+        expectation.assertForOverFulfill = true
         let boxedFrame = Box<PCMFrame?>(nil)
 
         mixer.onFrame = { frame in
