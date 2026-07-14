@@ -170,7 +170,9 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.positionPanel(meetingWindow: nil)
+            Task { @MainActor [weak self] in
+                self?.positionPanel(meetingWindow: nil)
+            }
         }
     }
 
