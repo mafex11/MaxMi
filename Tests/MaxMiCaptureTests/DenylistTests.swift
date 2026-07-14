@@ -22,6 +22,7 @@ final class DenylistTests: XCTestCase {
         XCTAssertTrue(Denylist.isBlocked("https://meet.google.com/rtz-tyqq-nzr"))
         XCTAssertTrue(Denylist.isBlocked("https://us02web.zoom.us/j/1234567890"))
         XCTAssertTrue(Denylist.isBlocked("https://teams.microsoft.com/l/meetup-join/x"))
+        XCTAssertFalse(Denylist.isBlockedWebURL("https://teams.microsoft.com/v2/"))
     }
     func testNonWebSchemesBlocked() {
         // Live finding: chrome:// pages were captured — browser-internal pages have no memory value.
@@ -105,6 +106,13 @@ final class DenylistTests: XCTestCase {
     func testBlockedWebURL_allowsHTTPS() {
         XCTAssertFalse(Denylist.isBlockedWebURL("https://example.com"))
         XCTAssertFalse(Denylist.isBlockedWebURL("http://example.com"))
+    }
+    func testBlockedWebURLFailsClosedAndProtectsAuthRoutes() {
+        XCTAssertTrue(Denylist.isBlockedWebURL("not a url"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("https:///missing-host"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("https://user:secret@example.com/page"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("https://example.com/signin"))
+        XCTAssertTrue(Denylist.isBlockedWebURL("https://example.com/oauth/authorize"))
     }
     func testIsBlocked_nativeKeysStillPass() {
         // Native keys still use isBlocked (not isBlockedWebURL), so they remain allowed

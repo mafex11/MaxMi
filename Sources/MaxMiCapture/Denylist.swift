@@ -9,13 +9,16 @@ public enum Denylist {
         "netbanking.hdfcbank.com", "onlinesbi.sbi", "icicibank.com", "axisbank.com",
         "chase.com", "bankofamerica.com", "wellsfargo.com",
         "paypal.com",
-        "meet.google.com", "zoom.us", "teams.microsoft.com", "teams.live.com",
+        "meet.google.com", "zoom.us",
     ]
     static let blockedPathFragments: [String] = [
+        "/login", "/signin", "/sign-in", "/sign_in", "/auth/", "/oauth/",
         "/reset-password", "/forgot-password", "/change-password", "/2fa", "/mfa", "/otp",
     ]
     static let blockedHostPathRules: [String: [String]] = [
         "stripe.com": ["/login"],
+        "teams.microsoft.com": ["/l/meetup-join", "/meetup-join/", "/meeting/"],
+        "teams.live.com": ["/l/meetup-join", "/meetup-join/", "/meeting/"],
     ]
 
     // Sensitive NATIVE apps never captured by the generic fallback (capture-by-default gate).
@@ -88,10 +91,12 @@ public enum Denylist {
     /// Strict web-URL denylist for browsers: only http(s) schemes allowed, plus banking/meeting/auth hosts.
     /// Blocks data:, blob:, chrome-untrusted://, chrome-search://, resource://, moz-extension://, javascript:, etc.
     public static func isBlockedWebURL(_ urlString: String) -> Bool {
-        guard let url = URL(string: urlString) else { return false }
+        // Browser routing is a privacy boundary: malformed or hostless values fail closed.
+        guard let url = URL(string: urlString), let host = url.host, !host.isEmpty else { return true }
         let scheme = url.scheme?.lowercased() ?? ""
         // Only http/https pass for browsers; all other schemes blocked (M1 behavior restored).
         if scheme != "http" && scheme != "https" { return true }
+        if url.user != nil || url.password != nil { return true }
         return isBlockedHostOrPath(url)
     }
 

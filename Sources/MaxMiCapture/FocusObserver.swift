@@ -17,10 +17,37 @@ public struct Browser: RawRepresentable, Sendable, Equatable {
     }
 }
 
+/// Pure mapping kept separate from AXObserver so tab/SPA trigger behavior is testable.
+public enum CaptureNotificationClassifier {
+    public static func trigger(notification: String, isBrowser: Bool) -> CaptureTrigger {
+        guard isBrowser else { return .accessibilityChanged }
+        switch notification {
+        case kAXTitleChangedNotification,
+             kAXSelectedChildrenChangedNotification,
+             kAXSelectedRowsChangedNotification,
+             "AXLoadComplete":
+            return .browserNavigation
+        case kAXValueChangedNotification, "AXLiveRegionChanged":
+            return .webContentChanged
+        default:
+            return .accessibilityChanged
+        }
+    }
+}
+
 /// Observes app focus changes and triggers captures for capturable apps.
 /// Callers MUST call stop() before releasing; deinit cannot tear down MainActor state under Swift 6.
 @MainActor
 public final class FocusObserver {
+    static let observedAXNotifications: [String] = [
+        kAXFocusedUIElementChangedNotification,
+        kAXTitleChangedNotification,
+        kAXValueChangedNotification,
+        kAXSelectedChildrenChangedNotification,
+        kAXSelectedRowsChangedNotification,
+        "AXLoadComplete",
+        "AXLiveRegionChanged",
+    ]
     let debounceMs: Int
     let recaptureIntervalSec: Double
     let recaptureIntervalForApp: @Sendable (String) -> Double
@@ -114,26 +141,40 @@ public final class FocusObserver {
 
     func attachAXObserver(pid: pid_t) {
         var observer: AXObserver?
-        let cb: AXObserverCallback = { _, _, _, refcon in
+        let cb: AXObserverCallback = { _, _, notification, refcon in
             guard let refcon else { return }
             let me = Unmanaged<FocusObserver>.fromOpaque(refcon).takeUnretainedValue()
-            Task { @MainActor in me.scheduleCapture(trigger: .accessibilityChanged) }
+            let name = notification as String
+            Task { @MainActor in me.handleAXNotification(name) }
         }
         guard AXObserverCreate(pid, cb, &observer) == .success, let observer else { return }
         let appEl = AXUIElementCreateApplication(pid)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        AXObserverAddNotification(observer, appEl, kAXFocusedUIElementChangedNotification as CFString, refcon)
-        AXObserverAddNotification(observer, appEl, kAXTitleChangedNotification as CFString, refcon)
+        for notification in Self.observedAXNotifications {
+            // Browsers vary in which application-level notifications they support.
+            // Unsupported registrations are harmless; the 30-second sweep remains a backstop.
+            AXObserverAddNotification(observer, appEl, notification as CFString, refcon)
+        }
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
         axObserver = observer
         observedPid = pid
     }
 
+    func handleAXNotification(_ notification: String) {
+        guard let current else { return }
+        let trigger = CaptureNotificationClassifier.trigger(
+            notification: notification,
+            isBrowser: ApplicationRegistry.isBrowser(current.bundleID)
+        )
+        scheduleCapture(trigger: trigger)
+    }
+
     func detachAXObserver() {
         if let axObserver, let pid = observedPid {
             let appEl = AXUIElementCreateApplication(pid)
-            AXObserverRemoveNotification(axObserver, appEl, kAXFocusedUIElementChangedNotification as CFString)
-            AXObserverRemoveNotification(axObserver, appEl, kAXTitleChangedNotification as CFString)
+            for notification in Self.observedAXNotifications {
+                AXObserverRemoveNotification(axObserver, appEl, notification as CFString)
+            }
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(axObserver), .defaultMode)
         }
         axObserver = nil

@@ -3,6 +3,8 @@ import Foundation
 public enum CaptureTrigger: String, Sendable, Codable, CaseIterable {
     case appActivated
     case accessibilityChanged
+    case browserNavigation
+    case webContentChanged
     case periodic
     case retry
     case unknown

@@ -60,6 +60,17 @@ final class URLKeyNormalizerTests: XCTestCase {
         XCTAssertEqual(norm("https://mail.google.com/mail/u/1/#inbox"),
                        "https://mail.google.com/mail/u/1/#inbox")
     }
+    func testWebAppConversationURLsDropVolatileState() {
+        XCTAssertEqual(
+            norm("https://app.slack.com/client/T123/C456/thread?utm_source=x"),
+            "https://app.slack.com/client/T123/C456"
+        )
+        XCTAssertEqual(
+            norm("https://discord.com/channels/GUILD/CHANNEL/MESSAGE?ref=x"),
+            "https://discord.com/channels/GUILD/CHANNEL"
+        )
+        XCTAssertEqual(norm("https://web.whatsapp.com/?version=9#chat"), "https://web.whatsapp.com/")
+    }
     func testUnparseablePassesThrough() {
         XCTAssertEqual(norm("not a url"), "not a url")
     }

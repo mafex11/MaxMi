@@ -25,6 +25,34 @@ public enum URLKeyNormalizer {
             return urlString
         }
         // ── (1) Site-specific canonicalization ──
+        if host.hasSuffix(".slack.com") || host == "app.slack.com" {
+            comps.path = pathPrefix(comps.path, componentCount: 3)
+            comps.query = nil
+            return rebuild(comps)
+        }
+        if host == "discord.com" || host == "www.discord.com" {
+            comps.path = pathPrefix(comps.path, componentCount: 3)
+            comps.query = nil
+            return rebuild(comps)
+        }
+        if host == "teams.microsoft.com" || host == "teams.live.com" {
+            comps.query = nil
+            return rebuild(comps)
+        }
+        if host == "web.whatsapp.com" {
+            comps.path = "/"
+            comps.query = nil; comps.fragment = nil
+            return rebuild(comps)
+        }
+        if host.contains("outlook.") || host == "outlook.office.com" {
+            comps.queryItems = comps.queryItems?.filter { $0.name.lowercased() == "itemid" }
+            return rebuild(comps)
+        }
+        if host == "www.linkedin.com" || host == "linkedin.com" {
+            if comps.path.hasPrefix("/messaging/thread/") {
+                comps.path = pathPrefix(comps.path, componentCount: 3)
+            }
+        }
         if host.contains("google.") {
             // Maps: collapse the volatile @lat,lng,zoom + /data segment. Keep a named place if present.
             if comps.path.hasPrefix("/maps") {
@@ -59,6 +87,12 @@ public enum URLKeyNormalizer {
 
     private static func queryValue(_ comps: URLComponents, _ name: String) -> String? {
         comps.queryItems?.first { $0.name == name }?.value
+    }
+
+    private static func pathPrefix(_ path: String, componentCount: Int) -> String {
+        let components = path.split(separator: "/")
+        guard !components.isEmpty else { return "/" }
+        return "/" + components.prefix(componentCount).joined(separator: "/")
     }
 
     private static func rebuild(_ comps: URLComponents) -> String {

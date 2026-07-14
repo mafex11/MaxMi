@@ -8,15 +8,19 @@ public struct AXNode: Codable, Sendable {
     public let frame: CGRect?
     public let focused: Bool
     public let children: [AXNode]
+    public let identifier: String?
+    public let label: String?
 
     public init(role: String, value: String?, title: String?, url: String?,
-                frame: CGRect?, focused: Bool, children: [AXNode]) {
+                frame: CGRect?, focused: Bool, children: [AXNode],
+                identifier: String? = nil, label: String? = nil) {
         self.role = role; self.value = value; self.title = title
         self.url = url; self.frame = frame; self.focused = focused; self.children = children
+        self.identifier = identifier; self.label = label
     }
 
     private enum CodingKeys: String, CodingKey {
-        case role, value, title, url, frame, focused, children
+        case role, value, title, url, frame, focused, children, identifier, label
     }
 
     public init(from decoder: Decoder) throws {
@@ -27,6 +31,8 @@ public struct AXNode: Codable, Sendable {
         url = try container.decodeIfPresent(String.self, forKey: .url)
         focused = try container.decode(Bool.self, forKey: .focused)
         children = try container.decode([AXNode].self, forKey: .children)
+        identifier = try container.decodeIfPresent(String.self, forKey: .identifier)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
 
         if let frameDict = try? container.decode([String: CGFloat].self, forKey: .frame) {
             let x = frameDict["x"] ?? 0
@@ -47,6 +53,8 @@ public struct AXNode: Codable, Sendable {
         try container.encodeIfPresent(url, forKey: .url)
         try container.encode(focused, forKey: .focused)
         try container.encode(children, forKey: .children)
+        try container.encodeIfPresent(identifier, forKey: .identifier)
+        try container.encodeIfPresent(label, forKey: .label)
 
         if let frame = frame {
             let frameDict: [String: CGFloat] = [

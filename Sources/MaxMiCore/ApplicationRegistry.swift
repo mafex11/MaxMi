@@ -79,17 +79,30 @@ public enum ApplicationRegistry {
     /// descriptors because macOS reports the actual bundle identifier at runtime.
     public static let browsers: [ApplicationDescriptor] = [
         browser("com.google.Chrome", "Chrome", .chromium),
+        browser("com.google.Chrome.canary", "Chrome Canary", .chromium),
+        browser("org.chromium.Chromium", "Chromium", .chromium),
         browser("org.mozilla.firefox", "Firefox", .gecko),
+        browser("org.mozilla.firefoxdeveloperedition", "Firefox Developer Edition", .gecko),
+        browser("org.mozilla.nightly", "Firefox Nightly", .gecko),
         browser("company.thebrowser.Browser", "Arc", .chromium),
+        browser("company.thebrowser.Browser.beta", "Arc Beta", .chromium),
         browser("company.thebrowser.dia", "Dia", .chromium),
         browser("com.apple.Safari", "Safari", .webkit),
+        browser("com.apple.SafariTechnologyPreview", "Safari Technology Preview", .webkit),
         browser("com.brave.Browser", "Brave", .chromium),
+        browser("com.brave.Browser.beta", "Brave Beta", .chromium),
+        browser("com.brave.Browser.nightly", "Brave Nightly", .chromium),
         browser("com.microsoft.edgemac", "Microsoft Edge", .chromium),
+        browser("com.microsoft.edgemac.Beta", "Microsoft Edge Beta", .chromium),
+        browser("com.microsoft.edgemac.Dev", "Microsoft Edge Dev", .chromium),
+        browser("com.microsoft.edgemac.Canary", "Microsoft Edge Canary", .chromium),
         browser("ai.perplexity.comet", "Comet", .chromium),
         browser("io.comet.Comet", "Comet", .chromium),
         browser("com.operasoftware.Opera", "Opera", .chromium),
+        browser("com.operasoftware.OperaGX", "Opera GX", .chromium),
         browser("com.vivaldi.Vivaldi", "Vivaldi", .chromium),
         browser("app.zen-browser.zen", "Zen", .gecko),
+        browser("app.zen-browser.twilight", "Zen Twilight", .gecko),
         browser("com.kagi.kagimacOS", "Orion", .webkit),
         browser("com.openai.atlas", "ChatGPT Atlas", .chromium),
     ]
@@ -167,6 +180,19 @@ public enum ApplicationRegistry {
 
     public static func isBrowser(_ bundleID: String) -> Bool {
         browser(for: bundleID) != nil
+    }
+
+    /// Unknown browser-looking processes must not fall through to generic AX capture,
+    /// where they would bypass URL privacy checks. Add supported variants above after
+    /// verifying their engine and Accessibility shape.
+    public static func isUnsupportedBrowserLike(_ bundleID: String) -> Bool {
+        guard !isBrowser(bundleID) else { return false }
+        let id = bundleID.lowercased()
+        let browserTokens = [
+            "browser", "chrome", "chromium", "firefox", "safari", "brave",
+            "edgemac", "opera", "vivaldi", "zen-browser", "orion",
+        ]
+        return browserTokens.contains { id.contains($0) }
     }
 
     public static func defaultCapturePolicy(for bundleID: String) -> DefaultCapturePolicy {

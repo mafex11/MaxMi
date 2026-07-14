@@ -27,6 +27,9 @@ public enum AXReader {
             ?? (copyAttr(el, "AXURL") as? String)
             ?? (copyAttr(el, "AXDocument") as? String)
         let focused = (copyAttr(el, kAXFocusedAttribute) as? Bool) ?? false
+        let identifier = copyAttr(el, kAXIdentifierAttribute) as? String
+        let label = (copyAttr(el, kAXDescriptionAttribute) as? String)
+            ?? (copyAttr(el, kAXHelpAttribute) as? String)
         var frame: CGRect? = nil
         if let v = copyAttr(el, "AXFrame") {
             var r = CGRect.zero
@@ -41,7 +44,8 @@ public enum AXReader {
             }
         }
         return AXNode(role: role, value: value, title: title, url: url,
-                      frame: frame, focused: focused, children: children)
+                      frame: frame, focused: focused, children: children,
+                      identifier: identifier, label: label)
     }
 
     private static func copyAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {

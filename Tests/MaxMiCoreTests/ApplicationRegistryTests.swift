@@ -23,6 +23,16 @@ final class ApplicationRegistryTests: XCTestCase {
         XCTAssertEqual(ApplicationRegistry.browser(for: "com.google.Chrome")?.browserEngine, .chromium)
         XCTAssertEqual(ApplicationRegistry.browser(for: "app.zen-browser.zen")?.browserEngine, .gecko)
         XCTAssertEqual(ApplicationRegistry.browser(for: "com.apple.Safari")?.browserEngine, .webkit)
+        XCTAssertEqual(ApplicationRegistry.browser(for: "com.google.Chrome.canary")?.browserEngine, .chromium)
+        XCTAssertEqual(ApplicationRegistry.browser(for: "org.mozilla.firefoxdeveloperedition")?.browserEngine, .gecko)
+        XCTAssertEqual(ApplicationRegistry.browser(for: "com.apple.SafariTechnologyPreview")?.browserEngine, .webkit)
+    }
+
+    func testUnknownBrowserLikeAppsFailSafeInsteadOfUsingGenericCapture() {
+        XCTAssertTrue(ApplicationRegistry.isUnsupportedBrowserLike("com.example.ExperimentalBrowser"))
+        XCTAssertTrue(ApplicationRegistry.isUnsupportedBrowserLike("org.example.firefox.fork"))
+        XCTAssertFalse(ApplicationRegistry.isUnsupportedBrowserLike("com.microsoft.VSCode"))
+        XCTAssertFalse(ApplicationRegistry.isUnsupportedBrowserLike("com.google.Chrome"))
     }
 
     func testSelfAndTransientSystemAppsAreExcludedByDefault() {

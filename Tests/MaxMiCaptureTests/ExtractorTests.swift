@@ -20,6 +20,8 @@ final class ExtractorTests: XCTestCase {
         let cap = try BrowserTabExtractor.extract(window: try fixture("safari-domain-only"), windowTitle: "Example Article")
         XCTAssertEqual(cap.url, "https://example.com", "address-bar fallback gets https:// prefixed")
         XCTAssertEqual(cap.content, "Article body text.")
+        XCTAssertEqual(cap.urlSource, .addressBar)
+        XCTAssertEqual(cap.quality, .fallback)
     }
     func testFocusedAddressFieldIgnoredWhenWebAreaPresent() throws {
         let cap = try BrowserTabExtractor.extract(window: try fixture("chrome-article"), windowTitle: nil)
@@ -65,6 +67,34 @@ final class ExtractorTests: XCTestCase {
         XCTAssertThrowsError(try BrowserTabExtractor.extract(window: bare, windowTitle: nil)) {
             XCTAssertEqual($0 as? ExtractionError, .noURL)
         }
+    }
+    func testUnlabelledPageFieldOutsideToolbarCannotBecomeURL() {
+        let field = AXNode(role: "AXTextField", value: "example.com", title: nil, url: nil,
+                           frame: nil, focused: false, children: [])
+        let window = AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
+                            frame: nil, focused: false, children: [field])
+        XCTAssertThrowsError(try BrowserTabExtractor.extract(window: window, windowTitle: nil)) {
+            XCTAssertEqual($0 as? ExtractionError, .noURL)
+        }
+    }
+    func testActivePopulatedWebAreaWinsOverHiddenStaleTab() throws {
+        func web(_ url: String, text: String, frame: CGRect) -> AXNode {
+            AXNode(role: "AXWebArea", value: nil, title: text, url: url, frame: frame,
+                   focused: false, children: [
+                    AXNode(role: "AXStaticText", value: text, title: nil, url: nil,
+                           frame: frame, focused: false, children: [])
+                   ])
+        }
+        let hidden = web("https://old.example.com", text: "Old", frame: .zero)
+        let active = web("https://current.example.com", text: "Current",
+                         frame: CGRect(x: 0, y: 40, width: 1200, height: 700))
+        let window = AXNode(role: "AXWindow", value: nil, title: "Current", url: nil,
+                            frame: nil, focused: false, children: [hidden, active])
+        let result = try BrowserTabExtractor.extract(
+            window: window, windowTitle: "Current", engine: .chromium
+        )
+        XCTAssertEqual(result.url, "https://current.example.com")
+        XCTAssertEqual(result.content, "Current")
     }
     func testWebAreaTextFieldNeverChosenAsAddressBar() throws {
         // regression: web area with nil url comes FIRST, contains an AXTextField with domain-like value
