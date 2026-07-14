@@ -65,6 +65,7 @@ final class AppWiring {
     var observer: FocusObserver?
     let menuBar: MenuBarController
     var pipelineTimer: Timer?
+    var captureSummaryTimer: Timer?
     var paused = false
     private(set) var captureCount = 0
     let encryptionAvailable: Bool
@@ -82,6 +83,7 @@ final class AppWiring {
     var focusGeneration: Int = 0
     var currentVisitID: String?
     let displaySummarizer: DisplaySummarizer
+    let captureDisplaySummarizer: CaptureDisplaySummarizer
 
     // Agent scheduler
     let agentScheduler: AgentScheduler
@@ -128,9 +130,17 @@ final class AppWiring {
         pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
         menuBar = MenuBarController()
         menuBar.hasAPIKey = config.geminiAPIKey != nil
-        let activityRepo = StoreActivitySummaryRepository(store: store)
-        let activityRelay = GeminiActivityRelay(geminiClient: relay, maxEvidenceChars: 12_000)
+        let activityRepo = StoreActivitySummaryRepository(store: store, modelID: config.extractModel)
+        let activityRelay = GeminiActivityRelay(
+            geminiClient: relay,
+            maxEvidenceChars: 12_000,
+            modelID: config.extractModel
+        )
         displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay, maxEvidenceChars: 12_000)
+        captureDisplaySummarizer = CaptureDisplaySummarizer(
+            repo: StoreCaptureSummaryRepository(store: store, modelID: config.extractModel),
+            relay: activityRelay
+        )
 
         // Initialize agent scheduler
         let agentRepo = StoreAgentRepository(store: store)
@@ -203,7 +213,36 @@ final class AppWiring {
             }
         )
 
-        activityWindow = ActivityWindow(viewModel: viewModel, actionItemsViewModel: actionItemsViewModel)
+        let recentCapturesViewModel = RecentCapturesViewModel(
+            load: { @Sendable in
+                do {
+                    return try activityStore.latestContexts(limit: 100).map { context in
+                        RecentCaptureDTO(
+                            id: context.id,
+                            appLabel: context.sourceApp,
+                            title: context.sourceTitle,
+                            contentKind: context.contentKind,
+                            parserID: context.parserID,
+                            capturedAtMs: context.capturedAtMs,
+                            characterCount: context.characterCount,
+                            truncated: context.truncated,
+                            displaySummary: context.displaySummary,
+                            summaryStatus: context.summaryStatus
+                        )
+                    }
+                } catch {
+                    NSLog("MaxMi: failed to load recent captures: \(error)")
+                    return []
+                }
+            },
+            now: { epochNowMs() }
+        )
+
+        activityWindow = ActivityWindow(
+            viewModel: viewModel,
+            actionItemsViewModel: actionItemsViewModel,
+            recentCapturesViewModel: recentCapturesViewModel
+        )
         activityPrivacyWindow = ActivityPrivacyWindow(store: store)
 
         let captureHealthViewModel = CaptureHealthViewModel(
@@ -236,13 +275,15 @@ final class AppWiring {
         // reusing the same view models as the full window. "Open MaxMi" still opens the window.
         let popoverController = NSHostingController(rootView: ActivityView(
             viewModel: viewModel,
-            actionItemsViewModel: actionItemsViewModel
+            actionItemsViewModel: actionItemsViewModel,
+            recentCapturesViewModel: recentCapturesViewModel
         ))
         popoverController.view.frame = NSRect(x: 0, y: 0, width: 380, height: 520)
         menuBar.setPopoverContent(popoverController) {
             Task {
                 await viewModel.refresh()
                 await actionItemsViewModel.refresh()
+                await recentCapturesViewModel.refresh()
             }
         }
 
@@ -403,6 +444,12 @@ final class AppWiring {
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
         guard self.observer == nil else { return }  // prevent double-start
         let observer = FocusObserver(
+            recaptureIntervalForApp: { [registry] bid in
+                // Dynamic/structured sources get a tighter safety sweep; AX events still
+                // trigger capture sooner. Generic apps use a lower-cost fallback cadence.
+                if ApplicationRegistry.isBrowser(bid) || registry.parser(for: bid) != nil { return 30 }
+                return 60
+            },
             isCapturable: { [registry] bid in
                 // Capture-by-default: every app is capturable EXCEPT sensitive ones (System
                 // Settings, password managers, keychain, banking). Browsers and registered
@@ -439,6 +486,20 @@ final class AppWiring {
         }
         RunLoop.main.add(t, forMode: .common)
         pipelineTimer = t
+
+        // Minimi-style display summaries are independent from the opt-in Activity timeline.
+        // A short settle window in the repository prevents summarizing every keystroke.
+        let summaryTimer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
+            Task {
+                guard let self else { return }
+                await self.captureDisplaySummarizer.summarizeDue(nowMs: epochNowMs())
+            }
+        }
+        RunLoop.main.add(summaryTimer, forMode: .common)
+        captureSummaryTimer = summaryTimer
+        Task {
+            await captureDisplaySummarizer.summarizeDue(nowMs: epochNowMs())
+        }
 
         // Setup hourly background agent scheduler
         setupAgentBackgroundScheduler()
@@ -643,7 +704,8 @@ final class AppWiring {
         let gen = focusGeneration
 
         // Chromium browsers and Slack need retry-shortly for post-kick empty trees (spec §10).
-        let needsRetry = Browser(rawValue: app.bundleID)?.isChromium == true || app.bundleID == ParserRegistry.slackBundleID
+        let needsRetry = ApplicationRegistry.needsAccessibilityWarmup(app.bundleID)
+            || app.bundleID == ParserRegistry.slackBundleID
         let attemptsLeft = needsRetry ? 3 : 1
         attemptCapture(
             app: app, pid: pid, attemptsLeft: attemptsLeft,
@@ -713,7 +775,15 @@ final class AppWiring {
                 // Normalize the URL into a stable thread key so volatile URL state (map coords,
                 // tracking params, doc tabs) doesn't fracture one page into many threads.
                 let key = URLKeyNormalizer.normalize(cap.url)
-                parsed = ParsedCapture(sourceApp: "Web", sourceKey: key, sourceTitle: cap.title, content: cap.content)
+                parsed = ParsedCapture(
+                    sourceApp: "Web",
+                    sourceKey: key,
+                    sourceTitle: cap.title,
+                    content: cap.content,
+                    contentKind: .webpage,
+                    accumulationPolicy: .rollingText,
+                    offscreenPolicy: .accessibilityScroll(maxSteps: 3)
+                )
             } else {
                 // Non-browsers: dispatch through CaptureDispatch
                 switch CaptureDispatch.parseDetailed(window: window, app: appInfo, registry: registry) {
@@ -778,10 +848,14 @@ final class AppWiring {
                 break
             }
             let nowMs = epochNowMs()
-            let result = try store.commitCapture(
-                CaptureInput(sourceApp: parsed.sourceApp, sourceKey: cleanKey,
-                            sourceTitle: parsed.sourceTitle, content: parsed.content),
-                nowMs: nowMs)
+            let wasTruncated = parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil
+            let envelope = parsed.envelope(
+                cleanSourceKey: cleanKey,
+                parserID: parserName,
+                trigger: trigger,
+                truncated: wasTruncated
+            )
+            let result = try store.commitCapture(envelope, nowMs: nowMs)
 
             // After normal memory capture commits, record activity evidence ONLY if generation matches AND committed (not deduplicated)
             let eligible = isActivityEligible(bundleID: appInfo.bundleID)
@@ -812,7 +886,7 @@ final class AppWiring {
                     outcome: .captured(
                         versionID: versionID,
                         characterCount: parsed.content.count,
-                        truncated: parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil
+                        truncated: wasTruncated
                     ),
                     startedAtMs: startedAtMs
                 )
@@ -823,7 +897,7 @@ final class AppWiring {
                     app: appInfo, trigger: trigger, parser: parserName,
                     outcome: .deduplicated(
                         characterCount: parsed.content.count,
-                        truncated: parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil
+                        truncated: wasTruncated
                     ),
                     startedAtMs: startedAtMs
                 )

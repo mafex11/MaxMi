@@ -3,27 +3,36 @@ import SwiftUI
 public struct ActivityView: View {
     @Bindable var viewModel: ActivityViewModel
     @Bindable var actionItemsViewModel: ActionItemsViewModel
+    @Bindable var recentCapturesViewModel: RecentCapturesViewModel
     @State private var expandedRowId: String?
     @State private var selectedTab = 0
     @State private var hoveredRowId: String?
 
-    public init(viewModel: ActivityViewModel, actionItemsViewModel: ActionItemsViewModel) {
+    public init(
+        viewModel: ActivityViewModel,
+        actionItemsViewModel: ActionItemsViewModel,
+        recentCapturesViewModel: RecentCapturesViewModel
+    ) {
         self.viewModel = viewModel
         self.actionItemsViewModel = actionItemsViewModel
+        self.recentCapturesViewModel = recentCapturesViewModel
     }
 
     public var body: some View {
         VStack(spacing: Theme.spacing0) {
-            // Segmented control: Activity / Action Items
+            // Local captures are always available. AI Activity remains an opt-in view.
             Picker("", selection: $selectedTab) {
-                Text("Activity").tag(0)
-                Text("Action Items").tag(1)
+                Text("Captures").tag(0)
+                Text("Activity").tag(1)
+                Text("Actions").tag(2)
             }
             .pickerStyle(.segmented)
             .padding(Theme.spacing2)
             .animation(Theme.spring, value: selectedTab)
 
             if selectedTab == 0 {
+                RecentCapturesView(viewModel: recentCapturesViewModel)
+            } else if selectedTab == 1 {
                 activityTimeline
             } else {
                 ActionItemsView(viewModel: actionItemsViewModel)
@@ -144,11 +153,11 @@ public struct ActivityView: View {
                 .font(.system(size: Theme.iconSizeLarge))
                 .foregroundColor(Theme.secondaryText)
 
-            Text("Nothing captured yet")
+            Text("No synthesized activity yet")
                 .font(.title3)
                 .foregroundColor(Theme.text)
 
-            Text("Activity will appear here as you use your Mac")
+            Text("Activity Synthesis is opt-in under Activity Privacy")
                 .font(.caption)
                 .foregroundColor(Theme.secondaryText)
                 .multilineTextAlignment(.center)

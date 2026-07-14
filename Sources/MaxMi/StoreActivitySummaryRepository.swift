@@ -5,6 +5,7 @@ import MaxMiActivity
 
 struct StoreActivitySummaryRepository: ActivitySummaryRepository, @unchecked Sendable {
     let store: Store
+    let modelID: String
 
     func sessionsNeedingSummary(nowMs: EpochMs) async -> [PendingSession] {
         do {
@@ -30,7 +31,7 @@ struct StoreActivitySummaryRepository: ActivitySummaryRepository, @unchecked Sen
                 sessionID,
                 summary: summary,
                 expectedSourceHash: expectedSourceHash,
-                modelID: "gemini-2.5-flash-lite",
+                modelID: modelID,
                 promptVersion: "v1",
                 nowMs: nowMs
             )

@@ -205,14 +205,19 @@ private final class ClickHandler: NSObject {
     }
 
     @objc func handleClick() {
-        guard let event = NSApp.currentEvent else { return }
+        // Accessibility/API-driven presses may not carry a mouse event. Treat those as
+        // the primary action so the menu item remains keyboard/automation accessible.
+        guard let event = NSApp.currentEvent else {
+            onLeftClick()
+            return
+        }
         switch event.type {
         case .leftMouseUp:
             onLeftClick()
         case .rightMouseUp:
             onRightClick()
         default:
-            break
+            onLeftClick()
         }
     }
 }
