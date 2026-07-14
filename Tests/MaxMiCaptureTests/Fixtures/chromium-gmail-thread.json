@@ -1,0 +1,9 @@
+{
+  "role":"AXWindow","value":null,"title":"Project update - Gmail","url":null,"frame":{"x":0,"y":0,"width":1200,"height":800},"focused":false,"children":[
+    {"role":"AXWebArea","value":null,"title":"Project update - Gmail","url":"https://mail.google.com/mail/u/0/#inbox/THREAD123","frame":{"x":0,"y":40,"width":1200,"height":760},"focused":false,"children":[
+      {"role":"AXHeading","value":"Project update","title":null,"url":null,"frame":{"x":250,"y":90,"width":500,"height":30},"focused":false,"children":[]},
+      {"role":"AXStaticText","value":"Taylor","title":null,"url":null,"frame":{"x":250,"y":140,"width":160,"height":20},"focused":false,"children":[]},
+      {"role":"AXStaticText","value":"The first milestone is ready for review.","title":null,"url":null,"frame":{"x":250,"y":180,"width":600,"height":20},"focused":false,"children":[]}
+    ]}
+  ]
+}

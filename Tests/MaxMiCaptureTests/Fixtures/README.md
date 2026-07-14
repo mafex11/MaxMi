@@ -5,6 +5,8 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | Fixture | Source evidence | Expected route |
 |---|---|---|
 | `cursor-editor.json` | Cursor 3.11.19, live-verified 2026-07-14; editor exposed as `AXTextArea` | `GenericAXParser`, document/rollingText |
+| `chromium-gmail-thread.json` | Sanitized Chromium Gmail thread shape | email web profile |
+| `gecko-slack-chat.json` | Sanitized Gecko Slack message-row shape | sender/message boundaries |
 | `chrome-article.json` | Chromium article shape | `BrowserTabExtractor` |
 | `safari-domain-only.json` | Safari address fallback shape | `BrowserTabExtractor` |
 | `slack-window.json` | Native Slack message-row shape | `SlackParser` |

@@ -456,6 +456,7 @@ final class AppWiring {
                 // parsers always pass; everything else rides the generic fallback unless it's
                 // on the sensitive-app denylist. (Was an allowlist — too narrow, missed Cursor/etc.)
                 if ApplicationRegistry.isExcludedByDefault(bid) { return false }
+                if ApplicationRegistry.isUnsupportedBrowserLike(bid) { return false }
                 if ApplicationRegistry.isBrowser(bid) || registry.parser(for: bid) != nil { return true }
                 return !Denylist.isSensitiveApp(bid)
             },
@@ -761,29 +762,24 @@ final class AppWiring {
 
         do {
             let parsed: ParsedCapture?
+            var effectiveParserName = parserName
+            var browserTruncated = false
 
-            // Browsers: preserve exact behavior using BrowserTabExtractor
-            if Browser(rawValue: app.bundleID) != nil {
-                let cap = try BrowserTabExtractor.extract(window: window, windowTitle: title)
-                guard !Denylist.isBlockedWebURL(cap.url) else {
+            // Browsers: engine-aware URL extraction followed by semantic web-app routing.
+            if let browser = ApplicationRegistry.browser(for: app.bundleID) {
+                let result = try BrowserCapturePipeline.parse(
+                    window: window, windowTitle: title, browser: browser
+                )
+                effectiveParserName = result.parserID
+                browserTruncated = result.truncated
+                guard !Denylist.isBlockedWebURL(result.url) else {
                     recordCaptureHealth(
-                        app: appInfo, trigger: trigger, parser: parserName,
+                        app: appInfo, trigger: trigger, parser: effectiveParserName,
                         outcome: .skipped(.blockedURL), startedAtMs: startedAtMs
                     )
                     return
                 }
-                // Normalize the URL into a stable thread key so volatile URL state (map coords,
-                // tracking params, doc tabs) doesn't fracture one page into many threads.
-                let key = URLKeyNormalizer.normalize(cap.url)
-                parsed = ParsedCapture(
-                    sourceApp: "Web",
-                    sourceKey: key,
-                    sourceTitle: cap.title,
-                    content: cap.content,
-                    contentKind: .webpage,
-                    accumulationPolicy: .rollingText,
-                    offscreenPolicy: .accessibilityScroll(maxSteps: 3)
-                )
+                parsed = result.capture
             } else {
                 // Non-browsers: dispatch through CaptureDispatch
                 switch CaptureDispatch.parseDetailed(window: window, app: appInfo, registry: registry) {
@@ -826,7 +822,7 @@ final class AppWiring {
             } catch {
                 NSLog("MaxMi: pausedThreads read failed, skipping capture: \(error)")
                 recordCaptureHealth(
-                    app: appInfo, trigger: trigger, parser: parserName,
+                    app: appInfo, trigger: trigger, parser: effectiveParserName,
                     outcome: .failed(.threadPauseReadFailed), startedAtMs: startedAtMs
                 )
                 return
@@ -834,13 +830,13 @@ final class AppWiring {
             switch CaptureDispatch.decision(parsed: parsed, cleanKey: cleanKey, pausedThreads: pausedThreads) {
             case .blocked:
                 recordCaptureHealth(
-                    app: appInfo, trigger: trigger, parser: parserName,
+                    app: appInfo, trigger: trigger, parser: effectiveParserName,
                     outcome: .skipped(.blockedURL), startedAtMs: startedAtMs
                 )
                 return
             case .paused:
                 recordCaptureHealth(
-                    app: appInfo, trigger: trigger, parser: parserName,
+                    app: appInfo, trigger: trigger, parser: effectiveParserName,
                     outcome: .skipped(.pausedThread), startedAtMs: startedAtMs
                 )
                 return
@@ -848,10 +844,11 @@ final class AppWiring {
                 break
             }
             let nowMs = epochNowMs()
-            let wasTruncated = parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil
+            let wasTruncated = browserTruncated
+                || (parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil)
             let envelope = parsed.envelope(
                 cleanSourceKey: cleanKey,
-                parserID: parserName,
+                parserID: effectiveParserName,
                 trigger: trigger,
                 truncated: wasTruncated
             )
@@ -882,7 +879,7 @@ final class AppWiring {
                 menuBar.captureCount = captureCount
                 lastSourceKey = cleanKey
                 recordCaptureHealth(
-                    app: appInfo, trigger: trigger, parser: parserName,
+                    app: appInfo, trigger: trigger, parser: effectiveParserName,
                     outcome: .captured(
                         versionID: versionID,
                         characterCount: parsed.content.count,
@@ -894,7 +891,7 @@ final class AppWiring {
                 // Update lastSourceKey even on dedup so "Pause current thread" targets the right thread.
                 lastSourceKey = cleanKey
                 recordCaptureHealth(
-                    app: appInfo, trigger: trigger, parser: parserName,
+                    app: appInfo, trigger: trigger, parser: effectiveParserName,
                     outcome: .deduplicated(
                         characterCount: parsed.content.count,
                         truncated: wasTruncated
@@ -907,7 +904,8 @@ final class AppWiring {
                 app: appInfo, trigger: trigger, parser: parserName,
                 outcome: .skipped(.addressFieldFocused), startedAtMs: startedAtMs
             )
-        } catch ExtractionError.emptyContent, ExtractionError.noWebArea, ExtractionError.noURL {
+        } catch ExtractionError.emptyContent, ExtractionError.noWebArea,
+                ExtractionError.noURL, ExtractionError.invalidURL {
             retryOrGiveUp(
                 app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
                 captureGeneration: captureGeneration, trigger: trigger,
@@ -942,9 +940,10 @@ final class AppWiring {
     }
 
     private func captureParserName(for bundleID: String) -> String {
-        ApplicationRegistry.isBrowser(bundleID)
-            ? "BrowserTabExtractor"
-            : registry.parserName(for: bundleID)
+        if let browser = ApplicationRegistry.browser(for: bundleID) {
+            return "BrowserWeb.v2/\(browser.browserEngine?.rawValue ?? "unknown")"
+        }
+        return registry.parserName(for: bundleID)
     }
 
     private func recordCaptureHealth(
