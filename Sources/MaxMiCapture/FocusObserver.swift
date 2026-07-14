@@ -23,6 +23,7 @@ public struct Browser: RawRepresentable, Sendable, Equatable {
 public final class FocusObserver {
     let debounceMs: Int
     let recaptureIntervalSec: Double
+    let recaptureIntervalForApp: @Sendable (String) -> Double
     let isCapturable: @Sendable (String) -> Bool
     let onCapture: @MainActor (AppInfo, pid_t, CaptureTrigger) -> Void
     public var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?
@@ -36,10 +37,12 @@ public final class FocusObserver {
     var appName: String = ""
 
     public init(debounceMs: Int = 1_000, recaptureIntervalSec: Double = 45,
+                recaptureIntervalForApp: (@Sendable (String) -> Double)? = nil,
                 isCapturable: @escaping @Sendable (String) -> Bool,
                 onCapture: @escaping @MainActor (AppInfo, pid_t, CaptureTrigger) -> Void) {
         self.debounceMs = debounceMs
         self.recaptureIntervalSec = recaptureIntervalSec
+        self.recaptureIntervalForApp = recaptureIntervalForApp ?? { _ in recaptureIntervalSec }
         self.isCapturable = isCapturable
         self.onCapture = onCapture
     }
@@ -86,12 +89,13 @@ public final class FocusObserver {
         detachAXObserver()
         current = (bundleID: bid, pid: newPid)
         appName = newAppName
-        if let browser = Browser(rawValue: bid), browser.isChromium {
+        if ApplicationRegistry.needsAccessibilityWarmup(bid) {
             ChromiumKick.apply(pid: newPid)
         }
         attachAXObserver(pid: newPid)
         recaptureTimer?.invalidate()
-        recaptureTimer = Timer.scheduledTimer(withTimeInterval: recaptureIntervalSec, repeats: true) { [weak self] _ in
+        let interval = max(10, recaptureIntervalForApp(bid))
+        recaptureTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.scheduleCapture(trigger: .periodic) }
         }
         scheduleCapture(trigger: .appActivated)

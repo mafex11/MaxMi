@@ -130,6 +130,38 @@ final class MemoryQueriesTests: XCTestCase {
         XCTAssertTrue(r.text.contains("hasn't captured anything yet"))
     }
 
+    func testGetLatestContextReturnsRawMaterialWithoutEmbedding() throws {
+        _ = try store.commitCapture(
+            CaptureEnvelope(
+                sourceApp: "Slack",
+                sourceKey: "slack:workspace/general",
+                sourceTitle: "general",
+                content: "Alice: ship the parser",
+                contentKind: .conversation,
+                parserID: "SlackParser",
+                parserVersion: 2,
+                accumulationPolicy: .appendItems,
+                offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+                trigger: .appActivated,
+                truncated: false
+            ),
+            nowMs: t0
+        )
+        let relay = MockRelay(.failure(RelayError.notConfigured))
+        let result = queries(relay).getLatestContext(source: "Slack", limit: nil)
+        XCTAssertFalse(result.isError)
+        XCTAssertTrue(result.text.contains("Alice: ship the parser"))
+        XCTAssertTrue(result.text.contains("SlackParser v2"))
+        XCTAssertEqual(relay.embedCalls, 0)
+    }
+
+    func testGetLatestContextEmptyIsFriendly() {
+        let result = queries(MockRelay(.failure(RelayError.notConfigured)))
+            .getLatestContext(source: nil, limit: nil)
+        XCTAssertFalse(result.isError)
+        XCTAssertTrue(result.text.contains("No raw context matched"))
+    }
+
     func testMeetingMemoryEmptyListReturnsStub() async {
         let q = queries(MockRelay(.success(unit(1))))
         let r = await q.meetingMemory(action: "list", query: nil)

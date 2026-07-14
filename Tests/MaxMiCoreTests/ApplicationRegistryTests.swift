@@ -45,4 +45,13 @@ final class ApplicationRegistryTests: XCTestCase {
             .nativeAudio
         )
     }
+
+    func testElectronEditorsUseWarmupAndDocumentCaptureProfile() {
+        let cursor = ApplicationRegistry.descriptor(for: "com.todesktop.230313mzl4w4u92")
+        XCTAssertEqual(cursor?.kind, .document)
+        XCTAssertEqual(cursor?.captureStrategy, .genericAX)
+        XCTAssertTrue(ApplicationRegistry.needsAccessibilityWarmup("com.todesktop.230313mzl4w4u92"))
+        XCTAssertTrue(ApplicationRegistry.needsAccessibilityWarmup("com.google.Chrome"))
+        XCTAssertFalse(ApplicationRegistry.needsAccessibilityWarmup("com.apple.dt.Xcode"))
+    }
 }

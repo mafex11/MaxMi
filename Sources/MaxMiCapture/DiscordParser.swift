@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Dedicated parser for the native Discord app (Electron; needs AXManualAccessibility, set by AXReader).
 /// Live-probed shape: title is "#<channel> | <server> - Discord"; messages are AXStaticText in the
@@ -31,7 +32,10 @@ public struct DiscordParser: SourceParser {
             sourceApp: "Discord",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: content
+            content: content,
+            contentKind: .conversation,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3)
         )
     }
 

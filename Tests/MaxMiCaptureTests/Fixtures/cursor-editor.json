@@ -1,0 +1,29 @@
+{
+  "role": "AXWindow",
+  "value": null,
+  "title": "SampleProject — CaptureEnvelope.swift",
+  "url": null,
+  "frame": {"x": 0, "y": 0, "width": 1440, "height": 900},
+  "focused": false,
+  "children": [
+    {
+      "role": "AXGroup",
+      "value": null,
+      "title": "Editor",
+      "url": null,
+      "frame": {"x": 240, "y": 80, "width": 1200, "height": 820},
+      "focused": false,
+      "children": [
+        {
+          "role": "AXTextArea",
+          "value": "struct CaptureEnvelope {\n    let contentKind: String\n    let parserVersion: Int\n}",
+          "title": "CaptureEnvelope.swift",
+          "url": null,
+          "frame": {"x": 260, "y": 100, "width": 1160, "height": 760},
+          "focused": true,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

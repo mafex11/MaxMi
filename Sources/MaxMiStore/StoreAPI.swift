@@ -11,6 +11,10 @@ public struct CaptureInput: Sendable {
         self.sourceApp = sourceApp; self.sourceKey = sourceKey
         self.sourceTitle = sourceTitle; self.content = content
     }
+
+    var legacyEnvelope: CaptureEnvelope {
+        .legacy(sourceApp: sourceApp, sourceKey: sourceKey, sourceTitle: sourceTitle, content: content)
+    }
 }
 
 public enum CommitResult: Equatable, Sendable {
@@ -58,58 +62,152 @@ public final class Store {
     }
 
     public func commitCapture(_ input: CaptureInput, nowMs: EpochMs) throws -> CommitResult {
-        let hash = ContentHash.sha256Hex(input.content)
+        try commitCapture(input.legacyEnvelope, nowMs: nowMs)
+    }
+
+    public func commitCapture(_ envelope: CaptureEnvelope, nowMs: EpochMs) throws -> CommitResult {
+        let incomingHash = ContentHash.sha256Hex(envelope.content)
         let bucket = HourBucket.bucket(forMs: nowMs)
-        let words = input.content.split(whereSeparator: \.isWhitespace).count
-        let storedContent = try cipher.encrypt(input.content)
+        let metadata = try captureMetadataJSON(envelope)
 
         return try db.dbQueue.write { d in
-            // 1. Upsert thread; dedup on unchanged tree hash.
+            // 1. Upsert the stable thread and retain the hash of the actual observed tree.
             let existing = try Row.fetchOne(d,
                 sql: "SELECT id, last_tree_hash FROM threads WHERE source_app=? AND source_key=?",
-                arguments: [input.sourceApp, input.sourceKey])
+                arguments: [envelope.sourceApp, envelope.sourceKey])
             let threadID: String
             if let existing {
-                if existing["last_tree_hash"] as String? == hash { return .deduplicated }
                 threadID = existing["id"]
                 try d.execute(sql: "UPDATE threads SET source_title=?, last_tree_hash=?, updated_at=? WHERE id=?",
-                              arguments: [input.sourceTitle, hash, nowMs, threadID])
+                              arguments: [envelope.sourceTitle, incomingHash, nowMs, threadID])
             } else {
                 threadID = Ident.uuidv7(nowMs: nowMs)
                 try d.execute(sql: """
                     INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash, created_at, updated_at)
                     VALUES (?,?,?,?,?,?,?)
-                    """, arguments: [threadID, input.sourceApp, input.sourceKey, input.sourceTitle, hash, nowMs, nowMs])
+                    """, arguments: [threadID, envelope.sourceApp, envelope.sourceKey,
+                                      envelope.sourceTitle, incomingHash, nowMs, nowMs])
             }
 
-            // Per-item fingerprint dedup: if no line is novel for this thread, skip (spec §3b).
+            // 2. Accumulate the raw latest context independently from semantic versions.
+            let previousContext = try Row.fetchOne(d, sql:
+                "SELECT content_ciphertext, content_hash FROM latest_contexts WHERE thread_id=?",
+                arguments: [threadID])
+            let previousStored = previousContext?["content_ciphertext"] as String?
+            let previousContextHash = previousContext?["content_hash"] as String?
+            let previous = previousStored.flatMap { try? cipher.decrypt($0) }
+            let accumulated = CaptureAccumulator.merge(
+                previous: previous,
+                incoming: envelope.content,
+                policy: envelope.accumulationPolicy,
+                maxCharacters: envelope.offscreenPolicy.maxCharacters
+            )
+            let accumulatedHash = ContentHash.sha256Hex(accumulated.content)
+            let accumulatedStored = try cipher.encrypt(accumulated.content)
+            let contextTruncated = envelope.truncated
+                || accumulated.content.count >= envelope.offscreenPolicy.maxCharacters
+            try d.execute(sql: """
+                INSERT INTO latest_contexts (
+                  thread_id, version_id, content_ciphertext, content_hash, content_kind,
+                  parser_id, parser_version, accumulation_policy, offscreen_mode,
+                  offscreen_max_steps, offscreen_max_chars, trigger, captured_at,
+                  character_count, truncated
+                ) VALUES (?,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(thread_id) DO UPDATE SET
+                  content_ciphertext=excluded.content_ciphertext,
+                  content_hash=excluded.content_hash,
+                  content_kind=excluded.content_kind,
+                  parser_id=excluded.parser_id,
+                  parser_version=excluded.parser_version,
+                  accumulation_policy=excluded.accumulation_policy,
+                  offscreen_mode=excluded.offscreen_mode,
+                  offscreen_max_steps=excluded.offscreen_max_steps,
+                  offscreen_max_chars=excluded.offscreen_max_chars,
+                  trigger=excluded.trigger,
+                  captured_at=excluded.captured_at,
+                  character_count=excluded.character_count,
+                  truncated=excluded.truncated
+                """, arguments: [
+                    threadID, accumulatedStored, accumulatedHash, envelope.contentKind.rawValue,
+                    envelope.parserID, envelope.parserVersion, envelope.accumulationPolicy.rawValue,
+                    envelope.offscreenPolicy.mode.rawValue, envelope.offscreenPolicy.maxSteps,
+                    envelope.offscreenPolicy.maxCharacters, envelope.trigger.rawValue, nowMs,
+                    accumulated.content.count, contextTruncated ? 1 : 0,
+                ])
+            if previousContextHash != nil, previousContextHash != accumulatedHash {
+                try d.execute(sql: """
+                    UPDATE latest_contexts
+                    SET summary_status='pending', summary_attempts=0, summary_next_attempt_at=NULL
+                    WHERE thread_id=?
+                    """, arguments: [threadID])
+            }
+
+            // An identical observed tree refreshes latest-context recency but creates no work.
+            if existing?["last_tree_hash"] as String? == incomingHash { return .deduplicated }
+
+            // 3. Per-item fingerprint dedup: if no line is novel for this thread, skip.
             // Complements last_tree_hash (which catches identical whole trees) by catching
             // recaptures where only order/chrome changed but no new message appeared.
-            if !recordNovelFingerprints(input.content, threadID: threadID, nowMs: nowMs, d) {
+            if !recordNovelFingerprints(envelope.content, threadID: threadID, nowMs: nowMs, d) {
                 return .deduplicated
             }
 
-            // 2. Freeze-then-create: seal mutable versions from past hours.
+            let versionContent = accumulated.content
+            let versionHash = ContentHash.sha256Hex(versionContent)
+            let words = versionContent.split(whereSeparator: \.isWhitespace).count
+            let storedContent = try cipher.encrypt(versionContent)
+
+            // 4. Freeze-then-create: seal mutable versions from past hours.
             try d.execute(sql: "UPDATE versions SET is_frozen=1 WHERE thread_id=? AND is_frozen=0 AND hour_bucket<>?",
                           arguments: [threadID, bucket])
 
-            // 3. Upsert this hour's version (replace content, reset pending, un-freeze if clock stepped back).
+            // 5. Upsert this hour's accumulated version and attach parser metadata.
+            let versionID: String
             if let vid = try String.fetchOne(d, sql: "SELECT id FROM versions WHERE thread_id=? AND hour_bucket=?",
                                              arguments: [threadID, bucket]) {
                 try d.execute(sql: """
                     UPDATE versions SET content=?, content_hash=?, word_count=?, committed_at=?,
-                                        extract_status='pending', is_frozen=0 WHERE id=?
-                    """, arguments: [storedContent, hash, words, nowMs, vid])
-                return .committed(versionID: vid, contentHash: hash)
+                                        extract_status='pending', is_frozen=0, metadata=? WHERE id=?
+                    """, arguments: [storedContent, versionHash, words, nowMs, metadata, vid])
+                versionID = vid
             } else {
                 let vid = Ident.uuidv7(nowMs: nowMs)
                 try d.execute(sql: """
-                    INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash, word_count, is_frozen, committed_at, extract_status)
-                    VALUES (?,?,?,?,?,?,0,?,'pending')
-                    """, arguments: [vid, threadID, bucket, storedContent, hash, words, nowMs])
-                return .committed(versionID: vid, contentHash: hash)
+                    INSERT INTO versions (
+                      id, thread_id, hour_bucket, content, content_hash, word_count,
+                      is_frozen, committed_at, extract_status, metadata
+                    ) VALUES (?,?,?,?,?,?,0,?,'pending',?)
+                    """, arguments: [vid, threadID, bucket, storedContent, versionHash, words, nowMs, metadata])
+                versionID = vid
             }
+            try d.execute(sql: "UPDATE latest_contexts SET version_id=? WHERE thread_id=?",
+                          arguments: [versionID, threadID])
+            return .committed(versionID: versionID, contentHash: versionHash)
         }
+    }
+
+    private func captureMetadataJSON(_ envelope: CaptureEnvelope) throws -> String {
+        struct Metadata: Codable {
+            let schemaVersion: Int
+            let contentKind: CaptureContentKind
+            let parserID: String
+            let parserVersion: Int
+            let accumulationPolicy: CaptureAccumulationPolicy
+            let offscreenPolicy: OffscreenCapturePolicy
+            let trigger: CaptureTrigger
+            let truncated: Bool
+        }
+        let metadata = Metadata(
+            schemaVersion: 1,
+            contentKind: envelope.contentKind,
+            parserID: envelope.parserID,
+            parserVersion: envelope.parserVersion,
+            accumulationPolicy: envelope.accumulationPolicy,
+            offscreenPolicy: envelope.offscreenPolicy,
+            trigger: envelope.trigger,
+            truncated: envelope.truncated
+        )
+        return String(decoding: try JSONEncoder().encode(metadata), as: UTF8.self)
     }
 }
 

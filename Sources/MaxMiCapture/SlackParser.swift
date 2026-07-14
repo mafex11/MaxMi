@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Dedicated parser for the native Slack app. Window reached by the caller via
 /// AXReader's locator (Slack leaves AXWindows empty). Content = AXRow messages
@@ -27,7 +28,10 @@ public struct SlackParser: SourceParser {
             sourceApp: "Slack",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: content
+            content: content,
+            contentKind: .conversation,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3)
         )
     }
 

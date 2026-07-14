@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 public struct AppInfo: Sendable, Equatable {
     public let bundleID: String
@@ -14,9 +15,48 @@ public struct ParsedCapture: Sendable, Equatable {
     public let sourceKey: String
     public let sourceTitle: String?
     public let content: String
-    public init(sourceApp: String, sourceKey: String, sourceTitle: String?, content: String) {
+    public let contentKind: CaptureContentKind
+    public let parserVersion: Int
+    public let accumulationPolicy: CaptureAccumulationPolicy
+    public let offscreenPolicy: OffscreenCapturePolicy
+
+    public init(
+        sourceApp: String,
+        sourceKey: String,
+        sourceTitle: String?,
+        content: String,
+        contentKind: CaptureContentKind = .generic,
+        parserVersion: Int = 1,
+        accumulationPolicy: CaptureAccumulationPolicy = .rollingText,
+        offscreenPolicy: OffscreenCapturePolicy = .visibleOnly()
+    ) {
         self.sourceApp = sourceApp; self.sourceKey = sourceKey
         self.sourceTitle = sourceTitle; self.content = content
+        self.contentKind = contentKind
+        self.parserVersion = max(1, parserVersion)
+        self.accumulationPolicy = accumulationPolicy
+        self.offscreenPolicy = offscreenPolicy
+    }
+
+    public func envelope(
+        cleanSourceKey: String,
+        parserID: String,
+        trigger: CaptureTrigger,
+        truncated: Bool
+    ) -> CaptureEnvelope {
+        CaptureEnvelope(
+            sourceApp: sourceApp,
+            sourceKey: cleanSourceKey,
+            sourceTitle: sourceTitle,
+            content: content,
+            contentKind: contentKind,
+            parserID: parserID,
+            parserVersion: parserVersion,
+            accumulationPolicy: accumulationPolicy,
+            offscreenPolicy: offscreenPolicy,
+            trigger: trigger,
+            truncated: truncated
+        )
     }
 }
 

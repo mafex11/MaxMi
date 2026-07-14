@@ -51,6 +51,7 @@ public struct ApplicationDescriptor: Sendable, Equatable {
     public let defaultPolicy: DefaultCapturePolicy
     public let browserEngine: BrowserEngine?
     public let meetingDetection: MeetingDetectionPolicy
+    public let needsAccessibilityWarmup: Bool
 
     public init(
         bundleID: String,
@@ -59,7 +60,8 @@ public struct ApplicationDescriptor: Sendable, Equatable {
         captureStrategy: CaptureStrategy,
         defaultPolicy: DefaultCapturePolicy = .allow,
         browserEngine: BrowserEngine? = nil,
-        meetingDetection: MeetingDetectionPolicy = .none
+        meetingDetection: MeetingDetectionPolicy = .none,
+        needsAccessibilityWarmup: Bool = false
     ) {
         self.bundleID = bundleID
         self.displayName = displayName
@@ -68,6 +70,7 @@ public struct ApplicationDescriptor: Sendable, Equatable {
         self.defaultPolicy = defaultPolicy
         self.browserEngine = browserEngine
         self.meetingDetection = meetingDetection
+        self.needsAccessibilityWarmup = needsAccessibilityWarmup
     }
 }
 
@@ -99,6 +102,29 @@ public enum ApplicationRegistry {
         meeting("net.whatsapp.WhatsApp", "WhatsApp", kind: .chat),
     ]
 
+    public static let highValueApps: [ApplicationDescriptor] = [
+        ApplicationDescriptor(
+            bundleID: "com.todesktop.230313mzl4w4u92",
+            displayName: "Cursor",
+            kind: .document,
+            captureStrategy: .genericAX,
+            needsAccessibilityWarmup: true
+        ),
+        ApplicationDescriptor(
+            bundleID: "com.microsoft.VSCode",
+            displayName: "Visual Studio Code",
+            kind: .document,
+            captureStrategy: .genericAX,
+            needsAccessibilityWarmup: true
+        ),
+        ApplicationDescriptor(
+            bundleID: "com.apple.dt.Xcode",
+            displayName: "Xcode",
+            kind: .document,
+            captureStrategy: .genericAX
+        ),
+    ]
+
     /// Apps that should never enter generic capture without an explicit future override.
     /// This includes MaxMi itself and transient system/security surfaces observed as noise.
     public static let excludedOrSensitiveApps: [ApplicationDescriptor] = [
@@ -123,7 +149,7 @@ public enum ApplicationRegistry {
 
     private static let descriptorsByBundleID: [String: ApplicationDescriptor] = {
         Dictionary(
-            uniqueKeysWithValues: (browsers + nativeMeetingApps + excludedOrSensitiveApps)
+            uniqueKeysWithValues: (browsers + nativeMeetingApps + highValueApps + excludedOrSensitiveApps)
                 .map { ($0.bundleID, $0) }
         )
     }()
@@ -151,6 +177,10 @@ public enum ApplicationRegistry {
         defaultCapturePolicy(for: bundleID) != .allow
     }
 
+    public static func needsAccessibilityWarmup(_ bundleID: String) -> Bool {
+        descriptorsByBundleID[bundleID]?.needsAccessibilityWarmup == true
+    }
+
     private static func browser(
         _ bundleID: String,
         _ name: String,
@@ -162,7 +192,8 @@ public enum ApplicationRegistry {
             kind: .browser,
             captureStrategy: .browserAX,
             browserEngine: engine,
-            meetingDetection: .browserURLRequired
+            meetingDetection: .browserURLRequired,
+            needsAccessibilityWarmup: engine == .chromium
         )
     }
 
@@ -176,7 +207,10 @@ public enum ApplicationRegistry {
             displayName: name,
             kind: kind,
             captureStrategy: .nativeParser,
-            meetingDetection: .nativeAudio
+            meetingDetection: .nativeAudio,
+            needsAccessibilityWarmup: [
+                "com.microsoft.teams2", "com.tinyspeck.slackmacgap", "net.whatsapp.WhatsApp",
+            ].contains(bundleID)
         )
     }
 

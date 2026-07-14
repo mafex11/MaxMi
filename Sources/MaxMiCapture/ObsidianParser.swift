@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Native Obsidian app. Title "<note> - <vault> - Obsidian <ver>" -> obsidian:<vault>/<note>.
 public struct ObsidianParser: SourceParser {
@@ -7,7 +8,9 @@ public struct ObsidianParser: SourceParser {
         let body = DocumentExtraction.bodyText(in: window)
         guard !body.isEmpty else { return nil }
         return ParsedCapture(sourceApp: "Obsidian", sourceKey: key(fromTitle: app.windowTitle),
-                             sourceTitle: app.windowTitle, content: body)
+                             sourceTitle: app.windowTitle, content: body,
+                             contentKind: .document, accumulationPolicy: .rollingText,
+                             offscreenPolicy: .accessibilityScroll(maxSteps: 3))
     }
     func key(fromTitle title: String?) -> String {
         guard let title, !title.isEmpty else { return "obsidian:unknown" }

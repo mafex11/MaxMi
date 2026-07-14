@@ -12,10 +12,10 @@ final class ToolsTests: XCTestCase {
     func testDefinitionsExactNamesAndRequireds() throws {
         let defs = try makeTools().toolDefinitions
         XCTAssertEqual(defs.map { $0["name"] as? String },
-                       ["search_memory", "list_active_threads", "meeting_memory"])
+                       ["search_memory", "list_active_threads", "get_latest_context", "meeting_memory"])
         let search = defs[0]["inputSchema"] as? [String: Any]
         XCTAssertEqual(search?["required"] as? [String], ["query"])
-        let meeting = defs[2]["inputSchema"] as? [String: Any]
+        let meeting = defs[3]["inputSchema"] as? [String: Any]
         XCTAssertEqual(meeting?["required"] as? [String], ["action"])
     }
     func testDispatchUnknownToolIsError() async throws {

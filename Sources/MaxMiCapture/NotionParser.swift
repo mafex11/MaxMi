@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Native Notion app. Window title is the page name; body is AXTextArea/AXStaticText.
 public struct NotionParser: SourceParser {
@@ -8,6 +9,8 @@ public struct NotionParser: SourceParser {
         guard !body.isEmpty else { return nil }
         let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "untitled"
         return ParsedCapture(sourceApp: "Notion", sourceKey: "notion:\(docSlug(title))",
-                             sourceTitle: app.windowTitle, content: body)
+                             sourceTitle: app.windowTitle, content: body,
+                             contentKind: .document, accumulationPolicy: .rollingText,
+                             offscreenPolicy: .accessibilityScroll(maxSteps: 3))
     }
 }

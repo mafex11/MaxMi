@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Dedicated parser for Apple Mail.
 ///
@@ -28,7 +29,9 @@ public struct MailParser: SourceParser {
         guard !lines.isEmpty else { return nil }
         let content = String(lines.joined(separator: "\n").suffix(contentCap))
         return ParsedCapture(sourceApp: "Mail", sourceKey: "mail:inbox",
-                             sourceTitle: windowTitle, content: content)
+                             sourceTitle: windowTitle, content: content,
+                             contentKind: .email, accumulationPolicy: .rollingText,
+                             offscreenPolicy: .accessibilityScroll(maxSteps: 3))
     }
 
     /// Per-account inbox read. Avoids the unified "inbox" (which errors -1741 on some setups)

@@ -121,4 +121,25 @@ final class MigrationTests: XCTestCase {
             XCTAssertFalse(columns.contains("content"))
         }
     }
+    func testV7AddsLatestContextStore() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.read { d in
+            XCTAssertTrue(try d.tableExists("latest_contexts"))
+            let columns = try Row.fetchAll(d, sql: "PRAGMA table_info(latest_contexts)")
+                .map { $0["name"] as String }
+            XCTAssertTrue(columns.contains("content_ciphertext"))
+            XCTAssertTrue(columns.contains("parser_version"))
+            XCTAssertTrue(columns.contains("accumulation_policy"))
+        }
+    }
+    func testV8AddsEncryptedDisplaySummaryState() throws {
+        let db = try MaxMiDatabase.inMemory()
+        try db.dbQueue.read { d in
+            let columns = try Row.fetchAll(d, sql: "PRAGMA table_info(latest_contexts)")
+                .map { $0["name"] as String }
+            XCTAssertTrue(columns.contains("display_summary_ciphertext"))
+            XCTAssertTrue(columns.contains("summary_status"))
+            XCTAssertTrue(columns.contains("summary_source_hash"))
+        }
+    }
 }

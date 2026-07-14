@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Dedicated parser for terminal emulators (Warp, Apple Terminal, iTerm2).
 ///
@@ -22,7 +23,10 @@ public struct TerminalParser: SourceParser {
             sourceApp: app.name,                 // "Warp", "Terminal", "iTerm2"
             sourceKey: terminalKey(app: app, content: content),
             sourceTitle: app.windowTitle,
-            content: content
+            content: content,
+            contentKind: .terminal,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: .visibleOnly(maxCharacters: 64_000)
         )
     }
 

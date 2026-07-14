@@ -178,6 +178,68 @@ enum Migrations {
             CREATE INDEX idx_capture_health_app ON capture_health_events(app_bundle, at_ms DESC);
             """)
         }
+        m.registerMigration("v7") { db in
+            try db.execute(sql: """
+            CREATE TABLE latest_contexts (
+              thread_id            TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+              version_id           TEXT REFERENCES versions(id),
+              content_ciphertext   TEXT NOT NULL,
+              content_hash         TEXT NOT NULL,
+              content_kind         TEXT NOT NULL
+                CHECK(content_kind IN ('webpage','conversation','document','terminal','email','generic')),
+              parser_id            TEXT NOT NULL,
+              parser_version       INTEGER NOT NULL,
+              accumulation_policy  TEXT NOT NULL
+                CHECK(accumulation_policy IN ('replace','appendItems','rollingText')),
+              offscreen_mode       TEXT NOT NULL
+                CHECK(offscreen_mode IN ('visibleOnly','accessibilityScroll')),
+              offscreen_max_steps  INTEGER NOT NULL DEFAULT 0,
+              offscreen_max_chars  INTEGER NOT NULL DEFAULT 32000,
+              trigger              TEXT NOT NULL,
+              captured_at          INTEGER NOT NULL,
+              character_count      INTEGER NOT NULL DEFAULT 0,
+              truncated            INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_latest_contexts_recent ON latest_contexts(captured_at DESC, thread_id);
+
+            -- Preserve the most recent encrypted raw version for every existing thread.
+            -- Parser metadata cannot be inferred safely, so migrated rows are explicitly legacy.
+            INSERT INTO latest_contexts (
+              thread_id, version_id, content_ciphertext, content_hash, content_kind,
+              parser_id, parser_version, accumulation_policy, offscreen_mode,
+              offscreen_max_steps, offscreen_max_chars, trigger, captured_at,
+              character_count, truncated
+            )
+            SELECT v.thread_id, v.id, v.content, v.content_hash, 'generic',
+                   'legacy', 1, 'replace', 'visibleOnly', 0, 32000, 'unknown',
+                   v.committed_at, 0, 0
+            FROM versions v
+            WHERE v.id = (
+              SELECT newest.id FROM versions newest
+              WHERE newest.thread_id = v.thread_id
+              ORDER BY newest.committed_at DESC, newest.id DESC LIMIT 1
+            );
+            """)
+        }
+        m.registerMigration("v8") { db in
+            try db.execute(sql: """
+            ALTER TABLE latest_contexts ADD COLUMN display_summary_ciphertext TEXT;
+            ALTER TABLE latest_contexts ADD COLUMN summary_status TEXT NOT NULL DEFAULT 'pending'
+              CHECK(summary_status IN ('pending','completed','failed','skipped'));
+            ALTER TABLE latest_contexts ADD COLUMN summary_source_hash TEXT;
+            ALTER TABLE latest_contexts ADD COLUMN summary_attempts INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE latest_contexts ADD COLUMN summary_next_attempt_at INTEGER;
+            ALTER TABLE latest_contexts ADD COLUMN summary_model_id TEXT;
+            ALTER TABLE latest_contexts ADD COLUMN summary_prompt_version TEXT;
+            CREATE INDEX idx_latest_contexts_summary_due
+              ON latest_contexts(summary_status, summary_next_attempt_at, captured_at);
+
+            -- Avoid hundreds of model calls for imported history. New structured captures
+            -- and future content changes enter pending state normally.
+            UPDATE latest_contexts SET summary_status =
+              CASE WHEN parser_id='legacy' THEN 'skipped' ELSE 'pending' END;
+            """)
+        }
         return m
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Dedicated parser for Apple Messages (iMessage/SMS), bundle `com.apple.MobileSMS`.
 ///
@@ -19,7 +20,10 @@ public struct MessagesParser: SourceParser {
             sourceApp: "Messages",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: content
+            content: content,
+            contentKind: .conversation,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3)
         )
     }
 

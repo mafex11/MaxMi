@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 /// Apple Notes. Window title is the note title.
 public struct NotesParser: SourceParser {
@@ -8,6 +9,8 @@ public struct NotesParser: SourceParser {
         guard !body.isEmpty else { return nil }
         let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "untitled"
         return ParsedCapture(sourceApp: "Notes", sourceKey: "notes:\(docSlug(title))",
-                             sourceTitle: app.windowTitle, content: body)
+                             sourceTitle: app.windowTitle, content: body,
+                             contentKind: .document, accumulationPolicy: .rollingText,
+                             offscreenPolicy: .accessibilityScroll(maxSteps: 3))
     }
 }

@@ -14,6 +14,12 @@ public enum MaxMiToolsDefinitions {
              "inputSchema": ["type": "object",
                              "properties": ["limit": ["type": "number", "description": "Max threads (default 10, max 20)"]],
                              "required": [String]()]],
+            ["name": "get_latest_context",
+             "description": "Fetch freshness-ranked raw context separately from semantic facts. Optionally filter by app, title, or source.",
+             "inputSchema": ["type": "object",
+                             "properties": ["source": ["type": "string", "description": "Optional app/title/source filter"],
+                                            "limit": ["type": "number", "description": "Max contexts (default 3, max 5)"]],
+                             "required": [String]()]],
             ["name": "meeting_memory",
              "description": "Query captured meeting transcripts and summaries (list | search | get_context).",
              "inputSchema": ["type": "object",
@@ -41,6 +47,11 @@ public struct MaxMiTools: ToolProvider {
             return await queries.searchMemory(query: query, limit: intArg(arguments["limit"]))
         case "list_active_threads":
             return queries.listActiveThreads(limit: intArg(arguments["limit"]))
+        case "get_latest_context":
+            return queries.getLatestContext(
+                source: arguments["source"] as? String,
+                limit: intArg(arguments["limit"])
+            )
         case "meeting_memory":
             guard let action = arguments["action"] as? String,
                   ["list", "get_context", "search"].contains(action) else {
