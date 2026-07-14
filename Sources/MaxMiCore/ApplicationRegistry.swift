@@ -110,6 +110,7 @@ public enum ApplicationRegistry {
     public static let nativeMeetingApps: [ApplicationDescriptor] = [
         meeting("us.zoom.xos", "Zoom"),
         meeting("com.microsoft.teams2", "Microsoft Teams"),
+        meeting("com.microsoft.teams", "Microsoft Teams"),
         meeting("com.cisco.webexmeetingsapp", "Webex"),
         meeting("com.tinyspeck.slackmacgap", "Slack", kind: .chat),
         meeting("net.whatsapp.WhatsApp", "WhatsApp", kind: .chat),
@@ -136,6 +137,20 @@ public enum ApplicationRegistry {
             kind: .document,
             captureStrategy: .genericAX
         ),
+        native("com.apple.mail", "Mail", .email),
+        native("com.apple.iCal", "Calendar", .calendar),
+        native("com.flexibits.fantastical2.mac", "Fantastical", .calendar),
+        native("com.apple.reminders", "Reminders", .task),
+        native("com.microsoft.to-do-mac", "Microsoft To Do", .task, warmup: true),
+        native("com.todoist.mac.Todoist", "Todoist", .task, warmup: true),
+        native("com.omnigroup.OmniFocus3", "OmniFocus", .task),
+        native("com.omnigroup.OmniFocus4", "OmniFocus", .task),
+        native("com.toggl.toggldesktop", "Toggl", .task, warmup: true),
+        native("com.microsoft.Word", "Microsoft Word", .document),
+        native("com.apple.iWork.Pages", "Pages", .document),
+        native("com.microsoft.Outlook", "Outlook", .email, warmup: true),
+        native("com.readdle.smartemail-Mac", "Spark", .email),
+        native("com.readdle.SparkDesktop", "Spark", .email, warmup: true),
     ]
 
     /// Apps that should never enter generic capture without an explicit future override.
@@ -237,6 +252,21 @@ public enum ApplicationRegistry {
             needsAccessibilityWarmup: [
                 "com.microsoft.teams2", "com.tinyspeck.slackmacgap", "net.whatsapp.WhatsApp",
             ].contains(bundleID)
+        )
+    }
+
+    private static func native(
+        _ bundleID: String,
+        _ name: String,
+        _ kind: ApplicationKind,
+        warmup: Bool = false
+    ) -> ApplicationDescriptor {
+        ApplicationDescriptor(
+            bundleID: bundleID,
+            displayName: name,
+            kind: kind,
+            captureStrategy: .nativeParser,
+            needsAccessibilityWarmup: warmup
         )
     }
 

@@ -1,0 +1,8 @@
+{
+  "role":"AXWindow","value":null,"title":"Project brief — Pages","url":null,"frame":{"x":0,"y":0,"width":1200,"height":800},"focused":false,"children":[
+    {"role":"AXGroup","value":null,"title":null,"identifier":"document-editor","url":null,"frame":{"x":220,"y":60,"width":900,"height":700},"focused":false,"children":[
+      {"role":"AXHeading","value":"Project brief","title":null,"url":null,"frame":{"x":300,"y":100,"width":400,"height":40},"focused":false,"children":[]},
+      {"role":"AXTextArea","value":"Implementation notes\nThe native parser retains document identity across edits.","title":null,"url":null,"frame":{"x":300,"y":170,"width":650,"height":400},"focused":false,"children":[]}
+    ]}
+  ]
+}

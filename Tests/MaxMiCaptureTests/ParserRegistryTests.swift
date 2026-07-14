@@ -33,4 +33,17 @@ final class ParserRegistryTests: XCTestCase {
         XCTAssertTrue(registry.parser(for: "com.microsoft.teams2") is TeamsParser)
         XCTAssertTrue(registry.parser(for: "com.microsoft.teams") is TeamsParser)
     }
+    func testPhase3StructuredParsersRegistered() {
+        let registry = ParserRegistry()
+        XCTAssertTrue(registry.parser(for: "com.apple.iCal") is CalendarParser)
+        XCTAssertTrue(registry.parser(for: "com.flexibits.fantastical2.mac") is FantasticalParser)
+        XCTAssertTrue(registry.parser(for: "com.apple.reminders") is RemindersParser)
+        XCTAssertTrue(registry.parser(for: "com.microsoft.to-do-mac") is MicrosoftToDoParser)
+        XCTAssertTrue(registry.parser(for: "com.todoist.mac.Todoist") is TodoistParser)
+        XCTAssertTrue(registry.parser(for: "com.omnigroup.OmniFocus4") is OmniFocusParser)
+        XCTAssertTrue(registry.parser(for: "com.microsoft.Word") is WordParser)
+        XCTAssertTrue(registry.parser(for: "com.apple.iWork.Pages") is PagesParser)
+        XCTAssertTrue(registry.parser(for: "com.microsoft.Outlook") is OutlookParser)
+        XCTAssertTrue(registry.parser(for: "com.readdle.smartemail-Mac") is SparkParser)
+    }
 }

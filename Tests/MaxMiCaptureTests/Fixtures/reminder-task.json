@@ -1,0 +1,11 @@
+{
+  "role":"AXWindow","value":null,"title":"Reminders","url":null,"frame":{"x":0,"y":0,"width":1100,"height":760},"focused":false,"children":[
+    {"role":"AXGroup","value":null,"title":null,"identifier":"reminder-detail","url":null,"frame":{"x":350,"y":80,"width":600,"height":560},"focused":false,"children":[
+      {"role":"AXHeading","value":"Submit project notes","title":null,"identifier":"task-title","url":null,"frame":{"x":390,"y":120,"width":350,"height":30},"focused":false,"children":[]},
+      {"role":"AXCheckBox","value":"0","title":null,"identifier":"completed-checkbox","url":null,"frame":{"x":360,"y":125,"width":20,"height":20},"focused":false,"children":[]},
+      {"role":"AXStaticText","value":"Work","title":null,"identifier":"list-name","url":null,"frame":{"x":390,"y":180,"width":180,"height":20},"focused":false,"children":[]},
+      {"role":"AXStaticText","value":"Tomorrow, 5:00 PM","title":null,"identifier":"due-date","url":null,"frame":{"x":390,"y":220,"width":250,"height":20},"focused":false,"children":[]},
+      {"role":"AXTextArea","value":"Attach the final screenshots.","title":null,"identifier":"task-notes","url":null,"frame":{"x":390,"y":270,"width":400,"height":100},"focused":false,"children":[]}
+    ]}
+  ]
+}

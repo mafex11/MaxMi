@@ -54,6 +54,10 @@ final class ApplicationRegistryTests: XCTestCase {
             ApplicationRegistry.descriptor(for: "net.whatsapp.WhatsApp")?.meetingDetection,
             .nativeAudio
         )
+        XCTAssertEqual(
+            ApplicationRegistry.descriptor(for: "com.microsoft.teams")?.meetingDetection,
+            .nativeAudio
+        )
     }
 
     func testElectronEditorsUseWarmupAndDocumentCaptureProfile() {
@@ -63,5 +67,21 @@ final class ApplicationRegistryTests: XCTestCase {
         XCTAssertTrue(ApplicationRegistry.needsAccessibilityWarmup("com.todesktop.230313mzl4w4u92"))
         XCTAssertTrue(ApplicationRegistry.needsAccessibilityWarmup("com.google.Chrome"))
         XCTAssertFalse(ApplicationRegistry.needsAccessibilityWarmup("com.apple.dt.Xcode"))
+    }
+
+    func testPhase3AppsHaveStructuredKindsAndNativeRouting() {
+        let expected: [(String, ApplicationKind)] = [
+            ("com.apple.mail", .email),
+            ("com.apple.iCal", .calendar),
+            ("com.flexibits.fantastical2.mac", .calendar),
+            ("com.apple.reminders", .task),
+            ("com.microsoft.Word", .document),
+            ("com.apple.iWork.Pages", .document),
+            ("com.microsoft.Outlook", .email),
+        ]
+        for (bundleID, kind) in expected {
+            XCTAssertEqual(ApplicationRegistry.descriptor(for: bundleID)?.kind, kind)
+            XCTAssertEqual(ApplicationRegistry.descriptor(for: bundleID)?.captureStrategy, .nativeParser)
+        }
     }
 }

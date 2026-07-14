@@ -8,6 +8,9 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `chromium-gmail-thread.json` | Sanitized Chromium Gmail thread shape | email web profile |
 | `gecko-slack-chat.json` | Sanitized Gecko Slack message-row shape | sender/message boundaries |
 | `whatsapp-conversation.json` | Sanitized native WhatsApp split-pane shape | conversation identity and message rows |
+| `calendar-event.json` | Sanitized native event-detail shape | event title/time/location/calendar |
+| `reminder-task.json` | Sanitized reminder-detail shape | task status/list/due date |
+| `pages-document.json` | Sanitized word-processing editor shape | stable document identity and rolling text |
 | `chrome-article.json` | Chromium article shape | `BrowserTabExtractor` |
 | `safari-domain-only.json` | Safari address fallback shape | `BrowserTabExtractor` |
 | `slack-window.json` | Native Slack message-row shape | `SlackParser` |

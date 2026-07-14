@@ -6,6 +6,8 @@ public enum CaptureContentKind: String, Sendable, Codable, CaseIterable {
     case document
     case terminal
     case email
+    case calendar
+    case task
     case generic
 }
 

@@ -10,6 +10,17 @@ public struct ParserRegistry: Sendable {
     public static let messagesBundleID = "com.apple.MobileSMS"
     public static let whatsAppBundleIDs = ["net.whatsapp.WhatsApp"]
     public static let teamsBundleIDs = ["com.microsoft.teams2", "com.microsoft.teams"]
+    public static let calendarBundleIDs = ["com.apple.iCal"]
+    public static let fantasticalBundleIDs = ["com.flexibits.fantastical2.mac"]
+    public static let remindersBundleIDs = ["com.apple.reminders"]
+    public static let microsoftToDoBundleIDs = ["com.microsoft.to-do-mac"]
+    public static let todoistBundleIDs = ["com.todoist.mac.Todoist"]
+    public static let omniFocusBundleIDs = ["com.omnigroup.OmniFocus3", "com.omnigroup.OmniFocus4"]
+    public static let togglBundleIDs = ["com.toggl.toggldesktop"]
+    public static let wordBundleIDs = ["com.microsoft.Word"]
+    public static let pagesBundleIDs = ["com.apple.iWork.Pages"]
+    public static let outlookBundleIDs = ["com.microsoft.Outlook"]
+    public static let sparkBundleIDs = ["com.readdle.smartemail-Mac", "com.readdle.SparkDesktop"]
     // Terminal emulators — all share TerminalParser (single-AXTextArea scrollback shape).
     public static let terminalBundleIDs = ["dev.warp.Warp-Stable", "dev.warp.Warp",
                                            "com.apple.Terminal", "com.googlecode.iterm2"]
@@ -28,6 +39,17 @@ public struct ParserRegistry: Sendable {
         for bid in Self.terminalBundleIDs { p[bid] = TerminalParser() }
         for bid in Self.whatsAppBundleIDs { p[bid] = WhatsAppParser() }
         for bid in Self.teamsBundleIDs { p[bid] = TeamsParser() }
+        for bid in Self.calendarBundleIDs { p[bid] = CalendarParser() }
+        for bid in Self.fantasticalBundleIDs { p[bid] = FantasticalParser() }
+        for bid in Self.remindersBundleIDs { p[bid] = RemindersParser() }
+        for bid in Self.microsoftToDoBundleIDs { p[bid] = MicrosoftToDoParser() }
+        for bid in Self.todoistBundleIDs { p[bid] = TodoistParser() }
+        for bid in Self.omniFocusBundleIDs { p[bid] = OmniFocusParser() }
+        for bid in Self.togglBundleIDs { p[bid] = TogglParser() }
+        for bid in Self.wordBundleIDs { p[bid] = WordParser() }
+        for bid in Self.pagesBundleIDs { p[bid] = PagesParser() }
+        for bid in Self.outlookBundleIDs { p[bid] = OutlookParser() }
+        for bid in Self.sparkBundleIDs { p[bid] = SparkParser() }
         parsers = p
     }
 

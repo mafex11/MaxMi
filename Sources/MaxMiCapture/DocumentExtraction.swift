@@ -7,7 +7,7 @@ enum DocumentExtraction {
 
     /// AXTextArea + AXStaticText values in visual order (y then x), newest-anchored
     /// hard cap. Returns "" if there is no text (caller returns nil → no empty thread).
-    static func bodyText(in root: AXNode) -> String {
+    static func bodyText(in root: AXNode, maxCharacters: Int = contentCap) -> String {
         var texts: [(y: CGFloat, x: CGFloat, s: String)] = []
         collect(root, into: &texts)
         guard !texts.isEmpty else { return "" }
@@ -17,11 +17,11 @@ enum DocumentExtraction {
         var total = 0
         for line in ordered.reversed() {
             let add = line.count + 1
-            if total + add > contentCap && !kept.isEmpty { break }
+            if total + add > maxCharacters && !kept.isEmpty { break }
             kept.insert(line, at: 0)
             total += add
         }
-        return String(kept.joined(separator: "\n").suffix(contentCap))
+        return String(kept.joined(separator: "\n").suffix(maxCharacters))
     }
 
     private static func collect(_ node: AXNode, into out: inout [(y: CGFloat, x: CGFloat, s: String)]) {

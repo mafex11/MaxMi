@@ -20,7 +20,8 @@ public enum AXReader {
     private static func convert(_ el: AXUIElement, depth: Int, maxDepth: Int, budget: inout Int) -> AXNode {
         budget -= 1
         let role = copyAttr(el, kAXRoleAttribute) as? String ?? "?"
-        let value = copyAttr(el, kAXValueAttribute) as? String
+        let rawValue = copyAttr(el, kAXValueAttribute)
+        let value = (rawValue as? String) ?? (rawValue as? NSNumber)?.stringValue
         let title = copyAttr(el, kAXTitleAttribute) as? String
         // AXURL (WebKit/Gecko) then AXDocument (Chromium) — spec §5 primary URL source.
         let url = (copyAttr(el, "AXURL") as? URL)?.absoluteString
