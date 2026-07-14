@@ -95,6 +95,7 @@ final class AppWiring {
     let activityPrivacyWindow: ActivityPrivacyWindow
     let captureHealthWindow: CaptureHealthWindow
     let settingsWindow: SettingsWindow
+    var trayHomeViewModel: TrayHomeViewModel!
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -296,24 +297,6 @@ final class AppWiring {
         )
         captureHealthWindow = CaptureHealthWindow(viewModel: captureHealthViewModel)
 
-        // Left-click menu-bar popover: a compact activity view anchored to the icon,
-        // reusing the same view models as the full window. "Open MaxMi" still opens the window.
-        let popoverController = NSHostingController(rootView: ActivityView(
-            viewModel: viewModel,
-            actionItemsViewModel: actionItemsViewModel,
-            recentCapturesViewModel: recentCapturesViewModel,
-            meetingHistoryViewModel: meetingHistoryViewModel
-        ))
-        popoverController.view.frame = NSRect(x: 0, y: 0, width: 380, height: 520)
-        menuBar.setPopoverContent(popoverController) {
-            Task {
-                await viewModel.refresh()
-                await actionItemsViewModel.refresh()
-                await recentCapturesViewModel.refresh()
-                await meetingHistoryViewModel.refresh()
-            }
-        }
-
         // Initialize settings window
         // Capture values needed for settings load closure before self is fully initialized
         let hasAPIKey = config.geminiAPIKey != nil
@@ -397,6 +380,73 @@ final class AppWiring {
         )
 
         settingsWindow = SettingsWindow(viewModel: settingsViewModel)
+
+        // Purpose-built tray home: live state, recent summaries, and private lexical search.
+        trayHomeViewModel = TrayHomeViewModel(
+            loadStatus: { @MainActor [weak self] in
+                guard let self else {
+                    return TrayStatusDTO(state: .needsAttention, title: "MaxMi unavailable", detail: "Reopen MaxMi", captureCount: 0)
+                }
+                if !self.encryptionAvailable {
+                    return TrayStatusDTO(
+                        state: .needsAttention, title: "Memory is locked",
+                        detail: "Open Settings for encryption status", captureCount: self.captureCount
+                    )
+                }
+                if !self.menuBar.accessibilityGranted {
+                    return TrayStatusDTO(
+                        state: .needsAttention, title: "Accessibility required",
+                        detail: "Grant permission in System Settings", captureCount: self.captureCount
+                    )
+                }
+                if self.paused {
+                    return TrayStatusDTO(
+                        state: .paused, title: "Capture paused",
+                        detail: "Local memory is unchanged until you resume", captureCount: self.captureCount
+                    )
+                }
+                let app = self.recentApps.first?.name
+                return TrayStatusDTO(
+                    state: .capturing,
+                    title: app.map { "Watching \($0)" } ?? "MaxMi is capturing",
+                    detail: self.lastSourceKey ?? "Waiting for an eligible window",
+                    captureCount: self.captureCount
+                )
+            },
+            search: { @Sendable query in
+                try await Task.detached(priority: .userInitiated) {
+                    try activityStore.searchLocalMemory(query: query, limit: 30).map { hit in
+                        TraySearchResultDTO(
+                            id: hit.threadID,
+                            appLabel: hit.sourceApp,
+                            title: hit.sourceTitle?.isEmpty == false ? hit.sourceTitle! : hit.sourceApp,
+                            snippet: hit.snippet,
+                            contentKind: hit.contentKind,
+                            capturedAtMs: hit.capturedAtMs,
+                            matchKind: hit.matchKind
+                        )
+                    }
+                }.value
+            }
+        )
+        let popoverController = NSHostingController(rootView: TrayHomeView(
+            viewModel: trayHomeViewModel,
+            recentCapturesViewModel: recentCapturesViewModel,
+            onTogglePause: { @MainActor [weak self] in
+                self?.paused.toggle()
+                self?.menuBar.paused = self?.paused ?? false
+                Task { await self?.trayHomeViewModel.refresh() }
+            },
+            onOpenMaxMi: { @MainActor [weak self] in self?.activityWindow.show() },
+            onOpenSettings: { @MainActor [weak self] in self?.settingsWindow.show() }
+        ))
+        popoverController.view.frame = NSRect(x: 0, y: 0, width: 380, height: 520)
+        menuBar.setPopoverContent(popoverController) { [weak self] in
+            Task {
+                await recentCapturesViewModel.refresh()
+                await self?.trayHomeViewModel.refresh()
+            }
+        }
     }
 
     func start() {
