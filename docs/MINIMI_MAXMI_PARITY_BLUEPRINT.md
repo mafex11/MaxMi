@@ -1280,6 +1280,23 @@ Acceptance criteria:
 - task captures structured title/status/project/due date where exposed;
 - documents retain stable identity across navigation and edits.
 
+#### Phase 3 implementation status — 2026-07-14
+
+Implemented in four reviewable batches:
+
+- native WhatsApp and Teams parsers with active-conversation identity, main-pane filtering, atomic message rows, append accumulation, and bounded fallback text;
+- Apple Mail selected-message/thread capture through Apple Events, including sender, subject, date, and body with a hashed stable thread key; recent inbox headers remain a fallback when no message is selected;
+- explicit `calendar` and `task` capture kinds surfaced in the menu app;
+- structured Apple Calendar and Fantastical event capture for title, time, location, calendar, and details;
+- structured Reminders, Microsoft To Do, Todoist, OmniFocus, and Toggl task capture for title, completion state, list/project, due date, and notes;
+- native Outlook and Spark visible-message profiles;
+- Word and Pages document parsers with title-stable identity, 32,000-character visible snapshots, rolling accumulation, and declared bounded Accessibility scrolling policy;
+- canonical application registry entries and parser routes for all supported native variants;
+- sanitized WhatsApp, calendar-event, reminder-task, and word-processing fixtures;
+- content-free installed-app and Capture Health reporting through `tools/check-native-coverage.sh`.
+
+The full suite passes 393 tests. On this Mac, WhatsApp, Mail, Calendar, Reminders, and Fantastical are installed; Teams, Outlook, Word, Pages, and the other optional task/email clients are not currently installed. Historical Capture Health proves only WhatsApp's prior generic path. Post-build parser-specific live acceptance is intentionally left pending in `docs/PHASE3_NATIVE_COVERAGE.md` until each installed main app is opened with a representative item selected.
+
 ### Phase 4 — meetings and voice
 
 **Goal:** make audio context dependable before presenting it as shipped.
