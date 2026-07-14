@@ -16,6 +16,8 @@ enum MCPStatusProbe {
         let input = Pipe(); let output = Pipe()
         process.standardInput = input; process.standardOutput = output; process.standardError = Pipe()
         do {
+            let finished = DispatchSemaphore(value: 0)
+            process.terminationHandler = { _ in finished.signal() }
             try process.run()
             let request = """
             {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"maxmi-settings","version":"1"}}}
@@ -24,8 +26,11 @@ enum MCPStatusProbe {
             """
             input.fileHandleForWriting.write(Data(request.utf8))
             input.fileHandleForWriting.closeFile()
+            guard finished.wait(timeout: .now() + 5) == .success else {
+                process.terminate()
+                return false
+            }
             let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
             let text = String(decoding: data, as: UTF8.self)
             return process.terminationStatus == 0
                 && text.contains("search_memory") && text.contains("get_latest_context")
@@ -40,13 +45,17 @@ enum MCPStatusProbe {
         let output = Pipe()
         process.standardOutput = output; process.standardError = Pipe()
         do {
+            let finished = DispatchSemaphore(value: 0)
+            process.terminationHandler = { _ in finished.signal() }
             try process.run()
+            guard finished.wait(timeout: .now() + 8) == .success else {
+                process.terminate()
+                return false
+            }
             let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
             let text = String(decoding: data, as: UTF8.self)
             return process.terminationStatus == 0
                 && text.contains("Connected") && text.contains(expectedExecutable)
         } catch { return false }
     }
 }
-

@@ -27,10 +27,9 @@ extension Store {
                   AND (
                     c.summary_status='pending'
                     OR (c.summary_status='failed' AND coalesce(c.summary_next_attempt_at, 0) <= ?)
-                  )
+                )
                 ORDER BY c.captured_at DESC, c.thread_id
-                LIMIT ?
-                """, arguments: [nowMs - settleMs, nowMs, boundedLimit * 20]).filter { row in
+                """, arguments: [nowMs - settleMs, nowMs]).filter { row in
                     let sourceApp: String = row["source_app"]
                     return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
                 }.prefix(boundedLimit).map { row in
