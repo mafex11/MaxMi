@@ -1228,6 +1228,24 @@ Acceptance criteria:
 - supported web chats preserve sender/message boundaries;
 - capture diagnostics show parser and quality for each attempt.
 
+#### Phase 2 implementation status — 2026-07-14
+
+Implemented in three reviewable batches:
+
+- expanded canonical registry with stable Chromium, WebKit, and Gecko release-channel aliases;
+- fail-safe detection for unknown browser-like applications so they cannot enter generic capture;
+- ranked active-web-area URL extraction using `AXURL`/`AXDocument`, with guarded address-bar fallback and focused-field typing protection;
+- browser tab, page-load, selected-tab, value, and live-region triggers with the existing 30-second browser sweep as a backstop;
+- strict malformed/hostless/credential/auth-route blocking and path-specific Teams meeting blocking;
+- stable URL identities for Slack, Discord, WhatsApp, Teams, Outlook, and LinkedIn;
+- semantic web profiles for Gmail, Slack, Discord, WhatsApp, Teams, Outlook, and LinkedIn;
+- conversation profiles use append accumulation and preserve `sender: message` row boundaries when AX exposes semantic message containers;
+- capture-health parser IDs now include engine, web handler, URL source, and quality;
+- sanitized Chromium Gmail and Gecko Slack fixtures, alongside existing Chromium/WebKit/Gecko fixtures;
+- a content-free installed-browser and live-health report at `tools/check-browser-coverage.sh`.
+
+Automated browser tests and the existing Zen/Chrome live corpus cover the implementation. The remaining acceptance step is a manual post-build tab/SPA switch in each installed browser—Zen, Safari, Chrome, and Arc—recorded in `docs/PHASE2_BROWSER_COVERAGE.md`; no claim is made that an installed browser with no v2 event has been live-verified.
+
 ### Phase 3 — native structured coverage
 
 **Goal:** match the semantic application classes that make Minimi useful.

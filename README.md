@@ -1,6 +1,6 @@
 # MaxMi
 
-MaxMi is a self-built ambient-memory Mac menu bar app modeled after Minimi. It captures browsing context from active browser windows (Safari and Zen), storing full page snapshots with versioning, deduplication, and automatic fact extraction. Captured data is embedded locally via Gemini, enabling context-aware retrieval. The M1 milestone delivers the full capture-to-database pipeline with offline queue handling and privacy protections.
+MaxMi is a self-built ambient-memory Mac menu bar app modeled after Minimi. It captures context from active browser and native-app windows, stores encrypted rolling context with versioning and deduplication, and generates concise capture summaries plus searchable facts. Browser capture supports Chromium, WebKit, and Gecko families with strict URL privacy gates and semantic profiles for high-value web apps.
 
 ## Build
 
@@ -51,4 +51,6 @@ Optional: `MAXMI_DB_PATH` env var overrides the DB location.
 
 ## Documentation
 
-See `docs/superpowers/specs/` for technical specifications and `docs/superpowers/plans/` for implementation plans.
+See `docs/MINIMI_MAXMI_PARITY_BLUEPRINT.md` for the parity roadmap,
+`docs/PHASE2_BROWSER_COVERAGE.md` for browser coverage, and `docs/superpowers/`
+for the original technical specifications and implementation plans.
