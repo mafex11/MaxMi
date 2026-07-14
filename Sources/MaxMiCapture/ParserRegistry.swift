@@ -8,6 +8,8 @@ public struct ParserRegistry: Sendable {
     public static let mailBundleID = "com.apple.mail"
     public static let discordBundleID = "com.hnc.Discord"
     public static let messagesBundleID = "com.apple.MobileSMS"
+    public static let whatsAppBundleIDs = ["net.whatsapp.WhatsApp"]
+    public static let teamsBundleIDs = ["com.microsoft.teams2", "com.microsoft.teams"]
     // Terminal emulators — all share TerminalParser (single-AXTextArea scrollback shape).
     public static let terminalBundleIDs = ["dev.warp.Warp-Stable", "dev.warp.Warp",
                                            "com.apple.Terminal", "com.googlecode.iterm2"]
@@ -24,6 +26,8 @@ public struct ParserRegistry: Sendable {
             Self.messagesBundleID: MessagesParser(),
         ]
         for bid in Self.terminalBundleIDs { p[bid] = TerminalParser() }
+        for bid in Self.whatsAppBundleIDs { p[bid] = WhatsAppParser() }
+        for bid in Self.teamsBundleIDs { p[bid] = TeamsParser() }
         parsers = p
     }
 

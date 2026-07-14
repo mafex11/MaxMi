@@ -1,0 +1,20 @@
+{
+  "role":"AXWindow","value":null,"title":"WhatsApp","url":null,"frame":{"x":0,"y":0,"width":1200,"height":800},"focused":false,"children":[
+    {"role":"AXGroup","value":null,"title":null,"url":null,"frame":{"x":0,"y":0,"width":300,"height":800},"focused":false,"children":[
+      {"role":"AXRow","value":null,"title":null,"url":null,"frame":{"x":10,"y":100,"width":270,"height":50},"focused":false,"children":[
+        {"role":"AXStaticText","value":"Other Chat","title":null,"url":null,"frame":{"x":30,"y":110,"width":180,"height":20},"focused":false,"children":[]}
+      ]}
+    ]},
+    {"role":"AXGroup","value":null,"title":null,"url":null,"frame":{"x":300,"y":0,"width":900,"height":800},"focused":false,"children":[
+      {"role":"AXHeading","value":"Project Group","title":null,"identifier":"conversation-header","url":null,"frame":{"x":350,"y":25,"width":300,"height":30},"focused":false,"children":[]},
+      {"role":"AXGroup","value":null,"title":null,"identifier":"message-1","url":null,"frame":{"x":350,"y":150,"width":600,"height":60},"focused":false,"children":[
+        {"role":"AXStaticText","value":"Alex","title":null,"url":null,"frame":{"x":370,"y":160,"width":100,"height":20},"focused":false,"children":[]},
+        {"role":"AXStaticText","value":"Morning update","title":null,"url":null,"frame":{"x":480,"y":160,"width":250,"height":20},"focused":false,"children":[]}
+      ]},
+      {"role":"AXGroup","value":null,"title":null,"identifier":"message-2","url":null,"frame":{"x":500,"y":230,"width":600,"height":60},"focused":false,"children":[
+        {"role":"AXStaticText","value":"You","title":null,"url":null,"frame":{"x":520,"y":240,"width":100,"height":20},"focused":false,"children":[]},
+        {"role":"AXStaticText","value":"I am reviewing it","title":null,"url":null,"frame":{"x":630,"y":240,"width":260,"height":20},"focused":false,"children":[]}
+      ]}
+    ]}
+  ]
+}

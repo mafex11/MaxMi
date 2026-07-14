@@ -27,4 +27,10 @@ final class ParserRegistryTests: XCTestCase {
     func testMessagesRegistered() {
         XCTAssertTrue(ParserRegistry().parser(for: "com.apple.MobileSMS") is MessagesParser)
     }
+    func testNativeConversationParsersRegistered() {
+        let registry = ParserRegistry()
+        XCTAssertTrue(registry.parser(for: "net.whatsapp.WhatsApp") is WhatsAppParser)
+        XCTAssertTrue(registry.parser(for: "com.microsoft.teams2") is TeamsParser)
+        XCTAssertTrue(registry.parser(for: "com.microsoft.teams") is TeamsParser)
+    }
 }
