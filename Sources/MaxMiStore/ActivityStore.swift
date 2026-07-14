@@ -184,16 +184,29 @@ extension Store {
     }
 
     public func sessionsNeedingSummary(nowMs: EpochMs, limit: Int) throws -> [ActivitySession] {
-        try db.dbQueue.read { d in
+        let reviewed = try cloudReviewedSourceApps()
+        let localOnly = try cloudLocalOnlySourceApps()
+        let reviewGateEnabled = try cloudReviewInitialized()
+        return try db.dbQueue.read { d in
             let rows = try Row.fetchAll(d, sql: """
                 SELECT id, app_bundle, app_label, started_at, ended_at, last_activity_at, summary_ciphertext, summary_status
                 FROM activity_sessions
                 WHERE ended_at IS NOT NULL
                   AND (summary_status='pending' OR (summary_status='failed' AND summary_next_attempt_at<=?))
                 ORDER BY started_at DESC
-                LIMIT ?
-                """, arguments: [nowMs, limit])
-            return rows.map { mapActivitySession($0) }
+                """, arguments: [nowMs])
+            return try rows.filter { row in
+                guard reviewGateEnabled else { return true }
+                let sessionID: String = row["id"]
+                let apps = try String.fetchAll(d, sql: """
+                    SELECT DISTINCT t.source_app
+                    FROM activity_session_evidence e
+                    JOIN versions v ON v.id = e.version_id
+                    JOIN threads t ON t.id = v.thread_id
+                    WHERE e.session_id = ?
+                    """, arguments: [sessionID])
+                return !apps.isEmpty && apps.allSatisfy { reviewed.contains($0) && !localOnly.contains($0) }
+            }.prefix(max(limit, 0)).map { mapActivitySession($0) }
         }
     }
 

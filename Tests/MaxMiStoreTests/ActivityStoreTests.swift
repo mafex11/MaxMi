@@ -35,6 +35,26 @@ final class ActivityStoreTests: XCTestCase {
         XCTAssertEqual(recent.first?.summaryStatus, "summarized")
     }
 
+    func testNewSourceActivitySummaryWaitsForCloudReview() throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "old", sourceTitle: "Old", content: "existing"),
+            nowMs: t0
+        )
+        try store.bootstrapCloudProcessingReview(nowMs: t0 + 1)
+        guard case .committed(let versionID, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Slack", sourceKey: "new", sourceTitle: "New", content: "new source"),
+            nowMs: t0 + 2
+        ) else { return XCTFail("expected commit") }
+        let sessionID = try store.recordActivityCapture(
+            appBundle: "com.tinyspeck.slackmacgap", appLabel: "Slack",
+            versionID: versionID, content: "new source", nowMs: t0 + 3
+        )
+        try store.closeSession(sessionID, nowMs: t0 + 4)
+        XCTAssertTrue(try store.sessionsNeedingSummary(nowMs: t0 + 5, limit: 10).isEmpty)
+        try store.setCloudProcessing("Slack", allowed: true, nowMs: t0 + 6)
+        XCTAssertEqual(try store.sessionsNeedingSummary(nowMs: t0 + 7, limit: 10).map(\.id), [sessionID])
+    }
+
     func testDeleteActivityForAppCascades() throws {
         let s = try store.recordActivityCapture(appBundle: "com.secret", appLabel: "S", versionID: nil, content: "x", nowMs: t0)
         try store.closeActiveSession(nowMs: t0+1)
