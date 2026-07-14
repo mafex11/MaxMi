@@ -1425,11 +1425,11 @@ Implemented in reviewable batches:
 - local-only source management plus explicit disclosure of which paths use Gemini and which remain local;
 - retention preference plus confirmed apply-now cleanup, plaintext JSON export, and confirmed delete-all controls;
 - automatic consistent mode-`0600` database backups before destructive cleanup/deletion, with privacy settings retained after delete-all;
-- typed Accessibility, microphone, Screen Recording, encryption, Gemini-key, and MCP status/remediation rows;
-- content-free Gemini API-key validation before atomic mode-`0600` `.env` storage, with restart disclosure;
+- typed Accessibility, microphone, Screen Recording, encryption, and MCP status/remediation rows;
+- Gemini credentials supplied by the build/runtime environment, with no end-user credential input;
 - bounded bundled-MCP handshake/Claude-path status and copyable Claude Code/Desktop setup without silent config mutation.
 
-The full automated suite passes 446 tests. The signed app was launched against 646 threads, 973 versions, and 646 latest contexts with an `ok` integrity check. The one-time review bootstrap grandfathered all 21 existing source types and left zero local-only types; no source names or captured content were printed. See `docs/PHASE6_PRODUCT_PRIVACY.md`. Destructive controls, API-key replacement, permission prompts, and a genuinely new-source review remain manual live acceptance items.
+The full automated suite passes 446 tests. The signed app was launched against 646 threads, 973 versions, and 646 latest contexts with an `ok` integrity check. The one-time review bootstrap grandfathered all 21 existing source types and left zero local-only types; no source names or captured content were printed. See `docs/PHASE6_PRODUCT_PRIVACY.md`. Destructive controls, permission prompts, and a genuinely new-source review remain manual live acceptance items.
 
 ### Phase 7 — reliability and distribution
 

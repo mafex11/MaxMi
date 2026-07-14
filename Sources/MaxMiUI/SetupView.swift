@@ -13,7 +13,6 @@ public struct SetupView: View {
                 statusRow(viewModel.snapshot.encryption)
                 statusRow(viewModel.snapshot.mcp)
             }
-            apiKeyCard
             mcpCard
             if !viewModel.message.isEmpty {
                 Text(viewModel.message).font(.caption).foregroundColor(Theme.secondaryText)
@@ -34,28 +33,6 @@ public struct SetupView: View {
             }
         }
         .padding(Theme.spacing1).background(Theme.surface).cornerRadius(Theme.cornerRadius)
-    }
-
-    private var apiKeyCard: some View {
-        VStack(alignment: .leading, spacing: Theme.spacing1) {
-            HStack {
-                Text("Gemini API key").font(.subheadline).foregroundColor(Theme.text)
-                Spacer()
-                Text(viewModel.snapshot.apiKeyConfigured ? "Configured" : "Missing")
-                    .font(.caption).foregroundColor(viewModel.snapshot.apiKeyConfigured ? Theme.accent : Theme.warning)
-            }
-            Text("Validation sends only the phrase “MaxMi connection check”, never captured context.")
-                .font(.caption).foregroundColor(Theme.secondaryText)
-            HStack {
-                SecureField("Paste a new Gemini API key", text: $viewModel.apiKey)
-                    .textFieldStyle(.roundedBorder)
-                Button("Validate & Save") { Task { await viewModel.saveAPIKey() } }
-                    .buttonStyle(.borderedProminent).disabled(viewModel.isWorking)
-            }
-            Text("Restart MaxMi after saving so capture workers use the new key.")
-                .font(.caption2).foregroundColor(Theme.tertiaryText)
-        }
-        .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 
     private var mcpCard: some View {
@@ -87,4 +64,3 @@ public struct SetupView: View {
         }
     }
 }
-

@@ -67,10 +67,9 @@ Settings reports:
 - microphone permission for meetings and voice notes;
 - Screen Recording permission for system audio, with mic-only fallback disclosed;
 - AES-256-GCM/Keychain availability;
-- Gemini API-key configuration;
 - bundled MCP health and whether Claude points at the exact bundled executable.
 
-Permission buttons request or open the corresponding System Settings pane. API-key validation sends only `MaxMi connection check` to the embedding endpoint, then atomically updates `.env` at mode `0600`; restart is required because active workers retain their startup configuration. MCP probes have bounded timeouts and never call a retrieval tool. Setup commands are copied to the clipboard, not executed silently.
+Permission buttons request or open the corresponding System Settings pane. Gemini credentials are provisioned by the build/runtime environment and are not editable in the product UI. MCP probes have bounded timeouts and never call a retrieval tool. Setup commands are copied to the clipboard, not executed silently.
 
 ## Content-free live baseline
 
@@ -106,5 +105,4 @@ The backup is mode `0600`. No source name, title, URL, raw context, fact, summar
 | Export to a controlled location | plaintext warning, mode `0600`, valid JSON | automated only; intentionally not run on personal corpus |
 | Apply retention/Delete All | backup first, expected rows removed | in-memory automated only; intentionally not run live |
 | Permission remediation buttons | correct prompt/System Settings pane opens | pending live |
-| Validate a replacement API key | content-free validation, secure save, restart message | pending live; existing key untouched |
 | Open Settings MCP status | exact bundled server reports connected | backend verified; pending visual |

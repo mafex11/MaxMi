@@ -10,12 +10,14 @@ MaxMi is a self-built ambient-memory Mac menu bar app modeled after Minimi. It c
 
 This produces `MaxMi.app` in the repo root. The app bundle is gitignored.
 
-## Setup
+## Development setup
 
-1. Create `~/Library/Application Support/MaxMi/.env` with your Gemini API key:
+1. Provision the Gemini credential for the development build in `~/Library/Application Support/MaxMi/.env`:
    ```
    GEMINI_API_KEY=<your-key>
    ```
+
+   This is development/runtime configuration; MaxMi does not ask end users to paste a provider key in Settings.
 
 2. Launch `MaxMi.app`. Grant Accessibility permission when prompted.
 
@@ -24,6 +26,10 @@ This produces `MaxMi.app` in the repo root. The app bundle is gitignored.
    tccutil reset Accessibility dev.mafex.maxmi
    ```
    Then launch the app again and grant the permission.
+
+For distribution, do not commit a production provider key or assume an app-bundled key is secret:
+credentials in a macOS app can be extracted. Use a controlled backend relay with per-install
+authentication, quotas, and revocation before shipping broadly.
 
 ## Encryption
 

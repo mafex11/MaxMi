@@ -148,7 +148,7 @@ final class AppWiring {
         let relay = GeminiClient(config: config)
         pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
         menuBar = MenuBarController()
-        menuBar.hasAPIKey = config.geminiAPIKey != nil
+        menuBar.aiServiceAvailable = config.geminiAPIKey != nil
         let activityRepo = StoreActivitySummaryRepository(store: store, modelID: config.extractModel)
         let activityRelay = GeminiActivityRelay(
             geminiClient: relay,
@@ -330,7 +330,7 @@ final class AppWiring {
 
         // Initialize settings window
         // Capture values needed for settings load closure before self is fully initialized
-        let hasAPIKey = config.geminiAPIKey != nil
+        let aiServiceAvailable = config.geminiAPIKey != nil
         let encryptionOK = encryptionAvailable
         nonisolated(unsafe) let mb = menuBar
         nonisolated(unsafe) let privacyWindow = activityPrivacyWindow
@@ -352,7 +352,7 @@ final class AppWiring {
                     let accessGranted = await MainActor.run { mb.accessibilityGranted }
                     let statusLines = [
                         accessGranted ? "Accessibility: Granted" : "Accessibility: Required",
-                        hasAPIKey ? "API Key: Configured" : "API Key: Missing",
+                        aiServiceAvailable ? "AI Service: Available" : "AI Service: Unavailable",
                         encryptionOK ? "Encryption: Available" : "Encryption: Unavailable"
                     ]
 
@@ -541,7 +541,6 @@ final class AppWiring {
             }
         )
 
-        let envURL = appSupport.appendingPathComponent(".env")
         let mcpURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/maxmi-mcp")
         let setupViewModel = SetupViewModel(
             load: { @MainActor in
@@ -558,7 +557,6 @@ final class AppWiring {
                 let accessReady = AXIsProcessTrusted()
                 let screenReady = CGPreflightScreenCaptureAccess()
                 let mcp = await MCPStatusProbe.status(executableURL: mcpURL)
-                let configured = EnvConfig.load(searchPaths: [envURL]).geminiAPIKey != nil
                 return SetupSnapshot(
                     permissions: [
                         SetupStatusItem(
@@ -579,7 +577,6 @@ final class AppWiring {
                             actionTitle: screenReady ? nil : "Request…"
                         ),
                     ],
-                    apiKeyConfigured: configured,
                     encryption: SetupStatusItem(
                         id: "encryption", title: "Local encryption",
                         detail: encryptionOK ? "AES-256-GCM key available" : "Keychain key unavailable; capture is stopped",
@@ -607,11 +604,6 @@ final class AppWiring {
                 case .screenRecording:
                     if !CGRequestScreenCaptureAccess() { openPrivacySettings("Privacy_ScreenCapture") }
                 }
-            },
-            onSaveAPIKey: { @Sendable key in
-                try await APIKeyManager.validateAndSave(key, at: envURL, baseConfig: config)
-                await MainActor.run { mb.hasAPIKey = true }
-                return "API key validated and saved securely. Restart MaxMi to activate it."
             },
             onCopyMCPSetup: { @MainActor target in
                 let text: String

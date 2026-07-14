@@ -5,7 +5,7 @@ final class MenuBarController {
     private var statusItem: NSStatusItem?
     private let countItem = NSMenuItem(title: "Captures: 0", action: nil, keyEquivalent: "")
     private let permissionItem = NSMenuItem(title: "⚠ Grant Accessibility…", action: nil, keyEquivalent: "")
-    private let keyItem = NSMenuItem(title: "⚠ No GEMINI_API_KEY in .env", action: nil, keyEquivalent: "")
+    private let aiServiceItem = NSMenuItem(title: "⚠ AI service unavailable", action: nil, keyEquivalent: "")
     private let encryptionItem = NSMenuItem(title: "⚠ Memory encryption unavailable", action: nil, keyEquivalent: "")
     private let pauseItem = NSMenuItem(title: "Pause Capture", action: nil, keyEquivalent: "p")
     private var menuDelegate: MenuDelegate?
@@ -18,7 +18,7 @@ final class MenuBarController {
 
     var captureCount: Int = 0 { didSet { countItem.title = "Captures: \(captureCount)" } }
     var paused: Bool = false { didSet { pauseItem.title = paused ? "Resume Capture" : "Pause Capture" } }
-    var hasAPIKey: Bool = true { didSet { keyItem.isHidden = hasAPIKey } }
+    var aiServiceAvailable: Bool = true { didSet { aiServiceItem.isHidden = aiServiceAvailable } }
     var accessibilityGranted: Bool = true { didSet { permissionItem.isHidden = accessibilityGranted } }
     var encryptionAvailable: Bool = true { didSet { encryptionItem.isHidden = encryptionAvailable } }
 
@@ -72,14 +72,14 @@ final class MenuBarController {
         menu.addItem(.separator())
 
         permissionItem.isHidden = accessibilityGranted
-        keyItem.isHidden = hasAPIKey
+        aiServiceItem.isHidden = aiServiceAvailable
         encryptionItem.isHidden = encryptionAvailable
         permissionItem.action = #selector(NSApplication.openAccessibilitySettings)
         permissionItem.target = NSApp
         menu.addItem(countItem)
         menu.addItem(.separator())
         menu.addItem(permissionItem)
-        menu.addItem(keyItem)
+        menu.addItem(aiServiceItem)
         menu.addItem(encryptionItem)
         menu.addItem(pauseItem)
         pauseItem.setAction { onTogglePause() }
