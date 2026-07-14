@@ -12,6 +12,7 @@ public struct RecentCaptureDTO: Identifiable, Sendable, Equatable {
     public let truncated: Bool
     public let displaySummary: String?
     public let summaryStatus: String
+    public let cloudState: CloudProcessingDisplayState
 
     public init(
         id: String,
@@ -23,7 +24,8 @@ public struct RecentCaptureDTO: Identifiable, Sendable, Equatable {
         characterCount: Int,
         truncated: Bool,
         displaySummary: String? = nil,
-        summaryStatus: String = "pending"
+        summaryStatus: String = "pending",
+        cloudState: CloudProcessingDisplayState = .allowed
     ) {
         self.id = id
         self.appLabel = appLabel
@@ -35,6 +37,7 @@ public struct RecentCaptureDTO: Identifiable, Sendable, Equatable {
         self.truncated = truncated
         self.displaySummary = displaySummary
         self.summaryStatus = summaryStatus
+        self.cloudState = cloudState
     }
 }
 
@@ -46,4 +49,11 @@ public struct RecentCaptureRow: Identifiable, Sendable, Equatable {
     public let contentKind: CaptureContentKind
     public let timeAgo: String
     public let detail: String
+    public let cloudState: CloudProcessingDisplayState
+}
+
+public enum CloudProcessingDisplayState: String, Sendable, Equatable {
+    case pendingReview
+    case allowed
+    case localOnly
 }

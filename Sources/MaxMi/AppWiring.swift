@@ -235,8 +235,13 @@ final class AppWiring {
         let recentCapturesViewModel = RecentCapturesViewModel(
             load: { @Sendable in
                 do {
+                    let reviewed = try activityStore.cloudReviewedSourceApps()
+                    let localOnly = try activityStore.cloudLocalOnlySourceApps()
                     return try activityStore.latestContexts(limit: 100).map { context in
-                        RecentCaptureDTO(
+                        let cloudState: CloudProcessingDisplayState = !reviewed.contains(context.sourceApp)
+                            ? .pendingReview
+                            : (localOnly.contains(context.sourceApp) ? .localOnly : .allowed)
+                        return RecentCaptureDTO(
                             id: context.id,
                             appLabel: context.sourceApp,
                             title: context.sourceTitle,
@@ -246,7 +251,8 @@ final class AppWiring {
                             characterCount: context.characterCount,
                             truncated: context.truncated,
                             displaySummary: context.displaySummary,
-                            summaryStatus: context.summaryStatus
+                            summaryStatus: context.summaryStatus,
+                            cloudState: cloudState
                         )
                     }
                 } catch {
@@ -254,7 +260,14 @@ final class AppWiring {
                     return []
                 }
             },
-            now: { epochNowMs() }
+            now: { epochNowMs() },
+            onSetCloudProcessing: { @Sendable sourceApp, allowed in
+                do {
+                    try activityStore.setCloudProcessing(sourceApp, allowed: allowed, nowMs: epochNowMs())
+                } catch {
+                    NSLog("MaxMi: failed to update cloud processing policy: \(error)")
+                }
+            }
         )
 
         let meetingHistoryViewModel = MeetingHistoryViewModel(
@@ -433,13 +446,14 @@ final class AppWiring {
                         blockedDomains: try activityStore.blockedDomains().sorted(),
                         blockedApps: blockedApps,
                         pausedThreads: threads,
+                        localOnlySources: try activityStore.cloudLocalOnlySourceApps().sorted(),
                         retentionDays: try activityStore.retentionDays()
                     )
                 } catch {
                     NSLog("MaxMi: failed to load capture privacy: \(error)")
                     return CapturePrivacySnapshot(
                         isPaused: true, pauseDescription: "Privacy settings unavailable — capture fails closed",
-                        blockedDomains: [], blockedApps: [], pausedThreads: [], retentionDays: nil
+                        blockedDomains: [], blockedApps: [], pausedThreads: [], localOnlySources: [], retentionDays: nil
                     )
                 }
             },
@@ -470,6 +484,9 @@ final class AppWiring {
             },
             onSetRetention: { @Sendable days in
                 try activityStore.setRetentionDays(days, nowMs: epochNowMs())
+            },
+            onAllowCloudSource: { @Sendable sourceApp in
+                try activityStore.setCloudProcessing(sourceApp, allowed: true, nowMs: epochNowMs())
             }
         )
 
@@ -713,6 +730,13 @@ final class AppWiring {
         guard encryptionAvailable else { return }          // capture paused per §9
         do { try store.encryptExistingContent(nowMs: epochNowMs()) }   // §6: backfill before capture
         catch { NSLog("MaxMi: backfill failed, will retry next launch: \(error)") }
+        do { try store.bootstrapCloudProcessingReview(nowMs: epochNowMs()) }
+        catch {
+            NSLog("MaxMi: cloud review bootstrap failed; capture remains stopped: \(error)")
+            paused = true
+            menuBar.paused = true
+            return
+        }
 
         // Startup crash-repair for activity
         do {
@@ -1201,7 +1225,8 @@ final class AppWiring {
 
             // After normal memory capture commits, record activity evidence ONLY if generation matches AND committed (not deduplicated)
             let eligible = isActivityEligible(bundleID: appInfo.bundleID)
-            if MaxMiCore.shouldRecordActivity(captureGeneration: captureGeneration, currentGeneration: focusGeneration, eligible: eligible) {
+            let cloudAllowed = (try? store.cloudProcessingState(for: parsed.sourceApp)) == .allowed
+            if cloudAllowed && MaxMiCore.shouldRecordActivity(captureGeneration: captureGeneration, currentGeneration: focusGeneration, eligible: eligible) {
                 // Only record activity for .committed captures (not deduplicated)
                 if case .committed(let versionID, _) = result {
                     do {

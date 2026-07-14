@@ -215,7 +215,10 @@ extension Store {
     public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
         // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
         // can serve as baseline; its unextracted facts are suppressed from the newer diff).
-        try db.dbQueue.read { d in
+        let reviewed = try cloudReviewedSourceApps()
+        let localOnly = try cloudLocalOnlySourceApps()
+        let reviewGateEnabled = try cloudReviewInitialized()
+        return try db.dbQueue.read { d in
             let currentBucket = HourBucket.bucket(forMs: nowMs)
             let rows = try Row.fetchAll(d, sql: """
                 SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
@@ -232,7 +235,10 @@ extension Store {
                   )
                 ORDER BY v.committed_at
                 """, arguments: [currentBucket, nowMs - idleThresholdMs, nowMs])
-            return rows.map { r in
+            return rows.filter { row in
+                let sourceApp: String = row["source_app"]
+                return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
+            }.map { r in
                 PendingVersion(id: r["id"], threadID: r["thread_id"], hourBucket: r["hour_bucket"],
                                content: decryptOrMarker(r["content"]), contentHash: r["content_hash"],
                                sourceApp: r["source_app"], sourceKey: r["source_key"],

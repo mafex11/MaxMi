@@ -44,4 +44,23 @@ final class RecentCapturesViewModelTests: XCTestCase {
         XCTAssertTrue(vm.rows[0].detail.contains("Imported context"))
         XCTAssertEqual(vm.rows[0].summary, "Summarizing what you're doing…")
     }
+
+    func testNewSourceReviewControlsCloudPolicy() async {
+        let dto = RecentCaptureDTO(
+            id: "new-source", appLabel: "New App", title: "Preview",
+            contentKind: .document, parserID: "Parser", capturedAtMs: 1_000,
+            characterCount: 100, truncated: false, cloudState: .pendingReview
+        )
+        nonisolated(unsafe) var decision: (String, Bool)?
+        let vm = RecentCapturesViewModel(
+            load: { [dto] }, now: { 2_000 },
+            onSetCloudProcessing: { decision = ($0, $1) }
+        )
+        await vm.refresh()
+        XCTAssertEqual(vm.rows[0].summary, "Review this new source before cloud processing.")
+        XCTAssertEqual(vm.rows[0].cloudState, .pendingReview)
+        await vm.setCloudProcessing(for: vm.rows[0], allowed: false)
+        XCTAssertEqual(decision?.0, "New App")
+        XCTAssertEqual(decision?.1, false)
+    }
 }

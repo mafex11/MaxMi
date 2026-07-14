@@ -65,4 +65,28 @@ final class PauseSettingsTests: XCTestCase {
         try store.setRetentionDays(nil, nowMs: t0 + 1)
         XCTAssertNil(try store.retentionDays())
     }
+
+    func testNewSourceIsHeldFromCloudUntilReviewed() throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "web:old", sourceTitle: "Old", content: "existing"),
+            nowMs: t0
+        )
+        try store.bootstrapCloudProcessingReview(nowMs: t0 + 1)
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Slack", sourceKey: "slack:new", sourceTitle: "New", content: "new source"),
+            nowMs: t0 + 2
+        )
+        XCTAssertEqual(try store.cloudProcessingState(for: "Web"), .allowed)
+        XCTAssertEqual(try store.cloudProcessingState(for: "Slack"), .pendingReview)
+        XCTAssertEqual(try store.pendingWork(nowMs: t0 + 600_000, idleThresholdMs: 300_000).map(\.sourceApp), ["Web"])
+        XCTAssertEqual(try store.captureContextsNeedingSummary(nowMs: t0 + 20_000, settleMs: 10_000, limit: 10).map(\.appLabel), ["Web"])
+
+        try store.setCloudProcessing("Slack", allowed: false, nowMs: t0 + 3)
+        XCTAssertEqual(try store.cloudProcessingState(for: "Slack"), .localOnly)
+        XCTAssertEqual(try store.pendingWork(nowMs: t0 + 600_000, idleThresholdMs: 300_000).map(\.sourceApp), ["Web"])
+
+        try store.setCloudProcessing("Slack", allowed: true, nowMs: t0 + 4)
+        XCTAssertEqual(try store.cloudProcessingState(for: "Slack"), .allowed)
+        XCTAssertEqual(Set(try store.pendingWork(nowMs: t0 + 600_000, idleThresholdMs: 300_000).map(\.sourceApp)), Set(["Web", "Slack"]))
+    }
 }

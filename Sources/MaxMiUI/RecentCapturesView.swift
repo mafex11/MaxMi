@@ -51,6 +51,7 @@ public struct RecentCapturesView: View {
                                         .font(.caption2)
                                         .foregroundColor(Theme.tertiaryText)
                                         .lineLimit(1)
+                                    cloudControls(row)
                                 }
                                 Spacer()
                             }
@@ -63,6 +64,27 @@ public struct RecentCapturesView: View {
                     .padding(.bottom, Theme.spacing2)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func cloudControls(_ row: RecentCaptureRow) -> some View {
+        switch row.cloudState {
+        case .pendingReview:
+            HStack {
+                Button("Allow AI") { Task { await viewModel.setCloudProcessing(for: row, allowed: true) } }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                Button("Keep Local") { Task { await viewModel.setCloudProcessing(for: row, allowed: false) } }
+                    .buttonStyle(.bordered).controlSize(.small)
+            }
+        case .localOnly:
+            Button("Allow AI for \(row.appLabel)") {
+                Task { await viewModel.setCloudProcessing(for: row, allowed: true) }
+            }.buttonStyle(.link).font(.caption)
+        case .allowed:
+            Button("Keep \(row.appLabel) local only") {
+                Task { await viewModel.setCloudProcessing(for: row, allowed: false) }
+            }.buttonStyle(.link).font(.caption)
         }
     }
 

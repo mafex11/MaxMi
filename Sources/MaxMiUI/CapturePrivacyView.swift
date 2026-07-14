@@ -73,7 +73,13 @@ public struct CapturePrivacyView: View {
                     Task { await viewModel.resumeThread(thread.id) }
                 }
             }
-            if viewModel.snapshot.blockedApps.isEmpty && viewModel.snapshot.pausedThreads.isEmpty {
+            ForEach(viewModel.snapshot.localOnlySources, id: \.self) { source in
+                sourceRow(icon: "icloud.slash", title: source, subtitle: "Local only") {
+                    Task { await viewModel.allowCloudSource(source) }
+                }
+            }
+            if viewModel.snapshot.blockedApps.isEmpty && viewModel.snapshot.pausedThreads.isEmpty
+                && viewModel.snapshot.localOnlySources.isEmpty {
                 Text("No paused apps or threads").font(.caption).foregroundColor(Theme.secondaryText)
             }
             Text("Pause an app or the current thread from the tray's right-click menu.")
@@ -124,4 +130,3 @@ public struct CapturePrivacyView: View {
         .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 }
-

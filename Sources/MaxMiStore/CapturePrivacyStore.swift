@@ -27,7 +27,48 @@ public struct PausedThreadInfo: Sendable, Equatable, Identifiable {
     }
 }
 
+public enum CloudProcessingState: String, Sendable, Equatable {
+    case pendingReview
+    case allowed
+    case localOnly
+}
+
 extension Store {
+    /// One-time upgrade behavior: sources already present before the review gate shipped retain
+    /// their old cloud-processing behavior. Source apps first seen afterwards require review.
+    public func bootstrapCloudProcessingReview(nowMs: EpochMs) throws {
+        try db.dbQueue.write { database in
+            guard try String.fetchOne(database, sql: "SELECT value FROM settings WHERE key='cloud_review_initialized'") == nil else {
+                return
+            }
+            let apps = try String.fetchAll(database, sql: "SELECT DISTINCT source_app FROM threads ORDER BY source_app")
+            let json = String(decoding: try JSONEncoder().encode(apps), as: UTF8.self)
+            try database.execute(
+                sql: "INSERT OR REPLACE INTO settings VALUES (?,?,?)",
+                arguments: ["cloud_reviewed_source_apps", json, nowMs]
+            )
+            try database.execute(
+                sql: "INSERT OR REPLACE INTO settings VALUES (?,?,?)",
+                arguments: ["cloud_review_initialized", "true", nowMs]
+            )
+        }
+    }
+
+    public func cloudProcessingState(for sourceApp: String) throws -> CloudProcessingState {
+        let reviewed = try readSet("cloud_reviewed_source_apps")
+        guard reviewed.contains(sourceApp) else { return .pendingReview }
+        return try readSet("cloud_local_only_source_apps").contains(sourceApp) ? .localOnly : .allowed
+    }
+
+    public func setCloudProcessing(_ sourceApp: String, allowed: Bool, nowMs: EpochMs) throws {
+        try mutateSet("cloud_reviewed_source_apps", element: sourceApp, insert: true, nowMs: nowMs)
+        try mutateSet("cloud_local_only_source_apps", element: sourceApp, insert: !allowed, nowMs: nowMs)
+    }
+
+    public func cloudReviewedSourceApps() throws -> Set<String> { try readSet("cloud_reviewed_source_apps") }
+    public func cloudLocalOnlySourceApps() throws -> Set<String> { try readSet("cloud_local_only_source_apps") }
+    func cloudReviewInitialized() throws -> Bool { try settingValue("cloud_review_initialized") == "true" }
+
     public func capturePauseState(nowMs: EpochMs) throws -> CapturePauseState {
         let raw = try settingValue("capture_pause")
         guard let raw else { return .inactive }
@@ -113,4 +154,3 @@ extension Store {
         }
     }
 }
-

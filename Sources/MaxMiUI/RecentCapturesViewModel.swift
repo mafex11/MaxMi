@@ -9,13 +9,16 @@ public final class RecentCapturesViewModel {
 
     private let load: @Sendable () async -> [RecentCaptureDTO]
     private let now: () -> EpochMs
+    private let onSetCloudProcessing: @Sendable (String, Bool) async -> Void
 
     public init(
         load: @escaping @Sendable () async -> [RecentCaptureDTO],
-        now: @escaping () -> EpochMs
+        now: @escaping () -> EpochMs,
+        onSetCloudProcessing: @escaping @Sendable (String, Bool) async -> Void = { _, _ in }
     ) {
         self.load = load
         self.now = now
+        self.onSetCloudProcessing = onSetCloudProcessing
     }
 
     public func refresh() async {
@@ -29,7 +32,11 @@ public final class RecentCapturesViewModel {
                 let truncation = capture.truncated ? " · bounded" : ""
                 let sourceTitle = capture.title?.isEmpty == false ? capture.title! : capture.appLabel
                 let summary: String
-                if let displaySummary = capture.displaySummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+                if capture.cloudState == .pendingReview {
+                    summary = "Review this new source before cloud processing."
+                } else if capture.cloudState == .localOnly {
+                    summary = "Saved locally only — Gemini processing is disabled."
+                } else if let displaySummary = capture.displaySummary?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !displaySummary.isEmpty {
                     summary = displaySummary
                 } else if capture.summaryStatus == "failed" {
@@ -46,9 +53,15 @@ public final class RecentCapturesViewModel {
                     sourceTitle: sourceTitle,
                     contentKind: capture.contentKind,
                     timeAgo: Self.timeAgo(capture.capturedAtMs, nowMs: nowMs),
-                    detail: "\(Self.kindLabel(capture.contentKind)) · \(count)\(truncation) · \(capture.parserID)"
+                    detail: "\(Self.kindLabel(capture.contentKind)) · \(count)\(truncation) · \(capture.parserID)",
+                    cloudState: capture.cloudState
                 )
             }
+    }
+
+    public func setCloudProcessing(for row: RecentCaptureRow, allowed: Bool) async {
+        await onSetCloudProcessing(row.appLabel, allowed)
+        await refresh()
     }
 
     private static func timeAgo(_ atMs: EpochMs, nowMs: EpochMs) -> String {

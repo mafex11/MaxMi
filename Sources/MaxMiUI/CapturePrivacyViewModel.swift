@@ -29,15 +29,18 @@ public struct CapturePrivacySnapshot: Sendable, Equatable {
     public let blockedDomains: [String]
     public let blockedApps: [PrivacyBlockedApp]
     public let pausedThreads: [PrivacyPausedThread]
+    public let localOnlySources: [String]
     public let retentionDays: Int?
 
     public init(isPaused: Bool, pauseDescription: String, blockedDomains: [String],
-                blockedApps: [PrivacyBlockedApp], pausedThreads: [PrivacyPausedThread], retentionDays: Int?) {
+                blockedApps: [PrivacyBlockedApp], pausedThreads: [PrivacyPausedThread],
+                localOnlySources: [String] = [], retentionDays: Int?) {
         self.isPaused = isPaused
         self.pauseDescription = pauseDescription
         self.blockedDomains = blockedDomains
         self.blockedApps = blockedApps
         self.pausedThreads = pausedThreads
+        self.localOnlySources = localOnlySources
         self.retentionDays = retentionDays
     }
 }
@@ -58,6 +61,7 @@ public final class CapturePrivacyViewModel {
     private let onResumeApp: @Sendable (String) async throws -> Void
     private let onResumeThread: @Sendable (String) async throws -> Void
     private let onSetRetention: @Sendable (Int?) async throws -> Void
+    private let onAllowCloudSource: @Sendable (String) async throws -> Void
 
     public init(
         load: @escaping @Sendable () async -> CapturePrivacySnapshot,
@@ -65,7 +69,8 @@ public final class CapturePrivacyViewModel {
         onSetDomain: @escaping @Sendable (String, Bool) async throws -> Bool,
         onResumeApp: @escaping @Sendable (String) async throws -> Void,
         onResumeThread: @escaping @Sendable (String) async throws -> Void,
-        onSetRetention: @escaping @Sendable (Int?) async throws -> Void
+        onSetRetention: @escaping @Sendable (Int?) async throws -> Void,
+        onAllowCloudSource: @escaping @Sendable (String) async throws -> Void = { _ in }
     ) {
         self.load = load
         self.onPause = onPause
@@ -73,6 +78,7 @@ public final class CapturePrivacyViewModel {
         self.onResumeApp = onResumeApp
         self.onResumeThread = onResumeThread
         self.onSetRetention = onSetRetention
+        self.onAllowCloudSource = onAllowCloudSource
     }
 
     public func refresh() async { snapshot = await load() }
@@ -116,6 +122,10 @@ public final class CapturePrivacyViewModel {
         await perform("Retention preference saved") { try await onSetRetention(days) }
     }
 
+    public func allowCloudSource(_ sourceApp: String) async {
+        await perform("Cloud processing allowed for \(sourceApp)") { try await onAllowCloudSource(sourceApp) }
+    }
+
     private func perform(_ success: String, operation: () async throws -> Void) async {
         do {
             try await operation()
@@ -126,4 +136,3 @@ public final class CapturePrivacyViewModel {
         }
     }
 }
-

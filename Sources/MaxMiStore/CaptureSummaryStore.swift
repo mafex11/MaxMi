@@ -16,6 +16,9 @@ extension Store {
         limit: Int = 1
     ) throws -> [PendingCaptureSummary] {
         let boundedLimit = min(max(limit, 1), 20)
+        let reviewed = try cloudReviewedSourceApps()
+        let localOnly = try cloudLocalOnlySourceApps()
+        let reviewGateEnabled = try cloudReviewInitialized()
         return try db.dbQueue.read { d in
             try Row.fetchAll(d, sql: """
                 SELECT c.thread_id, c.content_ciphertext, c.content_hash, t.source_app
@@ -27,7 +30,10 @@ extension Store {
                   )
                 ORDER BY c.captured_at DESC, c.thread_id
                 LIMIT ?
-                """, arguments: [nowMs - settleMs, nowMs, boundedLimit]).map { row in
+                """, arguments: [nowMs - settleMs, nowMs, boundedLimit * 20]).filter { row in
+                    let sourceApp: String = row["source_app"]
+                    return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
+                }.prefix(boundedLimit).map { row in
                     PendingCaptureSummary(
                         threadID: row["thread_id"],
                         appLabel: row["source_app"],
