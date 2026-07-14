@@ -26,12 +26,14 @@ final class MemoryQueriesTests: XCTestCase {
         store = Store(db: try MaxMiDatabase.inMemory(), cipher: AESGCMFieldCipher.testCipher)
     }
 
-    func seed(_ facts: [(String, Int)], url: String = "https://gintama.example", title: String = "Gin Tama") throws {
+    func seed(_ facts: [(String, Int)], url: String = "https://gintama.example", title: String = "Gin Tama",
+              sourceApp: String = "Web", at: EpochMs? = nil) throws {
+        let capturedAt = at ?? t0
         guard case .committed(let vid, _) = try store.commitCapture(
-            CaptureInput(sourceApp: "Web", sourceKey: url, sourceTitle: title, content: "c\(url)"),
-            nowMs: t0) else { fatalError() }
+            CaptureInput(sourceApp: sourceApp, sourceKey: url, sourceTitle: title, content: "c\(url)"),
+            nowMs: capturedAt) else { fatalError() }
         let realTid = try store.threadID(forKey: url)
-        var when = t0
+        var when = capturedAt
         for (f, hot) in facts {
             when += 1000
             let ins = try store.insertDerivatives(versionID: vid, threadID: realTid, facts: [f], nowMs: when)
@@ -181,5 +183,74 @@ final class MemoryQueriesTests: XCTestCase {
         let r = await q.meetingMemory(action: "search", query: nil)
         XCTAssertTrue(r.isError)
         XCTAssertTrue(r.text.contains("requires a query"))
+    }
+
+    func testListFiltersExactAppAndTimeRange() throws {
+        try seed([("Web fact.", 1)], url: "web:one", title: "Web One", sourceApp: "Web", at: t0)
+        try seed([("Slack fact.", 2)], url: "slack:one", title: "Slack One", sourceApp: "Slack", at: t0 + 60_000)
+        let result = queries(MockRelay(.success(unit(1)))).listActiveThreads(
+            limit: 10,
+            options: RetrievalOptions(sourceApps: ["Slack"], lookbackMinutes: 180)
+        )
+        XCTAssertTrue(result.text.contains("Slack One"))
+        XCTAssertFalse(result.text.contains("Web One"))
+        XCTAssertTrue(result.text.contains("As of:"))
+        XCTAssertTrue(result.text.contains("Timezone:"))
+    }
+
+    func testListCursorIsDeterministicAndScopeChecked() throws {
+        try seed([("One.", 1)], url: "thread:one", title: "One", at: t0)
+        try seed([("Two.", 2)], url: "thread:two", title: "Two", at: t0 + 60_000)
+        try seed([("Three.", 3)], url: "thread:three", title: "Three", at: t0 + 120_000)
+        let q = queries(MockRelay(.success(unit(1))))
+        let first = q.listActiveThreads(limit: 1, options: RetrievalOptions(sourceApps: ["Web"]))
+        XCTAssertTrue(first.text.contains("Three"))
+        let cursor = try XCTUnwrap(nextCursor(in: first.text))
+        let second = q.listActiveThreads(limit: 1, options: RetrievalOptions(sourceApps: ["Web"], cursor: cursor))
+        XCTAssertTrue(second.text.contains("Two"))
+        XCTAssertFalse(second.text.contains("Three"))
+        let wrongScope = q.listActiveThreads(limit: 1, options: RetrievalOptions(sourceApps: ["Slack"], cursor: cursor))
+        XCTAssertTrue(wrongScope.isError)
+        XCTAssertTrue(wrongScope.text.contains("does not belong"))
+    }
+
+    func testLatestContextFiltersStructuredKindsAndThread() throws {
+        _ = try store.commitCapture(CaptureEnvelope(
+            sourceApp: "Calendar", sourceKey: "calendar:event", sourceTitle: "Planning",
+            content: "Planning at 3 PM", contentKind: .calendar, parserID: "CalendarParser",
+            parserVersion: 1, accumulationPolicy: .replace, offscreenPolicy: .visibleOnly(),
+            trigger: .appActivated, truncated: false
+        ), nowMs: t0)
+        _ = try store.commitCapture(CaptureEnvelope(
+            sourceApp: "Reminders", sourceKey: "task:item", sourceTitle: "Ship parser",
+            content: "Ship parser tomorrow", contentKind: .task, parserID: "RemindersParser",
+            parserVersion: 1, accumulationPolicy: .replace, offscreenPolicy: .visibleOnly(),
+            trigger: .appActivated, truncated: false
+        ), nowMs: t0 + 1_000)
+        let relay = MockRelay(.failure(RelayError.notConfigured))
+        let q = queries(relay)
+        let tasks = q.getLatestContext(limit: 10, options: RetrievalOptions(contentKinds: [.task]))
+        XCTAssertTrue(tasks.text.contains("Ship parser tomorrow"))
+        XCTAssertFalse(tasks.text.contains("Planning at 3 PM"))
+        XCTAssertEqual(relay.embedCalls, 0)
+        XCTAssertTrue(tasks.text.contains("thread `"))
+    }
+
+    func testSearchHonorsSourceAppFilter() async throws {
+        try seed([("Web memory.", 5)], url: "web:memory", title: "Web Memory", sourceApp: "Web")
+        try seed([("Slack memory.", 5)], url: "slack:memory", title: "Slack Memory", sourceApp: "Slack")
+        let result = await queries(MockRelay(.success(unit(5)))).searchMemory(
+            query: "memory", limit: 10,
+            options: RetrievalOptions(sourceApps: ["Slack"])
+        )
+        XCTAssertTrue(result.text.contains("Slack memory."))
+        XCTAssertFalse(result.text.contains("Web memory."))
+    }
+
+    private func nextCursor(in text: String) -> String? {
+        guard let marker = text.range(of: "**Next cursor:** `") else { return nil }
+        let tail = text[marker.upperBound...]
+        guard let end = tail.firstIndex(of: "`") else { return nil }
+        return String(tail[..<end])
     }
 }
