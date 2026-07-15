@@ -38,6 +38,7 @@ extension Store {
         )
         try? FileManager.default.removeItem(at: url)
         let destination = try DatabaseQueue(path: url.path)
+        defer { try? destination.close() }
         try db.dbQueue.backup(to: destination)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
@@ -170,4 +171,3 @@ extension Store {
         }
     }
 }
-
