@@ -5,7 +5,7 @@ import CSQLiteVec
 public final class MaxMiDatabase {
     public let dbQueue: DatabaseQueue
 
-    public init(path: String, readOnly: Bool = false) throws {
+    public init(path: String, readOnly: Bool = false, migrate: Bool = true) throws {
         var config = Configuration()
         config.readonly = readOnly
         config.prepareDatabase { db in
@@ -35,7 +35,7 @@ public final class MaxMiDatabase {
                     [.posixPermissions: 0o600], ofItemAtPath: path + suffix)
             }
         }
-        if !readOnly {
+        if !readOnly && migrate {
             try Migrations.migrator.migrate(dbQueue)
         }
     }

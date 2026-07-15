@@ -148,11 +148,11 @@ as a passing residency run; longer soak coverage remains in Batch 7.9.
 These sections will be populated by their corresponding batches without backfilling
 claims from unit tests as live evidence.
 
-- Backup restore drill: blocked in Batch 7.5. Both in-process and isolated-child
-  SQLite/sqlite-vec validation experiments fail with `SQLITE_CANTOPEN` on a second
-  read-only open, so no restore control is exposed until the copied-database open path
-  is understood and proven safe.
-- N-1 migration/rollback drill: pending Batch 7.5.
+- Backup restore drill: pass on a disposable two-version corpus through the isolated
+  helper, 2026-07-15. The selected backup remained unchanged and the newer current
+  database was preserved separately.
+- N-1 migration/rollback drill: pass for `v8` → `v9`, including retained encrypted
+  version rows and a portable pre-restore backup, 2026-07-15.
 - CPU/memory/disk/queue profiles: pending Batch 7.6.
 - Secure distributed AI path: pending Batch 7.7.
 - Clean install, upgrade, signing, notarization, and Gatekeeper: pending Batch 7.8.

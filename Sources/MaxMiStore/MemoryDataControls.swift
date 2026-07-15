@@ -40,6 +40,9 @@ extension Store {
         let destination = try DatabaseQueue(path: url.path)
         defer { try? destination.close() }
         try db.dbQueue.backup(to: destination)
+        try destination.inDatabase { database in
+            try database.execute(sql: "PRAGMA journal_mode = DELETE")
+        }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 

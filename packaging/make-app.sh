@@ -8,6 +8,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/MaxMi "$APP/Contents/MacOS/MaxMi"
 cp .build/release/MaxMiMCP "$APP/Contents/MacOS/maxmi-mcp"
+cp .build/release/MaxMiRecovery "$APP/Contents/MacOS/maxmi-recovery"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
 # Brand assets: dog app icon (.icns) + monochrome template tray icons (M6a).
 cp packaging/assets/icon.icns "$APP/Contents/Resources/icon.icns"
@@ -26,12 +27,14 @@ if [ -n "$DEVID_IDENTITY" ]; then
   # DISTRIBUTION build: hardened runtime + entitlements + timestamp (notarization-ready).
   echo "Signing for DISTRIBUTION with: $DEVID_IDENTITY (hardened runtime)"
   codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$DEVID_IDENTITY" "$APP/Contents/MacOS/maxmi-mcp"
+  codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$DEVID_IDENTITY" "$APP/Contents/MacOS/maxmi-recovery"
   codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$DEVID_IDENTITY" "$APP/Contents/MacOS/MaxMi"
   codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$DEVID_IDENTITY" "$APP"
   codesign --verify --deep --strict --verbose=2 "$APP" && echo "Distribution signature verified. Run ./release.sh to notarize + build a DMG."
 elif security find-identity -v -p codesigning | grep -qF "$DEV_IDENTITY"; then
   # DEV build: Apple Development identity (grants persist across rebuilds).
   codesign --force --sign "$DEV_IDENTITY" "$APP/Contents/MacOS/maxmi-mcp"
+  codesign --force --sign "$DEV_IDENTITY" "$APP/Contents/MacOS/maxmi-recovery"
   codesign --force --sign "$DEV_IDENTITY" "$APP"
   echo "Signed with: $DEV_IDENTITY (dev — not notarizable; add a Developer ID cert for distribution)"
 else

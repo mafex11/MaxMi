@@ -20,6 +20,14 @@ public struct DataControlsView: View {
                     .buttonStyle(.bordered)
             }
             .disabled(viewModel.isWorking)
+            HStack {
+                Button("Restore Database Backup…", role: .destructive) {
+                    Task { await viewModel.restore() }
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
+            .disabled(viewModel.isWorking)
             Divider().background(Theme.divider)
             Text("Diagnostics contain aggregate health, versions, permissions, process counts, and privacy-safe logs—never captured content.")
                 .font(.caption).foregroundColor(Theme.secondaryText)

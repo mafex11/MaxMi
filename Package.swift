@@ -54,6 +54,7 @@ let package = Package(
         .executableTarget(name: "MaxMiMCP", dependencies: [
             "MaxMiCore", "MaxMiStore", "MaxMiRelay",
         ]),
+        .executableTarget(name: "MaxMiRecovery", dependencies: ["MaxMiStore"]),
         .testTarget(name: "MaxMiCoreTests", dependencies: ["MaxMiCore"]),
         .testTarget(name: "MaxMiStoreTests", dependencies: ["MaxMiStore"]),
         .testTarget(name: "MaxMiCaptureTests", dependencies: ["MaxMiCapture"],

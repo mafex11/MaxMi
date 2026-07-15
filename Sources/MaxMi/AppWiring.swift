@@ -34,6 +34,27 @@ fileprivate func safeFileTimestamp(_ date: Date = Date()) -> String {
     return formatter.string(from: date)
 }
 
+fileprivate struct RecoveryOutcome: Codable {
+    let status: String
+    let preservedFilename: String?
+}
+
+fileprivate func consumeRecoveryStatus(at url: URL) -> String {
+    guard FileManager.default.fileExists(atPath: url.path) else { return "" }
+    defer { try? FileManager.default.removeItem(at: url) }
+    guard let data = try? Data(contentsOf: url),
+          let outcome = try? JSONDecoder().decode(RecoveryOutcome.self, from: data) else {
+        return "The previous database restore result could not be read"
+    }
+    if outcome.status == "restore_succeeded" {
+        if let filename = outcome.preservedFilename {
+            return "Database restored successfully; previous database: \(filename)"
+        }
+        return "Database restored successfully"
+    }
+    return "Database restore failed; the selected backup was not installed"
+}
+
 fileprivate func maxMiProcessCount(matching pattern: String) -> Int {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
@@ -541,6 +562,10 @@ final class AppWiring {
         )
 
         let backupDirectory = appSupport.appendingPathComponent("Backups", isDirectory: true)
+        let recoveryResultURL = appSupport
+            .appendingPathComponent("RecoveryState", isDirectory: true)
+            .appendingPathComponent("last-result.json")
+        let recoveryStatus = consumeRecoveryStatus(at: recoveryResultURL)
         let dataControlsViewModel = DataControlsViewModel(
             onExport: { @MainActor in
                 let panel = NSSavePanel()
@@ -588,6 +613,44 @@ final class AppWiring {
                     return try activityStore.deleteAllMemory()
                 }.value
                 return "Deleted \(result.threads) threads and \(result.facts) facts; backup: \(backupURL.lastPathComponent)"
+            },
+            onRestore: { @MainActor in
+                let panel = NSOpenPanel()
+                panel.title = "Restore a MaxMi Database Backup"
+                panel.message = "Choose a private MaxMi .db backup. MaxMi will quit, validate a disposable copy, preserve the current database, and relaunch."
+                panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data]
+                panel.allowsMultipleSelection = false
+                panel.canChooseDirectories = false
+                guard panel.runModal() == .OK, let selectedBackup = panel.url else {
+                    return "Database restore cancelled"
+                }
+                let alert = NSAlert()
+                alert.messageText = "Restore this MaxMi backup?"
+                alert.informativeText = "The selected file remains untouched. MaxMi preserves the current database before replacing it and relaunches with the result."
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Restore and Relaunch")
+                guard alert.runModal() == .alertSecondButtonReturn else {
+                    return "Database restore cancelled"
+                }
+                let helperURL = Bundle.main.bundleURL
+                    .appendingPathComponent("Contents/MacOS/maxmi-recovery")
+                guard FileManager.default.isExecutableFile(atPath: helperURL.path) else {
+                    return "Database restore is unavailable in this build"
+                }
+                let helper = Process()
+                helper.executableURL = helperURL
+                helper.arguments = [
+                    "--backup", selectedBackup.path,
+                    "--database", databaseURL.path,
+                    "--archive", backupDirectory.path,
+                    "--result", recoveryResultURL.path,
+                    "--wait-for-pid", "\(ProcessInfo.processInfo.processIdentifier)",
+                    "--relaunch", Bundle.main.bundleURL.path
+                ]
+                try helper.run()
+                NSApp.terminate(nil)
+                return "MaxMi is restoring the selected backup"
             },
             onExportDiagnostics: { @MainActor in
                 let panel = NSSavePanel()
@@ -659,7 +722,8 @@ final class AppWiring {
             onRevealLogs: { @MainActor in
                 NSWorkspace.shared.open(SafeLogger.defaultLogDirectory)
                 return "Opened privacy-safe logs in Finder"
-            }
+            },
+            initialStatus: recoveryStatus
         )
 
         let mcpURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/maxmi-mcp")

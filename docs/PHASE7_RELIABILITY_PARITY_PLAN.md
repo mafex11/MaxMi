@@ -1,7 +1,7 @@
 # Phase 7 — Reliability, Live Parity, and Distribution Plan
 
-**Status:** in progress; Batches 7.0–7.3 complete; Batch 7.4 needs controlled
-real-audio acceptance; Batch 7.5 recovery design is constrained below
+**Status:** in progress; Batches 7.0–7.3 and 7.5 complete; Batch 7.4 has live
+voice-note/termination evidence and still needs a controlled two-sided meeting
 **Created:** 2026-07-15  
 **Depends on:** Phases 0–6 on `main` through `4e14b37`  
 **Reference:** Minimi 1.0.59
@@ -248,20 +248,18 @@ Acceptance:
 
 **Purpose:** make recovery operational rather than theoretical.
 
-**Blocked finding recorded 2026-07-15:** the existing consistent-backup path is tested
-and a copied backup opens successfully through the normal store. Experiments to validate
-that backup through an additional read-only SQLite connection, both in-process and in a
-short-lived child process, fail with SQLite/sqlite-vec `SQLITE_CANTOPEN` while querying
-`sqlite_master`. No restore code was shipped and no database files were replaced. Phase
-7.5 must first identify a validation method that reliably opens a copied MaxMi database;
-until then, the current backup feature is preserve-only and restore remains unavailable.
+**Completed 2026-07-15:** the `SQLITE_CANTOPEN` blocker was traced to copied databases
+retaining WAL journal mode while being reopened read-only without persistent sidecars.
+Backups are now finalized in portable `DELETE` journal mode. Restore validates and
+migrates a disposable writable copy, never the selected backup, then a signed helper
+waits for MaxMi to exit, preserves the current database, performs an atomic same-volume
+replacement, writes a content-free outcome, and relaunches the app.
 
 Implementation:
 
 1. Add a read-only integrity/diagnostics action.
-2. Identify and test a reliable copied-database validation path before exposing restore.
-   Only then add a restore workflow that preserves the current database, atomically
-   replaces files, and relaunches MaxMi only on success.
+2. Validate and migrate a disposable copied database before handing atomic replacement
+   to the post-exit recovery helper.
 3. Add repair guidance for SQLite corruption; never mutate the only copy.
 4. Define a migration manifest containing version, preconditions, verification, and
    rollback/restore instructions.

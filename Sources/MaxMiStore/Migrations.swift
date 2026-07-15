@@ -1,6 +1,8 @@
 import GRDB
 
 enum Migrations {
+    static let currentIdentifier = "v9"
+
     static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
         m.registerMigration("v1") { db in
