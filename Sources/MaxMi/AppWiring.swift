@@ -297,10 +297,13 @@ final class AppWiring {
         let recentCapturesViewModel = RecentCapturesViewModel(
             load: { @Sendable in
                 do {
+                    let reviewGateEnabled = try activityStore.cloudReviewInitialized()
                     let reviewed = try activityStore.cloudReviewedSourceApps()
                     let localOnly = try activityStore.cloudLocalOnlySourceApps()
                     return try activityStore.latestContexts(limit: 100).map { context in
-                        let cloudState: CloudProcessingDisplayState = !reviewed.contains(context.sourceApp)
+                        // With the review gate off (Minimi-style), sources are never "pending" —
+                        // they process unless explicitly kept local-only.
+                        let cloudState: CloudProcessingDisplayState = (reviewGateEnabled && !reviewed.contains(context.sourceApp))
                             ? .pendingReview
                             : (localOnly.contains(context.sourceApp) ? .localOnly : .allowed)
                         return RecentCaptureDTO(

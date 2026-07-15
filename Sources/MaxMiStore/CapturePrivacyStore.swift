@@ -67,7 +67,10 @@ extension Store {
 
     public func cloudReviewedSourceApps() throws -> Set<String> { try readSet("cloud_reviewed_source_apps") }
     public func cloudLocalOnlySourceApps() throws -> Set<String> { try readSet("cloud_local_only_source_apps") }
-    func cloudReviewInitialized() throws -> Bool { try settingValue("cloud_review_initialized") == "true" }
+    // Review gate disabled for Minimi-style simplicity: new sources auto-process instead of waiting
+    // for per-source approval (the approval UI is hidden). Was: settingValue == "true". The stored
+    // `cloud_review_initialized` value is left intact so the gate can be re-enabled by restoring this.
+    public func cloudReviewInitialized() throws -> Bool { false }
 
     public func capturePauseState(nowMs: EpochMs) throws -> CapturePauseState {
         let raw = try settingValue("capture_pause")

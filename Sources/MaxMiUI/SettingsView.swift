@@ -189,6 +189,11 @@ public struct SettingsView: View {
                     }
                 }
             }
+
+            Text("Dog icon “sitting-dog” by Delapouite, game-icons.net, licensed under CC BY 3.0.")
+                .font(.caption2)
+                .foregroundColor(Theme.secondaryText)
+                .padding(.top, Theme.spacingHalf)
         }
     }
 }
