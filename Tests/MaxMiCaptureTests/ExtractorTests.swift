@@ -23,10 +23,12 @@ final class ExtractorTests: XCTestCase {
         XCTAssertEqual(cap.urlSource, .addressBar)
         XCTAssertEqual(cap.quality, .fallback)
     }
-    func testFocusedAddressFieldIgnoredWhenWebAreaPresent() throws {
-        let cap = try BrowserTabExtractor.extract(window: try fixture("chrome-article"), windowTitle: nil)
-        XCTAssertEqual(cap.url, "https://sqlite.org/arch.html")
-        XCTAssertFalse(cap.content.contains("how does sqli"), "toolbar text is not page content")
+    func testFocusedAddressFieldBlocksCaptureEvenWhenWebAreaPresent() throws {
+        XCTAssertThrowsError(
+            try BrowserTabExtractor.extract(window: try fixture("chrome-article"), windowTitle: nil)
+        ) {
+            XCTAssertEqual($0 as? ExtractionError, .addressFieldFocused)
+        }
     }
     func testFocusedAddressFieldWithoutWebAreaThrows() throws {
         // simulate mid-typing: safari-domain-only fixture but with address field focused and partially typed

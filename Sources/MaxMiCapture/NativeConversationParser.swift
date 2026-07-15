@@ -31,6 +31,7 @@ enum NativeConversationExtraction {
     static let contentCap = 16_000
     static let messageRoles: Set<String> = ["AXRow", "AXListItem"]
     static let textRoles: Set<String> = ["AXStaticText", "AXTextArea", "AXHeading"]
+    static let semanticLabelRoles: Set<String> = ["AXButton", "AXLink"]
     static let chrome: Set<String> = [
         "chats", "calls", "updates", "communities", "settings", "search",
         "new chat", "more", "reply", "react", "forward", "edited",
@@ -99,7 +100,7 @@ enum NativeConversationExtraction {
         maxY: CGFloat,
         into out: inout [(score: Int, y: CGFloat, value: String)]
     ) {
-        if let raw = node.value ?? node.title {
+        if let raw = readableText(node) {
             let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let x = node.frame?.minX ?? mainBoundary
             let y = node.frame?.minY ?? 0
@@ -156,13 +157,24 @@ enum NativeConversationExtraction {
         _ node: AXNode,
         into out: inout [(y: CGFloat, x: CGFloat, value: String)]
     ) {
-        if textRoles.contains(node.role), let raw = node.value ?? node.title {
+        if (textRoles.contains(node.role) || semanticLabelRoles.contains(node.role)),
+           let raw = readableText(node) {
             let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if !value.isEmpty {
                 out.append((node.frame?.minY ?? 0, node.frame?.minX ?? 0, value))
             }
         }
         for child in node.children { collectText(child, into: &out) }
+    }
+
+    private static func readableText(_ node: AXNode) -> String? {
+        if semanticLabelRoles.contains(node.role) {
+            return node.label ?? node.title ?? node.value
+        }
+        if node.role == "AXHeading" || node.role == "AXStaticText" {
+            return node.value ?? node.title ?? node.label
+        }
+        return node.value ?? node.title
     }
 
     private static func atomicMessageLine(_ values: [String]) -> String? {

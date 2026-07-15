@@ -1,6 +1,6 @@
 # Phase 7 live verification
 
-**Status:** Batches 7.0–7.2 complete; Batch 7.3 pending
+**Status:** Batches 7.0–7.3 complete; Batch 7.4 pending
 **Started:** 2026-07-15  
 **Plan:** [`PHASE7_RELIABILITY_PARITY_PLAN.md`](PHASE7_RELIABILITY_PARITY_PLAN.md)
 
@@ -77,20 +77,20 @@ Existing detailed scenarios remain in the Phase 2–4 evidence documents. Phase 
 
 | Browser/version | URL route | Tab/SPA | Typing privacy | Scroll retention | Diagnostics | Date |
 |---|---:|---:|---:|---:|---:|---|
-| Zen 1.21.6b | pending | pending | pending | pending | pending | — |
-| Safari 26.5.2 | pending | pending | pending | pending | pending | — |
-| Chrome 150.0.7871.115 | pending | pending | pending | pending | pending | — |
-| Arc 1.155.1 | pending | pending | pending | pending | pending | — |
+| Zen 1.21.6b | pass | pass | controlled/automated | pass | pass | 2026-07-15 |
+| Safari 26.5.2 | pass | pass | controlled/automated | pass | pass | 2026-07-15 |
+| Chrome 150.0.7871.115 | pass | pass | controlled | pass | pass | 2026-07-15 |
+| Arc 1.155.1 | pass | pass | controlled/automated | pass | pass | 2026-07-15 |
 
 ### Native applications
 
 | App/version | Structured parser | Stable identity | Meaningful content | Accumulation | Diagnostics | Date |
 |---|---:|---:|---:|---:|---:|---|
-| WhatsApp 26.28.15 | pending | pending | pending | pending | pending | — |
-| Mail 16.0 | pending | pending | pending | pending | pending | — |
-| Calendar 16.0 | pending | pending | pending | pending | pending | — |
-| Reminders 7.0 | pending | pending | pending | pending | pending | — |
-| Fantastical 4.1.11 | pending | pending | pending | pending | pending | — |
+| WhatsApp 26.28.15 | pass | pass | visible-only | pending deep history | pass | 2026-07-15 |
+| Mail 16.0 | pass | pass | rolling text | controlled draft only | pass | 2026-07-15 |
+| Calendar 16.0 | pass | pass | replace detail | detail-only by design | pass | 2026-07-15 |
+| Reminders 7.0 | pass | pass | replace detail | detail-only by design | pass | 2026-07-15 |
+| Fantastical 4.1.11 | pass | pass | replace detail | detail-only by design | pass | 2026-07-15 |
 
 ## Meeting and voice acceptance
 

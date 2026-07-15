@@ -56,6 +56,12 @@ public enum BrowserTabExtractor {
         windowTitle: String?,
         engine: BrowserEngine? = nil
     ) throws -> TabCapture {
+        // Fail closed while the user is typing in the address/search field. Even when a
+        // stale web-area URL remains available, capture should not race navigation or
+        // accidentally key content to the page being left.
+        if bestAddressField(in: window)?.focused == true {
+            throw ExtractionError.addressFieldFocused
+        }
         let webAreas = nodes(in: window) { $0.role == "AXWebArea" }
         let activeWebArea = bestWebArea(from: webAreas, windowTitle: windowTitle, engine: engine)
 
@@ -74,7 +80,6 @@ public enum BrowserTabExtractor {
         guard let address = bestAddressField(in: window) else {
             throw ExtractionError.noURL
         }
-        if address.focused { throw ExtractionError.addressFieldFocused }
         guard let raw = address.value, let url = normalizedURL(raw) else {
             throw ExtractionError.invalidURL
         }
@@ -192,12 +197,14 @@ public enum BrowserTabExtractor {
     ) {
         let toolbar = insideToolbar || node.role == "AXToolbar"
         let webArea = insideWebArea || node.role == "AXWebArea"
-        if !webArea, addressRoles.contains(node.role), let value = node.value,
-           normalizedURL(value) != nil {
+        if !webArea, addressRoles.contains(node.role) {
             let metadata = [node.title, node.label, node.identifier]
                 .compactMap { $0 }.joined(separator: " ").lowercased()
             let labelled = addressHints.contains { metadata.contains($0) }
-            if toolbar || labelled {
+            let validURL = node.value.flatMap(normalizedURL) != nil
+            // A focused address/search control is privacy-sensitive even while its
+            // in-progress value is not a syntactically valid URL yet.
+            if (toolbar || labelled) && (validURL || node.focused) {
                 var score = toolbar ? 30 : 10
                 if labelled { score += 20 }
                 if node.focused { score += 5 }

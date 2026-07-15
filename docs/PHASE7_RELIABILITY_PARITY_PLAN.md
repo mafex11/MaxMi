@@ -188,6 +188,9 @@ Acceptance:
 
 ### Batch 7.3 — Live capture parity matrix
 
+**Status:** implementation and installed-app route matrix complete on 2026-07-15;
+deep-history and broader SPA soak remain Phase 7.9 evidence items.
+
 **Purpose:** prove that implemented parsers capture the apps actually used.
 
 Implementation and verification:

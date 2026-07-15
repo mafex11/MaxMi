@@ -56,3 +56,24 @@ The signed Phase 3 build is installed and running. Complete the following with M
 | Fantastical | open an event detail | `FantasticalParser`, captured or deduplicated | pending live |
 
 An empty/not-handled result is recorded as `parserNoContent`; registered parsers never silently fall through to generic capture. Capture Health stores the parser, trigger, outcome, reason, character count, truncation flag, and duration without storing diagnostic copies of content.
+
+## Phase 7 live acceptance update
+
+On 2026-07-15 the signed build was verified with synthetic, reversible items where
+the application permits them. Only Capture Health parser/outcome/count metadata and
+content-free AX role inventories were inspected. The Calendar event, Reminder, and
+unsent Mail draft were removed after the check.
+
+| Installed app | Controlled state | Parser result | Result |
+|---|---|---|---|
+| WhatsApp | existing visible conversation; no text inspected | `WhatsAppParser` captured 65 characters after Electron semantic-label support | pass for visible AX content; history depth remains a future limitation |
+| Mail | unsent synthetic draft | `MailParser` captured/deduplicated | pass |
+| Calendar | selected synthetic event detail | `CalendarParser` deduplicated a 104-character detail capture | pass |
+| Reminders | selected synthetic reminder | `RemindersParser` captured 268 characters | pass |
+| Fantastical | synthetic event-creation detail via its documented URL action | `FantasticalParser` captured 86 characters | pass |
+
+Calendar and Fantastical intentionally require a focused detail/editor surface rather
+than consuming the entire calendar grid. WhatsApp on this installed build exposes only
+62 AX nodes and much of the visible text as button/heading descriptions; the parser now
+uses those semantic labels within the conversation pane. It does not yet prove safe
+deep-history traversal in WhatsApp.

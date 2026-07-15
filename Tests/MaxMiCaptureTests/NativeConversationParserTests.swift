@@ -36,4 +36,38 @@ final class NativeConversationParserTests: XCTestCase {
         let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp")
         XCTAssertNil(try WhatsAppParser().parse(window: empty, app: app))
     }
+
+    func testWhatsAppReadsElectronSemanticButtonAndHeadingLabels() throws {
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+            children: [
+                AXNode(
+                    role: "AXHeading", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 400, y: 20, width: 300, height: 30), focused: false,
+                    children: [], identifier: "conversation-header", label: "Controlled Group"
+                ),
+                AXNode(
+                    role: "AXButton", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 420, y: 200, width: 400, height: 50), focused: false,
+                    children: [], identifier: "message-1", label: "Alex: First controlled message"
+                ),
+                AXNode(
+                    role: "AXButton", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 420, y: 260, width: 400, height: 50), focused: false,
+                    children: [], identifier: "message-2", label: "You: Second controlled message"
+                ),
+            ]
+        )
+        let app = AppInfo(
+            bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp"
+        )
+
+        let capture = try XCTUnwrap(try WhatsAppParser().parse(window: window, app: app))
+        XCTAssertEqual(capture.sourceKey, "whatsapp:controlled-group")
+        XCTAssertEqual(
+            capture.content,
+            "Alex: First controlled message\nYou: Second controlled message"
+        )
+    }
 }

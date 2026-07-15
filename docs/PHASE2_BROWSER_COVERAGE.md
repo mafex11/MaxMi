@@ -57,6 +57,23 @@ When a chat exposes message rows/list items or message-labelled AX containers, M
 
 All fixture content and identifiers are invented. Real browser content must never be committed.
 
+## Phase 7 live acceptance update
+
+On 2026-07-15, the signed build was exercised against non-private public reference
+pages. Only Capture Health metadata was inspected.
+
+| Browser | Live route/navigation | Address typing | Scroll retention | Result |
+|---|---|---|---|---|
+| Zen | Gecko `BrowserWeb.v2` capture and dedup from browser-navigation events | parser regression coverage | fixture + rolling-context coverage | pass |
+| Safari | WebKit capture after focus/navigation | live `addressFieldFocused` skip | fixture + rolling-context coverage | pass |
+| Chrome | Chromium captures within 298 ms of controlled navigation | parser regression coverage | controlled scroll: 15,999 → 16,000 retained characters | pass |
+| Arc | Chromium capture from controlled content change | no capture emitted while controlled address text was focused; parser regression coverage | fixture + rolling-context coverage | pass |
+
+The address-bar guard was strengthened during this verification: a focused
+toolbar/location field now blocks capture even if a previous web-area URL still exists,
+and it also blocks partially typed search text that is not yet URL-shaped. No captured
+page text, URL, or title was printed.
+
 ## Live acceptance matrix
 
 Run `tools/check-browser-coverage.sh` before and after the following test in each installed browser:
@@ -69,9 +86,9 @@ Run `tools/check-browser-coverage.sh` before and after the following test in eac
 
 | Browser | Generic page | Tab switch ≤2s | SPA/backstop | Typing protected | Blocked route | Status |
 |---|---:|---:|---:|---:|---:|---|
-| Zen | fixture + legacy live | pending v2 live | pending v2 live | fixture | fixture | partial |
-| Safari | fixture | pending | pending | fixture | fixture | automated only |
-| Chrome | fixture + legacy live | pending v2 live | pending v2 live | fixture | fixture | partial |
-| Arc | Chromium fixtures | pending | pending | fixture | fixture | automated only |
+| Zen | live | live | controlled/automated | live + automated | automated | pass |
+| Safari | live | live | controlled/automated | live + automated | automated | pass |
+| Chrome | live | live | controlled | live + automated | automated | pass |
+| Arc | live | live | controlled/automated | live + automated | automated | pass |
 
 The matrix stays conservative until a new `BrowserWeb.v2/.../quality-*` Capture Health event is observed for that browser.
