@@ -10,10 +10,10 @@ cp .build/release/MaxMi "$APP/Contents/MacOS/MaxMi"
 cp .build/release/MaxMiMCP "$APP/Contents/MacOS/maxmi-mcp"
 cp .build/release/MaxMiRecovery "$APP/Contents/MacOS/maxmi-recovery"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
-# Brand assets: MaxMi memory-ribbon app icon + monochrome template tray icons.
+# Brand assets: MaxMi dog app icon + monochrome template tray icons.
 cp packaging/assets/icon.icns "$APP/Contents/Resources/icon.icns"
-cp packaging/assets/tray/tray-maxmi.png "$APP/Contents/Resources/tray-maxmi.png"
-cp packaging/assets/tray/tray-maxmi@2x.png "$APP/Contents/Resources/tray-maxmi@2x.png"
+cp packaging/assets/tray/tray-dog.png "$APP/Contents/Resources/tray-dog.png"
+cp packaging/assets/tray/tray-dog@2x.png "$APP/Contents/Resources/tray-dog@2x.png"
 
 # Signing. Prefers a "Developer ID Application" cert (for notarized DISTRIBUTION) if present;
 # otherwise the local "Apple Development" cert (dev builds — TCC grants persist across rebuilds).

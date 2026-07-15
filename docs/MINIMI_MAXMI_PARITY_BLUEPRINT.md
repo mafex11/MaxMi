@@ -563,7 +563,7 @@ Intended:
 - durable agent cursor and leases;
 - Activity and Action Items windows;
 - launch at login, status, and settings;
-- MaxMi memory-ribbon icon and polish.
+- MaxMi dog icon and polish.
 
 Most of this exists in code and unit tests. It is not operational on the audited machine because the consent state is `declined`, and the UI contains a bug that prevents a declined user from granting consent later. Consequently the live MaxMi database has no activity sessions, agent runs, or action items.
 

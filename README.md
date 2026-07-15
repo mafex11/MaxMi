@@ -1,6 +1,6 @@
 # MaxMi
 
-<img src="packaging/assets/icon-master-1024.png" alt="MaxMi memory-ribbon icon" width="128" />
+<img src="packaging/assets/icon-master-1024.png" alt="MaxMi dog icon" width="128" />
 
 MaxMi is a self-built ambient-memory Mac menu bar app modeled after Minimi. It captures context from active browser and native-app windows, stores encrypted rolling context with versioning and deduplication, and generates concise capture summaries plus searchable facts. Browser capture supports Chromium, WebKit, and Gecko families with strict URL privacy gates and semantic profiles for high-value web apps.
 

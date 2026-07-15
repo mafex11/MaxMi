@@ -39,8 +39,8 @@ final class MenuBarController {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
-        // Set the monochrome MaxMi memory-ribbon template icon from the bundle.
-        if let image = Bundle.main.image(forResource: NSImage.Name("tray-maxmi")) {
+        // Set the monochrome MaxMi dog template icon from the bundle.
+        if let image = Bundle.main.image(forResource: NSImage.Name("tray-dog")) {
             image.isTemplate = true
             image.size = NSSize(width: 18, height: 18)
             item.button?.image = image
