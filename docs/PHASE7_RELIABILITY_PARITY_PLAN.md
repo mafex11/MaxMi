@@ -248,20 +248,20 @@ Acceptance:
 
 **Purpose:** make recovery operational rather than theoretical.
 
-**Design constraint recorded 2026-07-15:** the existing consistent-backup path is
-tested and a copied backup opens successfully through the normal store. An experiment
-to validate a backup through an additional read-only SQLite connection in the same
-process exposed an SQLite/sqlite-vec `SQLITE_CANTOPEN` failure after the live database
-queue was closed. No restore code from that experiment was shipped. The production
-workflow must therefore validate and swap files in a short-lived recovery helper after
-MaxMi exits, then relaunch. It must not attempt an in-process database replacement.
+**Blocked finding recorded 2026-07-15:** the existing consistent-backup path is tested
+and a copied backup opens successfully through the normal store. Experiments to validate
+that backup through an additional read-only SQLite connection, both in-process and in a
+short-lived child process, fail with SQLite/sqlite-vec `SQLITE_CANTOPEN` while querying
+`sqlite_master`. No restore code was shipped and no database files were replaced. Phase
+7.5 must first identify a validation method that reliably opens a copied MaxMi database;
+until then, the current backup feature is preserve-only and restore remains unavailable.
 
 Implementation:
 
 1. Add a read-only integrity/diagnostics action.
-2. Add a restore workflow that hands off to a short-lived recovery helper: it validates
-   a selected backup after MaxMi exits, creates a backup of the current database,
-   atomically replaces the database, and relaunches MaxMi only on success.
+2. Identify and test a reliable copied-database validation path before exposing restore.
+   Only then add a restore workflow that preserves the current database, atomically
+   replaces files, and relaunches MaxMi only on success.
 3. Add repair guidance for SQLite corruption; never mutate the only copy.
 4. Define a migration manifest containing version, preconditions, verification, and
    rollback/restore instructions.

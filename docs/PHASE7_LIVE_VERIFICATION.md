@@ -140,9 +140,10 @@ as a passing residency run; longer soak coverage remains in Batch 7.9.
 These sections will be populated by their corresponding batches without backfilling
 claims from unit tests as live evidence.
 
-- Backup restore drill: pending Batch 7.5. The implementation must use an isolated
-  post-exit recovery helper; an in-process SQLite/sqlite-vec validation experiment was
-  intentionally discarded after a `SQLITE_CANTOPEN` failure on a second read-only open.
+- Backup restore drill: blocked in Batch 7.5. Both in-process and isolated-child
+  SQLite/sqlite-vec validation experiments fail with `SQLITE_CANTOPEN` on a second
+  read-only open, so no restore control is exposed until the copied-database open path
+  is understood and proven safe.
 - N-1 migration/rollback drill: pending Batch 7.5.
 - CPU/memory/disk/queue profiles: pending Batch 7.6.
 - Secure distributed AI path: pending Batch 7.7.
