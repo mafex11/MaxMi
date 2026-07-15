@@ -5,13 +5,16 @@ import MaxMiActivity
 
 struct GeminiAgentRelay: AgentGenerationRelay, Sendable {
     let geminiClient: any GenerationMemoryRelay
+    /// Use the same configured model as summaries/extraction. A previously hardcoded
+    /// "gemini-2.5-flash-lite" wasn't resolving, so every agent run failed while summaries worked.
+    let modelID: String
 
     func reviewActivity(_ input: AgentReviewInput) async throws -> [AgentOpDTO] {
         let prompt = AgentPrompts.hourlyReview(input: input)
 
         // Generate structured JSON response
         let text = try await geminiClient.generateContent(
-            model: "gemini-2.5-flash-lite",
+            model: modelID,
             prompt: prompt,
             responseMimeType: "application/json"
         )

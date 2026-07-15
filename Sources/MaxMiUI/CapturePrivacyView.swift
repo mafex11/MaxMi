@@ -7,11 +7,17 @@ public struct CapturePrivacyView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("Capture & Privacy").font(.headline).foregroundColor(Theme.text)
+            Text("Capture & Privacy").sectionTitle()
+            Text("Control what MaxMi records and where it goes.")
+                .font(.caption).foregroundColor(Theme.tertiaryText)
             pauseCard
+            Divider().background(Theme.divider)
             domainCard
+            Divider().background(Theme.divider)
             blockedSources
+            Divider().background(Theme.divider)
             retentionCard
+            Divider().background(Theme.divider)
             disclosureCard
             if let message = viewModel.message {
                 Text(message).font(.caption).foregroundColor(Theme.secondaryText)
@@ -24,7 +30,7 @@ public struct CapturePrivacyView: View {
             Label(viewModel.snapshot.pauseDescription,
                   systemImage: viewModel.snapshot.isPaused ? "pause.circle.fill" : "record.circle")
                 .foregroundColor(viewModel.snapshot.isPaused ? Theme.warning : Theme.accent)
-            HStack {
+            FlowLayout(spacing: Theme.spacing1) {
                 Button("15 min") { Task { await viewModel.setPause(.minutes(15)) } }
                 Button("1 hour") { Task { await viewModel.setPause(.minutes(60)) } }
                 Button("Until tomorrow") { Task { await viewModel.setPause(.untilTomorrow) } }
@@ -35,12 +41,11 @@ public struct CapturePrivacyView: View {
                 }
             }.buttonStyle(.bordered).controlSize(.small)
         }
-        .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 
     private var domainCard: some View {
         VStack(alignment: .leading, spacing: Theme.spacing1) {
-            Text("Blocked domains").font(.subheadline).foregroundColor(Theme.text)
+            Text("Never capture these websites").font(.subheadline).foregroundColor(Theme.text)
             HStack {
                 TextField("example.com", text: $viewModel.newDomain).textFieldStyle(.roundedBorder)
                 Button("Block") { Task { await viewModel.addDomain() } }.buttonStyle(.bordered)
@@ -57,12 +62,11 @@ public struct CapturePrivacyView: View {
                 Text("No user-blocked domains").font(.caption).foregroundColor(Theme.secondaryText)
             }
         }
-        .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 
     private var blockedSources: some View {
         VStack(alignment: .leading, spacing: Theme.spacing1) {
-            Text("Paused sources").font(.subheadline).foregroundColor(Theme.text)
+            Text("Paused apps & conversations").font(.subheadline).foregroundColor(Theme.text)
             ForEach(viewModel.snapshot.blockedApps) { app in
                 sourceRow(icon: "app.badge", title: app.name, subtitle: app.id) {
                     Task { await viewModel.resumeApp(app.id) }
@@ -85,7 +89,6 @@ public struct CapturePrivacyView: View {
             Text("Pause an app or the current thread from the tray's right-click menu.")
                 .font(.caption2).foregroundColor(Theme.tertiaryText)
         }
-        .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 
     private func sourceRow(icon: String, title: String, subtitle: String, resume: @escaping () -> Void) -> some View {
@@ -103,8 +106,8 @@ public struct CapturePrivacyView: View {
     private var retentionCard: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text("Memory retention").font(.subheadline).foregroundColor(Theme.text)
-                Text("Cleanup is applied from Data Controls.").font(.caption).foregroundColor(Theme.secondaryText)
+                Text("How long to keep memories").font(.subheadline).foregroundColor(Theme.text)
+                Text("Older memories are removed when you run cleanup in Data Controls.").font(.caption).foregroundColor(Theme.secondaryText)
             }
             Spacer()
             Picker("", selection: Binding(
@@ -117,16 +120,14 @@ public struct CapturePrivacyView: View {
                 Text("1 year").tag(365)
             }.frame(width: 130)
         }
-        .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 
     private var disclosureCard: some View {
         VStack(alignment: .leading, spacing: Theme.spacingHalf) {
-            Label("Cloud processing", systemImage: "cloud")
+            Label("What leaves your Mac", systemImage: "cloud")
                 .font(.subheadline).foregroundColor(Theme.text)
-            Text("Captured text is encrypted locally. New versions, meeting transcripts, display summaries, activity summaries, and semantic-search queries may be sent in plaintext to Google's Gemini API when those features run. Local tray search and MCP latest-context reads do not use Gemini.")
+            Text("Your captures are stored encrypted on this Mac. When AI features run (summaries, meeting transcripts, timeline, and search), the relevant text is sent to Google's Gemini to process it. Plain tray search stays fully on-device.")
                 .font(.caption).foregroundColor(Theme.secondaryText)
         }
-        .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 }

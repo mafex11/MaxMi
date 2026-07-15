@@ -1,9 +1,12 @@
 import SwiftUI
+import AppKit
 import MaxMiCore
 
 public struct TrayHomeView: View {
     @Bindable private var viewModel: TrayHomeViewModel
     @Bindable private var recentCapturesViewModel: RecentCapturesViewModel
+    @Bindable private var activityViewModel: ActivityViewModel
+    @Bindable private var actionItemsViewModel: ActionItemsViewModel
     private let onTogglePause: @MainActor () -> Void
     private let onStartVoiceNote: @MainActor () -> Void
     private let onOpenMaxMi: @MainActor () -> Void
@@ -12,6 +15,8 @@ public struct TrayHomeView: View {
     public init(
         viewModel: TrayHomeViewModel,
         recentCapturesViewModel: RecentCapturesViewModel,
+        activityViewModel: ActivityViewModel,
+        actionItemsViewModel: ActionItemsViewModel,
         onTogglePause: @escaping @MainActor () -> Void,
         onStartVoiceNote: @escaping @MainActor () -> Void,
         onOpenMaxMi: @escaping @MainActor () -> Void,
@@ -19,35 +24,79 @@ public struct TrayHomeView: View {
     ) {
         self.viewModel = viewModel
         self.recentCapturesViewModel = recentCapturesViewModel
+        self.activityViewModel = activityViewModel
+        self.actionItemsViewModel = actionItemsViewModel
         self.onTogglePause = onTogglePause
         self.onStartVoiceNote = onStartVoiceNote
         self.onOpenMaxMi = onOpenMaxMi
         self.onOpenSettings = onOpenSettings
     }
 
+    /// Minimi shows a few recent activities; we cap the tray list at the top 5.
+    private static let recentLimit = 5
+
     public var body: some View {
-        VStack(spacing: Theme.spacing2) {
-            statusCard
-            searchField
-            Group {
-                if viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.spacing1) {
-                        Text("Recent memory")
-                            .font(.headline)
-                            .foregroundColor(Theme.text)
-                            .padding(.horizontal, Theme.spacing2)
-                        RecentCapturesView(viewModel: recentCapturesViewModel)
-                    }
-                } else {
-                    searchResults
-                }
-            }
+        VStack(alignment: .leading, spacing: Theme.spacing1) {
+            header
+            sectionRow
+            // The recent captures (top 5) are the home surface, like Minimi.
+            RecentCapturesView(viewModel: recentCapturesViewModel, limit: Self.recentLimit)
+                .background(Theme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadiusLarge, style: .continuous))
+                .padding(.horizontal, Theme.spacing2)
+            Spacer(minLength: 0)
             footer
         }
         .padding(.top, Theme.spacing2)
-        .frame(minWidth: 380, minHeight: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.background)
         .preferredColorScheme(.dark)
+    }
+
+    // Minimi-style header: brand icon + wordmark + status dot on the left; Actions + gear on the right.
+    private var header: some View {
+        HStack(spacing: Theme.spacing1) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: Theme.iconSizeMedium, height: Theme.iconSizeMedium)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text("MaxMi")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(Theme.text)
+            Circle()
+                .fill(viewModel.status.state == .paused ? Theme.warning : Theme.success)
+                .frame(width: 7, height: 7)
+            Spacer()
+            Button { onOpenSettings() } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 15))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(Theme.secondaryText)
+            .help("Settings")
+        }
+        .padding(.horizontal, Theme.spacing2)
+    }
+
+    // "Recent memories" heading on the left, "Record voice note" action on the right.
+    private var sectionRow: some View {
+        HStack {
+            Text("Recent memories")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(Theme.text)
+            Spacer()
+            Button { onStartVoiceNote() } label: {
+                HStack(spacing: Theme.spacingHalf) {
+                    Text("Record voice note")
+                    Image(systemName: "mic")
+                }
+                .font(.system(size: 13))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(Theme.secondaryText)
+        }
+        .padding(.horizontal, Theme.spacing2)
     }
 
     private var statusCard: some View {
@@ -123,18 +172,30 @@ public struct TrayHomeView: View {
         }
     }
 
+    // Minimi-style centered footer. "Open MaxMi" (separate window) and the standalone Voice Note
+    // button are gone — voice note now lives in the section row, everything else in this popover.
+    // The window plumbing (onOpenMaxMi, ActivityWindow) is left intact for later reuse.
     private var footer: some View {
-        HStack {
-            Button("Open MaxMi") { onOpenMaxMi() }.buttonStyle(.borderedProminent)
-            Button { onStartVoiceNote() } label: {
-                Label("Voice Note", systemImage: "mic.fill")
-            }
-            .buttonStyle(.bordered)
-            Spacer()
-            Button { onOpenSettings() } label: { Image(systemName: "gearshape") }
-                .buttonStyle(.bordered)
+        HStack(spacing: Theme.spacingHalf) {
+            Text("made with")
+            Image(systemName: "heart.fill").font(.system(size: 9))
+            Text("by")
+            // "mafex" links to the author's GitHub.
+            Text("mafex")
+                .foregroundColor(Theme.text)
+                .underline()
+                .onTapGesture {
+                    if let url = URL(string: "https://github.com/mafex11") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .onHover { inside in
+                    if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
         }
-        .padding(.horizontal, Theme.spacing2)
+        .font(.system(size: 11))
+        .foregroundColor(Theme.secondaryText)
+        .frame(maxWidth: .infinity)
         .padding(.bottom, Theme.spacing2)
     }
 

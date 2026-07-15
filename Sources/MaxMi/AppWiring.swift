@@ -221,7 +221,7 @@ final class AppWiring {
 
         // Initialize agent scheduler
         let agentRepo = StoreAgentRepository(store: store)
-        let agentRelay = GeminiAgentRelay(geminiClient: relay)
+        let agentRelay = GeminiAgentRelay(geminiClient: relay, modelID: config.extractModel)
         let hourlyAgent = HourlyAgent(repo: agentRepo, relay: agentRelay)
         agentScheduler = AgentScheduler(agent: hourlyAgent)
 
@@ -297,10 +297,13 @@ final class AppWiring {
         let recentCapturesViewModel = RecentCapturesViewModel(
             load: { @Sendable in
                 do {
+                    let reviewGateEnabled = try activityStore.cloudReviewInitialized()
                     let reviewed = try activityStore.cloudReviewedSourceApps()
                     let localOnly = try activityStore.cloudLocalOnlySourceApps()
                     return try activityStore.latestContexts(limit: 100).map { context in
-                        let cloudState: CloudProcessingDisplayState = !reviewed.contains(context.sourceApp)
+                        // With the review gate off (Minimi-style), sources are never "pending" —
+                        // they process unless explicitly kept local-only.
+                        let cloudState: CloudProcessingDisplayState = (reviewGateEnabled && !reviewed.contains(context.sourceApp))
                             ? .pendingReview
                             : (localOnly.contains(context.sourceApp) ? .localOnly : .allowed)
                         return RecentCaptureDTO(
@@ -868,6 +871,8 @@ final class AppWiring {
             navigation: menuPopoverNavigation,
             trayHomeViewModel: trayHomeViewModel,
             recentCapturesViewModel: recentCapturesViewModel,
+            activityViewModel: viewModel,
+            actionItemsViewModel: actionItemsViewModel,
             settingsViewModel: settingsViewModel,
             capturePrivacyViewModel: capturePrivacyViewModel,
             dataControlsViewModel: dataControlsViewModel,
@@ -880,7 +885,7 @@ final class AppWiring {
             },
             onOpenMaxMi: { @MainActor [weak self] in self?.activityWindow.show() }
         ))
-        popoverController.view.frame = NSRect(x: 0, y: 0, width: 520, height: 650)
+        popoverController.view.frame = NSRect(x: 0, y: 0, width: 360, height: 520)
         menuBar.setPopoverContent(
             popoverController,
             onPrimaryShow: { [weak self] in self?.menuPopoverNavigation.showHome() }
