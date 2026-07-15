@@ -153,7 +153,8 @@ claims from unit tests as live evidence.
   database was preserved separately.
 - N-1 migration/rollback drill: pass for `v8` → `v9`, including retained encrypted
   version rows and a portable pre-restore backup, 2026-07-15.
-- CPU/memory/disk/queue profiles: pending Batch 7.6.
+- CPU/memory/disk/queue profiles: instrumentation and short signed-app profile pass;
+  eight-hour normal-use profile pending. See `PHASE7_RUNTIME_BUDGETS.md`.
 - Secure distributed AI path: pending Batch 7.7.
 - Clean install, upgrade, signing, notarization, and Gatekeeper: pending Batch 7.8.
 - Seven-day soak: pending Batch 7.9.
