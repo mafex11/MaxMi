@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import MaxMiCore
 
 public struct SettingsView: View {
@@ -144,9 +145,12 @@ public struct SettingsView: View {
                 .font(.headline)
                 .foregroundColor(Theme.text)
 
-            HStack(spacing: Theme.spacing1) {
-                Image(systemName: "info.circle")
-                    .foregroundColor(Theme.accent)
+            HStack(spacing: Theme.spacing2) {
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: Theme.spacingHalf) {
                     Text("MaxMi \(viewModel.version)")
                         .foregroundColor(Theme.text)
