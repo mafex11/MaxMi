@@ -73,6 +73,8 @@ final class Phase7BaselineScriptTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("facts=1"))
         XCTAssertTrue(result.stdout.contains("latest_contexts=1"))
         XCTAssertTrue(result.stdout.contains("retry_total=1"))
+        XCTAssertTrue(result.stdout.contains("runtime_log_files=0"))
+        XCTAssertTrue(result.stdout.contains("runtime_log_bytes=0"))
         XCTAssertFalse(result.stdout.contains("TOP_SECRET"))
     }
 

@@ -1,6 +1,6 @@
 # Phase 7 live verification
 
-**Status:** baseline in progress  
+**Status:** Batches 7.0–7.1 complete; Batch 7.2 pending
 **Started:** 2026-07-15  
 **Plan:** [`PHASE7_RELIABILITY_PARITY_PLAN.md`](PHASE7_RELIABILITY_PARITY_PLAN.md)
 
@@ -114,3 +114,67 @@ claims from unit tests as live evidence.
 - Secure distributed AI path: pending Batch 7.7.
 - Clean install, upgrade, signing, notarization, and Gatekeeper: pending Batch 7.8.
 - Seven-day soak: pending Batch 7.9.
+
+## Batch 7.1 structured logging and diagnostics
+
+Implemented on 2026-07-15:
+
+- a closed event vocabulary with no free-form message API;
+- JSON-lines logs split by process and rotated at 5 MiB per file, with one active plus
+  four archives per process;
+- mode-`0700` log directory and mode-`0600` files;
+- numeric system error codes only—localized descriptions and error domains are not
+  written;
+- typed parser/trigger/outcome/operation tokens restricted to a narrow character set;
+- migration of app, capture, parser, store, pipeline, Activity, agent, meeting/audio,
+  Settings, and MCP logging;
+- a regression test that rejects `NSLog`, stderr writes, `print`, and OS logger calls in
+  runtime source (the MCP stdout protocol reply is the only explicit exception);
+- test-process logs redirected to a temporary directory rather than live Application
+  Support;
+- **Export Diagnostics…** and **Reveal Logs** controls inside the Settings popover;
+- a fixed-schema aggregate manifest plus re-parsed/re-serialized logs that discard
+  malformed lines, unknown keys, invalid events, and free-form values;
+- diagnostics export refuses to replace an existing destination.
+
+### Automated verification
+
+The full suite passes 460 tests. New coverage verifies:
+
+- concurrent log lines remain valid JSON;
+- rotation never exceeds its configured file count/size;
+- directory/file modes are `0700`/`0600`;
+- secret-bearing error descriptions and domains never reach disk;
+- potential free-form tokens are rejected;
+- unstructured logging cannot be reintroduced in runtime source;
+- a tampered log containing a private payload is excluded from diagnostics export;
+- diagnostics manifests contain aggregate database state only;
+- existing export destinations are preserved;
+- baseline reporting includes bounded runtime-log count and bytes.
+
+The pre-existing concurrent audio-mixer test was also corrected to use real nanosecond
+timestamps spaced by 100 ms instead of adding 100 raw host ticks. It passed three
+consecutive focused runs before the final full-suite pass.
+
+### Signed live verification
+
+| Check | Result |
+|---|---|
+| Signed app launched | yes; one MaxMi process |
+| Signature verification | valid on disk; designated requirement satisfied |
+| Log directory mode | `0700` |
+| Runtime log files | 1 (`maxmi.log`) |
+| Runtime log file mode | `0600` |
+| Runtime log bytes at `2026-07-15T10:45:03Z` | 966 |
+| Unknown JSON keys | 0 |
+| Test log in live directory | none |
+| Retry queue | 0 total / 0 overdue |
+| Recording temp files | 0 |
+| Settings diagnostics controls | compiled and model/writer tested; pending manual visual click |
+
+The first safe live events were three `parser_no_content`, two `app_started`, and three
+`agent_run_failed` events. The agent failures share numeric system error code `1`; no
+error description, prompt, response, source identifier, or activity content was queried
+or written. The live database has seven cumulative failed agent runs and no current run
+or retry backlog. Root-cause remediation is carried forward as a reliability issue; the
+new logging layer has achieved the intended content-safe observability.

@@ -82,8 +82,11 @@ public struct SafeLogToken: Sendable, Equatable {
     public let value: String
 
     public init?(validating value: String) {
-        guard !value.isEmpty, value.utf8.count <= 96 else { return nil }
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-")
+        guard !value.isEmpty,
+              value.utf8.count <= 96,
+              !value.contains("://"),
+              !value.hasPrefix("/") else { return nil }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-")
         guard value.unicodeScalars.allSatisfy(allowed.contains) else { return nil }
         self.value = value
     }
@@ -126,7 +129,12 @@ public final class SafeLogger: @unchecked Sendable {
     public static let shared = SafeLogger()
 
     public static var defaultLogDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        if ProcessInfo.processInfo.processName.lowercased().contains("xctest") {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("MaxMi-Test-Logs", isDirectory: true)
+                .appendingPathComponent(String(ProcessInfo.processInfo.processIdentifier), isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MaxMi/Logs", isDirectory: true)
     }
 

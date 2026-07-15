@@ -3,6 +3,11 @@ import XCTest
 @testable import MaxMiCore
 
 final class SafeLoggerTests: XCTestCase {
+    func testDefaultTestLogsStayOutsideApplicationSupport() {
+        XCTAssertTrue(SafeLogger.defaultLogDirectory.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+        XCTAssertFalse(SafeLogger.defaultLogDirectory.path.contains("Application Support"))
+    }
+
     func testErrorDescriptionAndDomainNeverReachLog() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -83,6 +88,8 @@ final class SafeLoggerTests: XCTestCase {
         XCTAssertNotNil(SafeLogToken(validating: "BrowserWeb.v2/chromium"))
         XCTAssertNil(SafeLogToken(validating: "private message text"))
         XCTAssertNil(SafeLogToken(validating: "https://example.com?q=private"))
+        XCTAssertNil(SafeLogToken(validating: "https://example.com/private"))
+        XCTAssertNil(SafeLogToken(validating: "/Users/private/document"))
         XCTAssertNil(SafeLogToken(validating: String(repeating: "a", count: 97)))
     }
 

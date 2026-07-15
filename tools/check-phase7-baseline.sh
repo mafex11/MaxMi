@@ -102,9 +102,19 @@ printf 'action_items_open=%s\n' "$(sql_value "SELECT count(*) FROM agent_action_
 if [ -d "$APP_SUPPORT_DIR" ]; then
   printf 'application_support_bytes=%s\n' "$(( $(du -sk "$APP_SUPPORT_DIR" | awk '{print $1}') * 1024 ))"
   printf 'recording_temp_files=%s\n' "$(find "$APP_SUPPORT_DIR" -maxdepth 2 -type f \( -name '*.wav' -o -name '*.caf' -o -name '*.m4a' -o -name '*.pcm' -o -name '*.tmp' \) -print | wc -l | tr -d ' ')"
+  log_directory="$APP_SUPPORT_DIR/Logs"
+  if [ -d "$log_directory" ]; then
+    printf 'runtime_log_files=%s\n' "$(find "$log_directory" -maxdepth 1 -type f -name '*.log*' -print | wc -l | tr -d ' ')"
+    printf 'runtime_log_bytes=%s\n' "$(find "$log_directory" -maxdepth 1 -type f -name '*.log*' -exec stat -f '%z' {} + | awk '{ total += $1 } END { print total + 0 }')"
+  else
+    printf 'runtime_log_files=0\n'
+    printf 'runtime_log_bytes=0\n'
+  fi
 else
   printf 'application_support_bytes=0\n'
   printf 'recording_temp_files=0\n'
+  printf 'runtime_log_files=0\n'
+  printf 'runtime_log_bytes=0\n'
 fi
 
 if [ "${MAXMI_SKIP_PROCESS_CHECK:-0}" = "1" ]; then

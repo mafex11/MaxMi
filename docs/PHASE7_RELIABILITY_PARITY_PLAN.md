@@ -1,6 +1,6 @@
 # Phase 7 — Reliability, Live Parity, and Distribution Plan
 
-**Status:** planned  
+**Status:** in progress; Batches 7.0–7.1 complete
 **Created:** 2026-07-15  
 **Depends on:** Phases 0–6 on `main` through `4e14b37`  
 **Reference:** Minimi 1.0.59
@@ -92,6 +92,8 @@ operations unless the user explicitly approves them.
 
 ### Batch 7.0 — Freeze and measure the starting baseline
 
+**Status:** complete on 2026-07-15 (`8cfbcd0`).
+
 **Purpose:** make later reliability claims comparable.
 
 Implementation:
@@ -117,6 +119,8 @@ Acceptance:
 - the working tree and app version are recorded.
 
 ### Batch 7.1 — Structured rotating logs and lifecycle diagnostics
+
+**Status:** complete on 2026-07-15 (`89ea48a`, `70c73d4`, `8f52aaf`).
 
 **Purpose:** diagnose long-running failures without exposing captured data.
 
@@ -452,4 +456,3 @@ The following cannot be truthfully automated or inferred:
 - [ ] Seven-day soak passes.
 - [ ] Developer-ID/notarization/Gatekeeper checks pass if distributing.
 - [ ] Known limitations and accepted deviations from Minimi are documented.
-

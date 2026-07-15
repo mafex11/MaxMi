@@ -157,15 +157,15 @@ final class AudioMixerTests: XCTestCase {
         // Simulate concurrent calls from SC and mic tap
         DispatchQueue.global().async {
             for i in 0..<10 {
-                let time = AVAudioTime(hostTime: UInt64(1000 + i * 100))
-                mixer.mixSystem(buffer, at: time)
+                let timestampNs = UInt64(1_000_000_000 + i * 100_000_000)
+                mixer.mixSystem(buffer, timestampNs: timestampNs)
             }
         }
 
         DispatchQueue.global().async {
             for i in 0..<10 {
-                let time = AVAudioTime(hostTime: UInt64(1000 + i * 100))
-                mixer.mixMic(buffer, at: time)
+                let timestampNs = UInt64(1_000_000_000 + i * 100_000_000)
+                mixer.mixMic(buffer, timestampNs: timestampNs)
             }
         }
 
