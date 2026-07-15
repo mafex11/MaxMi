@@ -2,6 +2,26 @@ import XCTest
 @testable import MaxMiMeetings
 
 final class MeetingDetectorTests: XCTestCase {
+    func testConcurrentEvaluationsAreSerialized() {
+        let detector = MeetingDetector(debounceMs: 0)
+        let queue = DispatchQueue(label: "meeting-detector-test", attributes: .concurrent)
+        let group = DispatchGroup()
+
+        for index in 0..<200 {
+            group.enter()
+            queue.async {
+                let active: [AudioInputProcess] = index.isMultiple(of: 2)
+                    ? [AudioInputProcess(pid: pid_t(index + 1), bundleID: "us.zoom.xos")]
+                    : []
+                detector.evaluate(active: active)
+                group.leave()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+        detector.stop()
+    }
+
     func testClassifiesKnownApps() {
         XCTAssertEqual(MeetingAppList.classify(bundleID: "us.zoom.xos"), .native("Zoom"))
         XCTAssertEqual(MeetingAppList.classify(bundleID: "com.microsoft.teams2"), .native("Microsoft Teams"))

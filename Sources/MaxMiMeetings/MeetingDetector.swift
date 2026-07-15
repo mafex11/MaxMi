@@ -24,10 +24,12 @@ public struct SystemMeetingClock: MeetingClock {
 }
 
 /// Meeting detector using public CoreAudio APIs
-public final class MeetingDetector: MeetingDetecting {
+public final class MeetingDetector: MeetingDetecting, @unchecked Sendable {
     private let clock: MeetingClock
     private let debounceMs: Int
     private let browserURLProvider: (_ bundleID: String, _ pid: pid_t) -> String?
+    private let monitorQueue = DispatchQueue(label: "com.maxmi.meeting-detector")
+    private let monitorQueueKey = DispatchSpecificKey<UInt8>()
 
     // State tracking for multi-process detection
     private var activeBundleIDs: Set<String> = []
@@ -51,10 +53,17 @@ public final class MeetingDetector: MeetingDetecting {
         self.clock = clock
         self.debounceMs = debounceMs
         self.browserURLProvider = browserURLProvider
+        monitorQueue.setSpecific(key: monitorQueueKey, value: 1)
     }
 
     /// Pure testable evaluation logic
     public func evaluate(active: [AudioInputProcess]) {
+        onMonitorQueue { [self] in
+            evaluateIsolated(active: active)
+        }
+    }
+
+    private func evaluateIsolated(active: [AudioInputProcess]) {
         // Audio-process activity is sufficient only for native meeting apps. Browsers require
         // URL verification (Google Meet/Zoom/Teams/etc.) and must not fire merely because the
         // browser is using a microphone for dictation or another recording site.
@@ -103,23 +112,35 @@ public final class MeetingDetector: MeetingDetecting {
     }
 
     public func start() {
-        guard !isMonitoring else { return }
-        #if os(macOS)
-        startCoreAudioMonitoring()
-        #else
-        // Non-macOS: no-op
-        #endif
+        onMonitorQueue { [self] in
+            guard !isMonitoring else { return }
+            #if os(macOS)
+            startCoreAudioMonitoring()
+            #else
+            // Non-macOS: no-op
+            #endif
+        }
     }
 
     public func stop() {
-        debounceTimers.values.forEach { $0.cancel() }
-        debounceTimers.removeAll()
-        activeBundleIDs.removeAll()
-        lastSeenPIDs.removeAll()
-        #if os(macOS)
-        guard isMonitoring else { return }
-        stopCoreAudioMonitoring()
-        #endif
+        onMonitorQueue { [self] in
+            debounceTimers.values.forEach { $0.cancel() }
+            debounceTimers.removeAll()
+            activeBundleIDs.removeAll()
+            lastSeenPIDs.removeAll()
+            #if os(macOS)
+            guard isMonitoring else { return }
+            stopCoreAudioMonitoring()
+            #endif
+        }
+    }
+
+    private func onMonitorQueue(_ operation: () -> Void) {
+        if DispatchQueue.getSpecific(key: monitorQueueKey) != nil {
+            operation()
+        } else {
+            monitorQueue.sync(execute: operation)
+        }
     }
 
     #if os(macOS)
@@ -138,7 +159,7 @@ public final class MeetingDetector: MeetingDetecting {
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &address,
-            nil,
+            monitorQueue,
             listenerBlock
         )
 
@@ -222,7 +243,7 @@ public final class MeetingDetector: MeetingDetecting {
         let status = AudioObjectAddPropertyListenerBlock(
             processID,
             &address,
-            nil,
+            monitorQueue,
             listenerBlock
         )
 
@@ -243,7 +264,7 @@ public final class MeetingDetector: MeetingDetecting {
         AudioObjectRemovePropertyListenerBlock(
             processID,
             &address,
-            nil,
+            monitorQueue,
             listener
         )
 
@@ -306,7 +327,7 @@ public final class MeetingDetector: MeetingDetecting {
             activeProcesses.append(AudioInputProcess(pid: pid, bundleID: bundleID))
         }
 
-        evaluate(active: activeProcesses)
+        evaluateIsolated(active: activeProcesses)
     }
 
     private func stopCoreAudioMonitoring() {
@@ -327,7 +348,7 @@ public final class MeetingDetector: MeetingDetecting {
             AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject),
                 &address,
-                nil,
+                monitorQueue,
                 listener
             )
 

@@ -118,7 +118,7 @@ Implemented and automatically verified on 2026-07-15:
 - process-local watchdog counters for audio engines, screen streams, audio-device
   observers, and meeting detectors, plus MCP helper counts in diagnostics export.
 
-The complete automated suite passes 464 tests. The exact ownership and shutdown
+The complete automated suite passes 465 tests. The exact ownership and shutdown
 inventory is recorded in `PHASE7_RESOURCE_LIFECYCLE.md`. Real microphone, meeting,
 device-switch, and termination/relaunch acceptance remains in Batch 7.4 and is not
 claimed by these automated results.
@@ -128,6 +128,12 @@ quit emitted `app_cleanup_started`, `app_cleanup_completed`, then `app_stopped`;
 application and MCP process counts reached zero; no active-recording marker remained;
 and the same signed build relaunched successfully. This proves the idle termination
 path only—the active-recording termination scenario remains in Batch 7.4.
+
+That relaunched build subsequently exposed a CoreAudio listener dictionary race in a
+macOS crash report. The listener graph was serialized onto one private queue, covered
+by a 200-call concurrent regression test, and the rebuilt signed app survived 60 rapid
+audio-process starts/stops. The crash was treated as failed evidence and is not counted
+as a passing residency run; longer soak coverage remains in Batch 7.9.
 
 ## Recovery, performance, release, and soak
 

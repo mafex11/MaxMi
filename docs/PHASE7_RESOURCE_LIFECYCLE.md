@@ -51,8 +51,18 @@ so repeated stop calls cannot create misleading negative values.
 
 ## Automated evidence
 
-- 60 meeting/lifecycle tests pass.
-- The complete suite passes 464 tests.
+- 61 meeting/lifecycle tests pass.
+- The complete suite passes 465 tests.
 - Coverage includes skip cleanup, repeated shutdown, no persistence on interruption,
   recovery marker schema/modes/consumption, corrupt marker cleanup, and bounded
   watchdog counters.
+
+## Live race found and closed
+
+The first post-Batch-7.2 residency run exposed a real CoreAudio callback crash in
+`MeetingDetector.rebuildProcessListeners()`: property-list callbacks arrived on
+concurrent system queues while mutating listener dictionaries. All detector state and
+CoreAudio add/remove callbacks now use one private serial queue; start, stop, and the
+test evaluation entry point synchronize onto that same queue without reentrant
+deadlock. A 200-call concurrent regression test and a signed-app 60-process audio
+churn smoke pass without a crash.
