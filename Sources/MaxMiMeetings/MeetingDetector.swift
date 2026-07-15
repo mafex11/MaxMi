@@ -33,6 +33,7 @@ public final class MeetingDetector: MeetingDetecting {
     private var activeBundleIDs: Set<String> = []
     private var lastSeenPIDs: [String: Set<pid_t>] = [:]  // bundleID -> set of active PIDs
     private var debounceTimers: [String: Task<Void, Never>] = [:]
+    private var isMonitoring = false
 
     #if os(macOS)
     private var processListListener: AudioObjectPropertyListenerBlock?
@@ -102,6 +103,7 @@ public final class MeetingDetector: MeetingDetecting {
     }
 
     public func start() {
+        guard !isMonitoring else { return }
         #if os(macOS)
         startCoreAudioMonitoring()
         #else
@@ -110,7 +112,12 @@ public final class MeetingDetector: MeetingDetecting {
     }
 
     public func stop() {
+        debounceTimers.values.forEach { $0.cancel() }
+        debounceTimers.removeAll()
+        activeBundleIDs.removeAll()
+        lastSeenPIDs.removeAll()
         #if os(macOS)
+        guard isMonitoring else { return }
         stopCoreAudioMonitoring()
         #endif
     }
@@ -146,6 +153,8 @@ public final class MeetingDetector: MeetingDetecting {
         }
 
         processListListener = listenerBlock
+        isMonitoring = true
+        MeetingResourceTracker.shared.meetingDetectorStarted()
 
         // Initial build of listeners
         rebuildProcessListeners()
@@ -323,6 +332,8 @@ public final class MeetingDetector: MeetingDetecting {
             )
 
             processListListener = nil
+            isMonitoring = false
+            MeetingResourceTracker.shared.meetingDetectorStopped()
         }
     }
     #endif

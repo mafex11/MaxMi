@@ -26,6 +26,9 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
     private var stream: SCStream?
     private var engine: AVAudioEngine?
     private var resolvedFrame: CGRect?
+    private var streamTracked = false
+    private var engineTracked = false
+    private var observerTracked = false
     private let queue = DispatchQueue(label: "com.maxmi.audiocapture", qos: .userInitiated)
 
     public init(mixer: AudioMixer) {
@@ -86,6 +89,8 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
             // Add audio stream output
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
             try await stream.startCapture()
+            streamTracked = true
+            MeetingResourceTracker.shared.screenStreamStarted()
 
             // 6. Start mic tap
             try await startMicTap()
@@ -102,6 +107,7 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
             if let stream {
                 try? await stream.stopCapture()
                 self.stream = nil
+                stopTrackingStream()
             }
             if let engine {
                 engine.inputNode.removeTap(onBus: 0)
@@ -110,6 +116,7 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
                     self, name: .AVAudioEngineConfigurationChange, object: engine
                 )
                 self.engine = nil
+                stopTrackingEngine()
             }
             try await startMicOnly()
             return "mic-only"
@@ -126,12 +133,14 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
                 // Ignore stop errors
             }
             self.stream = nil
+            stopTrackingStream()
         }
 
         // Stop AVAudioEngine
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
+        stopTrackingEngine()
 
         NotificationCenter.default.removeObserver(self)
         mixer.flush()
@@ -184,6 +193,10 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
         )
 
         try engine.start()
+        engineTracked = true
+        observerTracked = true
+        MeetingResourceTracker.shared.audioEngineStarted()
+        MeetingResourceTracker.shared.deviceObserverStarted()
     }
 
     @objc private func handleAudioEngineConfigurationChange() {
@@ -196,6 +209,7 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
                 self, name: .AVAudioEngineConfigurationChange, object: engine
             )
             self.engine = nil
+            self.stopTrackingEngine()
             do {
                 try await startMicTap()
             } catch {
@@ -218,6 +232,23 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
             height: CGFloat(display.frame.height)
         )
         return displayFrame.intersects(window.frame)
+    }
+
+    private func stopTrackingStream() {
+        guard streamTracked else { return }
+        streamTracked = false
+        MeetingResourceTracker.shared.screenStreamStopped()
+    }
+
+    private func stopTrackingEngine() {
+        if observerTracked {
+            observerTracked = false
+            MeetingResourceTracker.shared.deviceObserverStopped()
+        }
+        if engineTracked {
+            engineTracked = false
+            MeetingResourceTracker.shared.audioEngineStopped()
+        }
     }
 }
 

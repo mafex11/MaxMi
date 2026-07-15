@@ -23,7 +23,6 @@ public enum MeetingState: Equatable, Sendable {
 /// All capture/transcriber objects are created inside the actor via @Sendable factories and never escape.
 /// Panel calls hop to @MainActor; PCMFrame (Sendable) is the only audio type crossing boundaries.
 public actor MeetingSession {
-    private enum RecordingKind { case meeting, voiceNote }
     private nonisolated(unsafe) let panel: any MeetingPanelPresenting
     private let persister: any MeetingPersisting
     private let authorizer: any MeetingAuthorizing
@@ -33,6 +32,7 @@ public actor MeetingSession {
     private let stopGraceMs: Int
     private let promptCooldownMs: Int
     private let maxDurationMs: Int?
+    private let lifecycleTracker: any MeetingLifecycleTracking
 
     private var _state: MeetingState = .idle
     public var state: MeetingState { _state }
@@ -43,7 +43,7 @@ public actor MeetingSession {
     private var currentTitle: String?
     private var startedAtMs: Int64?
     private var captureMode: String?
-    private var recordingKind: RecordingKind = .meeting
+    private var recordingKind: MeetingRecordingKind = .meeting
 
     // Active objects during recording
     private var capture: (any AudioCaptureControlling)?
@@ -52,6 +52,7 @@ public actor MeetingSession {
     private var maxDurationTask: Task<Void, Never>?
     private var endSuggestionGeneration = 0
     private var lastTerminalAtMs: Int64?
+    private var didShutdown = false
 
     public init(
         panel: any MeetingPanelPresenting,
@@ -62,7 +63,8 @@ public actor MeetingSession {
         clock: any MeetingClock,
         stopGraceMs: Int = 8_000,
         promptCooldownMs: Int = 5_000,
-        maxDurationMs: Int? = nil
+        maxDurationMs: Int? = nil,
+        lifecycleTracker: any MeetingLifecycleTracking = NoopMeetingLifecycleTracker()
     ) {
         self.panel = panel
         self.persister = persister
@@ -73,10 +75,12 @@ public actor MeetingSession {
         self.stopGraceMs = max(0, stopGraceMs)
         self.promptCooldownMs = max(0, promptCooldownMs)
         self.maxDurationMs = maxDurationMs.map { max(1_000, $0) }
+        self.lifecycleTracker = lifecycleTracker
     }
 
     /// Candidate detected -> prompting state, show prompt UI
     public func candidateDetected(bundleID: String, pid: pid_t, title: String?) {
+        guard !didShutdown else { return }
         if _state == .recording {
             guard bundleID == currentBundleID else { return }
             endSuggestionGeneration += 1
@@ -99,6 +103,7 @@ public actor MeetingSession {
 
     /// Starts an explicit mic-only voice note through the same Whisper and persistence path.
     public func startVoiceNote(title: String? = nil) async {
+        guard !didShutdown else { return }
         guard _state == .idle || _state == .failed || _state == .skipped else { return }
         if let lastTerminalAtMs,
            clock.nowMs() - lastTerminalAtMs < Int64(promptCooldownMs) { return }
@@ -114,6 +119,7 @@ public actor MeetingSession {
 
     /// User accepted record -> authorize, create capture/transcriber, wire audio->text, start recording
     public func userAcceptedRecord() async {
+        guard !didShutdown else { return }
         guard _state == .prompting,
               let bundleID = currentBundleID,
               let pid = currentPid else {
@@ -198,6 +204,10 @@ public actor MeetingSession {
 
             // Transition to recording
             _state = .recording
+            await lifecycleTracker.recordingStarted(
+                kind: recordingKind,
+                startedAtMs: startedAtMs ?? clock.nowMs()
+            )
             startMaximumDurationTimer()
             let kind = recordingKind
             await MainActor.run {
@@ -222,6 +232,7 @@ public actor MeetingSession {
             _ = await transcriberInstance.finish()
             capture = nil
             transcriber = nil
+            await lifecycleTracker.recordingEnded()
             lastTerminalAtMs = clock.nowMs()
             await MainActor.run {
                 panel.hidePanel()
@@ -241,8 +252,12 @@ public actor MeetingSession {
         if capture != nil {
             await capture?.stop()
         }
+        if transcriber != nil {
+            _ = await transcriber?.finish()
+        }
         capture = nil
         transcriber = nil
+        await lifecycleTracker.recordingEnded()
         _state = .skipped
         lastTerminalAtMs = clock.nowMs()
         await MainActor.run {
@@ -297,6 +312,7 @@ public actor MeetingSession {
         // Clean up
         capture = nil
         transcriber = nil
+        await lifecycleTracker.recordingEnded()
         _state = .idle
         lastTerminalAtMs = clock.nowMs()
         clearCurrentContext()
@@ -304,6 +320,41 @@ public actor MeetingSession {
         await MainActor.run {
             panel.hidePanel()
         }
+    }
+
+    /// Idempotent process-lifecycle teardown. An interrupted recording is deliberately
+    /// not persisted because it has not passed the user's explicit stop/save boundary.
+    public func shutdown() async {
+        guard !didShutdown else { return }
+        await tearDownInterruptedSession()
+        didShutdown = true
+    }
+
+    /// Reusable interruption path for sleep, lock, and fast-user-switch events.
+    public func interrupt() async {
+        guard !didShutdown else { return }
+        await tearDownInterruptedSession()
+    }
+
+    private func tearDownInterruptedSession() async {
+        levelTask?.cancel()
+        levelTask = nil
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
+        endSuggestionGeneration += 1
+
+        if let capture {
+            await capture.stop()
+        }
+        if let transcriber {
+            _ = await transcriber.finish()
+        }
+        capture = nil
+        transcriber = nil
+        await lifecycleTracker.recordingEnded()
+        _state = .idle
+        clearCurrentContext()
+        await MainActor.run { panel.hidePanel() }
     }
 
     /// Input stopped -> debounced end suggestion, but never auto-persist

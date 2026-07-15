@@ -114,6 +114,12 @@ final class AppWiring {
     var meetingSession: MeetingSession?
     var rightLanePanel: RightLanePanel?
     var modelStore: WhisperModelStore?
+    let meetingLifecycleTracker: FileMeetingLifecycleTracker
+    var meetingPreparationTask: Task<Void, Never>?
+    private var workspaceObserverTokens: [NSObjectProtocol] = []
+    private var didInstallMenu = false
+    private var isShuttingDown = false
+    private var isLifecycleSuspended = false
 
     // Activity focus-generation mechanism
     var focusGeneration: Int = 0
@@ -141,6 +147,9 @@ final class AppWiring {
         var dir = appSupport
         var rv = URLResourceValues(); rv.isExcludedFromBackup = true
         try? dir.setResourceValues(rv)
+        meetingLifecycleTracker = FileMeetingLifecycleTracker(
+            directoryURL: appSupport.appendingPathComponent("RecordingState", isDirectory: true)
+        )
 
         let config = EnvConfig.load(searchPaths: [
             appSupport.appendingPathComponent(".env"),
@@ -593,6 +602,10 @@ final class AppWiring {
                     let buildValue = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
                     let build = SafeLogToken(validating: buildValue)
                         ?? SafeLogToken(validating: "unknown")!
+                    let helperProcesses = maxMiProcessCount(
+                        matching: "/MaxMi.app/Contents/MacOS/maxmi-mcp$"
+                    )
+                    let meetingResources = MeetingResourceTracker.shared.snapshot()
                     let manifest = SafeDiagnosticsManifest(
                         appVersion: version,
                         appBuild: build,
@@ -604,7 +617,14 @@ final class AppWiring {
                         ),
                         processes: SafeDiagnosticsProcesses(
                             app: maxMiProcessCount(matching: "/MaxMi.app/Contents/MacOS/MaxMi$"),
-                            mcp: maxMiProcessCount(matching: "/MaxMi.app/Contents/MacOS/maxmi-mcp$")
+                            mcp: helperProcesses
+                        ),
+                        resources: SafeDiagnosticsResources(
+                            audioEngines: meetingResources.audioEngines,
+                            screenStreams: meetingResources.screenStreams,
+                            deviceObservers: meetingResources.deviceObservers,
+                            meetingDetectors: meetingResources.meetingDetectors,
+                            helperProcesses: helperProcesses
                         ),
                         database: try activityStore.runtimeDiagnostics(
                             nowMs: epochNowMs(),
@@ -804,9 +824,12 @@ final class AppWiring {
     }
 
     func start() {
+        guard !isShuttingDown else { return }
         paused = (try? store.capturePauseState(nowMs: epochNowMs()).isPaused(at: epochNowMs())) ?? true
         menuBar.paused = paused
-        menuBar.install(
+        if !didInstallMenu {
+            didInstallMenu = true
+            menuBar.install(
             onTogglePause: { [weak self] in self?.toggleGlobalPause() },
             onQuit: { NSApp.terminate(nil) },
             recentApps: { [weak self] in self?.recentApps ?? [] },
@@ -832,7 +855,8 @@ final class AppWiring {
                 self.menuPopoverNavigation.showSettings()
                 DispatchQueue.main.async { [weak self] in self?.menuBar.showPopover() }
             }
-        )
+            )
+        }
         menuBar.encryptionAvailable = encryptionAvailable
         guard encryptionAvailable else { return }          // capture paused per §9
         do { try store.encryptExistingContent(nowMs: epochNowMs()) }   // §6: backfill before capture
@@ -870,31 +894,7 @@ final class AppWiring {
             )
         }
 
-        // Sleep/lock notification for activity
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.willSleepNotification,
-            object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let nowMs = epochNowMs()
-                try? self.store.closeOpenVisits(nowMs: nowMs)
-                self.currentVisitID = nil
-                try? self.store.closeActiveSession(nowMs: nowMs)
-            }
-        }
-
-        // Screen lock / session resign for activity
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.sessionDidResignActiveNotification,
-            object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let nowMs = epochNowMs()
-                try? self.store.closeOpenVisits(nowMs: nowMs)
-                self.currentVisitID = nil
-                try? self.store.closeActiveSession(nowMs: nowMs)
-            }
-        }
+        installWorkspaceLifecycleObserversIfNeeded()
 
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
         guard self.observer == nil else { return }  // prevent double-start
@@ -1037,6 +1037,82 @@ final class AppWiring {
         }
     }
 
+    private func installWorkspaceLifecycleObserversIfNeeded() {
+        guard workspaceObserverTokens.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            workspaceObserverTokens.append(center.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in await self?.suspendForWorkspaceLifecycle() }
+            })
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            workspaceObserverTokens.append(center.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.resumeFromWorkspaceLifecycle() }
+            })
+        }
+    }
+
+    private func suspendForWorkspaceLifecycle() async {
+        guard !isShuttingDown, !isLifecycleSuspended else { return }
+        isLifecycleSuspended = true
+        observer?.stop()
+        meetingDetector?.stop()
+        await meetingSession?.interrupt()
+        let nowMs = epochNowMs()
+        try? store.closeOpenVisits(nowMs: nowMs)
+        currentVisitID = nil
+        try? store.closeActiveSession(nowMs: nowMs)
+    }
+
+    private func resumeFromWorkspaceLifecycle() {
+        guard !isShuttingDown, isLifecycleSuspended else { return }
+        isLifecycleSuspended = false
+        if AXIsProcessTrusted() {
+            observer?.start()
+            meetingDetector?.start()
+        }
+    }
+
+    func shutdown() async {
+        guard !isShuttingDown else { return }
+        isShuttingDown = true
+        SafeLogger.shared.log(.info, subsystem: .app, event: .appCleanupStarted)
+
+        pipelineTimer?.invalidate()
+        pipelineTimer = nil
+        captureSummaryTimer?.invalidate()
+        captureSummaryTimer = nil
+        agentBackgroundScheduler?.invalidate()
+        agentBackgroundScheduler = nil
+        meetingPreparationTask?.cancel()
+        meetingPreparationTask = nil
+        observer?.stop()
+        observer = nil
+        meetingDetector?.stop()
+        meetingDetector = nil
+
+        let center = NSWorkspace.shared.notificationCenter
+        workspaceObserverTokens.forEach { center.removeObserver($0) }
+        workspaceObserverTokens.removeAll()
+
+        await meetingSession?.shutdown()
+        meetingSession = nil
+        rightLanePanel?.shutdown()
+        rightLanePanel = nil
+
+        let nowMs = epochNowMs()
+        try? store.closeOpenVisits(nowMs: nowMs)
+        try? store.closeOpenSessions(nowMs: nowMs)
+        currentVisitID = nil
+
+        SafeLogger.shared.log(.info, subsystem: .app, event: .appCleanupCompleted)
+        SafeLogger.shared.log(.info, subsystem: .app, event: .appStopped)
+    }
+
     private func wireMeetingCapture() {
         guard encryptionAvailable else { return }  // meetings also require encryption
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }
@@ -1065,7 +1141,8 @@ final class AppWiring {
             clock: SystemMeetingClock(),
             stopGraceMs: 8_000,
             promptCooldownMs: 5_000,
-            maxDurationMs: 4 * 60 * 60 * 1_000
+            maxDurationMs: 4 * 60 * 60 * 1_000,
+            lifecycleTracker: meetingLifecycleTracker
         )
         self.meetingSession = session
 
@@ -1097,7 +1174,13 @@ final class AppWiring {
         }
 
         // Ensure whisper model before arming detector
-        Task { @MainActor in
+        meetingPreparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if await self.meetingLifecycleTracker.recoverInterrupted() != nil {
+                SafeLogger.shared.log(
+                    .warning, subsystem: .meeting, event: .interruptedRecordingRecovered
+                )
+            }
             panel.showPreparing()
             do {
                 try await modelStore.ensureModel { @Sendable remoteURL in
@@ -1105,6 +1188,7 @@ final class AppWiring {
                     return tempURL
                 }
                 panel.hidePanel()  // Model ready, hide preparing UI
+                guard !Task.isCancelled, !self.isShuttingDown else { return }
 
                 // Now start the detector
                 let detector = MeetingDetector(browserURLProvider: { bundleID, pid in
@@ -1143,6 +1227,7 @@ final class AppWiring {
     }
 
     func captureFrontmost(app: AppInfo, pid: pid_t, trigger: CaptureTrigger = .unknown) {
+        guard !isShuttingDown, !isLifecycleSuspended else { return }
         let startedAtMs = epochNowMs()
         let parser = captureParserName(for: app.bundleID)
         guard !captureIsPaused(nowMs: startedAtMs) else {
@@ -1195,7 +1280,8 @@ final class AppWiring {
     private func attemptCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int,
                                 captureGeneration: Int, trigger: CaptureTrigger,
                                 startedAtMs: EpochMs) {
-        guard !captureIsPaused(nowMs: epochNowMs()) else {
+        guard !isShuttingDown, !isLifecycleSuspended,
+              !captureIsPaused(nowMs: epochNowMs()) else {
             recordCaptureHealth(
                 app: app, trigger: trigger, parser: captureParserName(for: app.bundleID),
                 outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
@@ -1219,7 +1305,8 @@ final class AppWiring {
                                snapshot: (window: AXNode, title: String?)?, captureGeneration: Int,
                                trigger: CaptureTrigger, startedAtMs: EpochMs) {
         let parserName = captureParserName(for: app.bundleID)
-        guard !captureIsPaused(nowMs: epochNowMs()) else {
+        guard !isShuttingDown, !isLifecycleSuspended,
+              !captureIsPaused(nowMs: epochNowMs()) else {
             recordCaptureHealth(
                 app: app, trigger: trigger, parser: parserName,
                 outcome: .skipped(.globalPaused), startedAtMs: startedAtMs

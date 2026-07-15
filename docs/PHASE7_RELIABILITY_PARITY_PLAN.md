@@ -1,6 +1,6 @@
 # Phase 7 — Reliability, Live Parity, and Distribution Plan
 
-**Status:** in progress; Batches 7.0–7.1 complete
+**Status:** in progress; Batches 7.0–7.2 complete
 **Created:** 2026-07-15  
 **Depends on:** Phases 0–6 on `main` through `4e14b37`  
 **Reference:** Minimi 1.0.59
@@ -153,6 +153,8 @@ Acceptance:
 - log storage remains within its configured bound.
 
 ### Batch 7.2 — Crash and process cleanup
+
+**Status:** complete on 2026-07-15. See `PHASE7_RESOURCE_LIFECYCLE.md`.
 
 **Purpose:** ensure capture and audio resources cannot leak across failure paths.
 

@@ -95,6 +95,28 @@ public struct SafeDiagnosticsProcesses: Codable, Sendable, Equatable {
     }
 }
 
+public struct SafeDiagnosticsResources: Codable, Sendable, Equatable {
+    public let audioEngines: Int
+    public let screenStreams: Int
+    public let deviceObservers: Int
+    public let meetingDetectors: Int
+    public let helperProcesses: Int
+
+    public init(
+        audioEngines: Int,
+        screenStreams: Int,
+        deviceObservers: Int,
+        meetingDetectors: Int,
+        helperProcesses: Int
+    ) {
+        self.audioEngines = max(0, audioEngines)
+        self.screenStreams = max(0, screenStreams)
+        self.deviceObservers = max(0, deviceObservers)
+        self.meetingDetectors = max(0, meetingDetectors)
+        self.helperProcesses = max(0, helperProcesses)
+    }
+}
+
 public struct SafeDiagnosticsManifest: Codable, Sendable, Equatable {
     public let formatVersion: Int
     public let generatedAtUTC: String
@@ -103,6 +125,7 @@ public struct SafeDiagnosticsManifest: Codable, Sendable, Equatable {
     public let encryptionAvailable: Bool
     public let permissions: SafeDiagnosticsPermissions
     public let processes: SafeDiagnosticsProcesses
+    public let resources: SafeDiagnosticsResources
     public let database: SafeDiagnosticsDatabase
 
     public init(
@@ -112,6 +135,7 @@ public struct SafeDiagnosticsManifest: Codable, Sendable, Equatable {
         encryptionAvailable: Bool,
         permissions: SafeDiagnosticsPermissions,
         processes: SafeDiagnosticsProcesses,
+        resources: SafeDiagnosticsResources,
         database: SafeDiagnosticsDatabase
     ) {
         formatVersion = 1
@@ -121,6 +145,7 @@ public struct SafeDiagnosticsManifest: Codable, Sendable, Equatable {
         self.encryptionAvailable = encryptionAvailable
         self.permissions = permissions
         self.processes = processes
+        self.resources = resources
         self.database = database
     }
 

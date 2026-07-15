@@ -1,6 +1,6 @@
 # Phase 7 live verification
 
-**Status:** Batches 7.0–7.1 complete; Batch 7.2 pending
+**Status:** Batches 7.0–7.2 complete; Batch 7.3 pending
 **Started:** 2026-07-15  
 **Plan:** [`PHASE7_RELIABILITY_PARITY_PLAN.md`](PHASE7_RELIABILITY_PARITY_PLAN.md)
 
@@ -102,6 +102,32 @@ Existing detailed scenarios remain in the Phase 2–4 evidence documents. Phase 
 | Permission-denied fallback | pending | pending | pending | pending | pending | — |
 | Input-device switch | pending | pending | pending | pending | pending | — |
 | Termination/relaunch recovery | pending | pending | pending | pending | pending | — |
+
+## Batch 7.2 lifecycle and recovery
+
+Implemented and automatically verified on 2026-07-15:
+
+- AppKit terminate-later coordination with an idempotent cleanup path and five-second
+  maximum deadline;
+- sleep, wake, session-resign, and session-active handling for Accessibility capture,
+  meeting detection, in-progress recording, and Activity session closure;
+- owned and removable workspace/panel observers, cancellable panel/model tasks, and
+  invalidated app timers/background scheduler;
+- a `0600` content-free interrupted-recording marker that is consumed on launch;
+- fixed skip behavior so the transcriber is finished instead of leaked;
+- process-local watchdog counters for audio engines, screen streams, audio-device
+  observers, and meeting detectors, plus MCP helper counts in diagnostics export.
+
+The complete automated suite passes 464 tests. The exact ownership and shutdown
+inventory is recorded in `PHASE7_RESOURCE_LIFECYCLE.md`. Real microphone, meeting,
+device-switch, and termination/relaunch acceptance remains in Batch 7.4 and is not
+claimed by these automated results.
+
+Normal lifecycle smoke on the signed development app passed on 2026-07-15: AppleEvent
+quit emitted `app_cleanup_started`, `app_cleanup_completed`, then `app_stopped`; the
+application and MCP process counts reached zero; no active-recording marker remained;
+and the same signed build relaunched successfully. This proves the idle termination
+path only—the active-recording termination scenario remains in Batch 7.4.
 
 ## Recovery, performance, release, and soak
 

@@ -71,6 +71,13 @@ final class SafeDiagnosticsTests: XCTestCase {
                 screenRecording: false
             ),
             processes: SafeDiagnosticsProcesses(app: 1, mcp: 0),
+            resources: SafeDiagnosticsResources(
+                audioEngines: 0,
+                screenStreams: 0,
+                deviceObservers: 0,
+                meetingDetectors: 1,
+                helperProcesses: 0
+            ),
             database: SafeDiagnosticsDatabase(
                 latestMigration: SafeLogToken(validating: "v9")!,
                 migrationCount: 9,

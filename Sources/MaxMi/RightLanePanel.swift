@@ -10,6 +10,8 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     private var currentState: State = .hidden
     private var startTime: Date?
     private var timerUpdateTask: Task<Void, Never>?
+    private var autoDismissTask: Task<Void, Never>?
+    private var screenObserver: NSObjectProtocol?
     private var timerLabel: NSTextField?
     private var levelBar: NSLevelIndicator?
     private var transcriptLabel: NSTextField?
@@ -54,6 +56,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     // MARK: - MeetingPanelPresenting
 
     func showPreparing() {
+        cancelAutoDismiss()
         currentState = .preparing
         buildPreparingView()
         positionPanel(meetingWindow: nil)
@@ -61,16 +64,18 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     }
 
     func showPrompt(app: String) {
+        cancelAutoDismiss()
         currentState = .prompt
         buildPromptView(app: app)
         positionPanel(meetingWindow: nil)
         panel.orderFront(nil)
 
         // Auto-dismiss nudge after 30 seconds
-        Task {
+        autoDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 30_000_000_000)
-            if currentState == .prompt {
-                hidePanel()
+            guard !Task.isCancelled, let self else { return }
+            if self.currentState == .prompt {
+                self.hidePanel()
             }
         }
     }
@@ -84,6 +89,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     }
 
     private func showRecording(label: String) {
+        cancelAutoDismiss()
         recordingLabel = label
         let continuing = currentState == .recording || currentState == .endSuggestion
         currentState = .recording
@@ -95,6 +101,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     }
 
     func showEndSuggestion() {
+        cancelAutoDismiss()
         currentState = .endSuggestion
         stopTimerUpdates()
         buildEndSuggestionView()
@@ -102,6 +109,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     }
 
     func showFinishing() {
+        cancelAutoDismiss()
         currentState = .finishing
         stopTimerUpdates()
         buildFinishingView()
@@ -109,6 +117,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     }
 
     func showError(_ message: String) {
+        cancelAutoDismiss()
         currentState = .error
         stopTimerUpdates()
         buildErrorView(message: message)
@@ -116,15 +125,17 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
         panel.orderFront(nil)
 
         // Auto-dismiss error after 10 seconds
-        Task {
+        autoDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 10_000_000_000)
-            if currentState == .error {
-                hidePanel()
+            guard !Task.isCancelled, let self else { return }
+            if self.currentState == .error {
+                self.hidePanel()
             }
         }
     }
 
     func hidePanel() {
+        cancelAutoDismiss()
         stopTimerUpdates()
         panel.orderOut(nil)
         currentState = .hidden
@@ -165,7 +176,7 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     }
 
     private func observeScreenChanges() {
-        NotificationCenter.default.addObserver(
+        screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
@@ -174,6 +185,22 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
                 self?.positionPanel(meetingWindow: nil)
             }
         }
+    }
+
+    func shutdown() {
+        cancelAutoDismiss()
+        stopTimerUpdates()
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+            self.screenObserver = nil
+        }
+        onRecord = nil
+        onSkip = nil
+        onStop = nil
+        onKeep = nil
+        onFinish = nil
+        panel.orderOut(nil)
+        currentState = .hidden
     }
 
     // MARK: - View Building
@@ -437,6 +464,11 @@ final class RightLanePanel: NSObject, MeetingPanelPresenting {
     private func stopTimerUpdates() {
         timerUpdateTask?.cancel()
         timerUpdateTask = nil
+    }
+
+    private func cancelAutoDismiss() {
+        autoDismissTask?.cancel()
+        autoDismissTask = nil
     }
 
     private func updateTimerLabel() {

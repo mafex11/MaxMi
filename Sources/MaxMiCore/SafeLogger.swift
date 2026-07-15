@@ -25,6 +25,9 @@ public enum SafeLogSubsystem: String, Sendable {
 public enum SafeLogEventName: String, Sendable {
     case appStarted = "app_started"
     case appStopped = "app_stopped"
+    case appCleanupStarted = "app_cleanup_started"
+    case appCleanupCompleted = "app_cleanup_completed"
+    case interruptedRecordingRecovered = "interrupted_recording_recovered"
     case encryptionKeyUnavailable = "encryption_key_unavailable"
     case databaseReadFailed = "database_read_failed"
     case databaseWriteFailed = "database_write_failed"

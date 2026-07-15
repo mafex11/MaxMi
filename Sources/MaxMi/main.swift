@@ -24,9 +24,50 @@ final class PermissionPoller {
         RunLoop.main.add(t, forMode: .common)
         Task { @MainActor [weak self] in self?.timer = t }
     }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
+@MainActor
+final class ApplicationLifecycleDelegate: NSObject, NSApplicationDelegate {
+    private weak var wiring: AppWiring?
+    weak var permissionPoller: PermissionPoller?
+    private var terminationStarted = false
+    private var terminationReplied = false
+
+    init(wiring: AppWiring) {
+        self.wiring = wiring
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationStarted else { return .terminateLater }
+        terminationStarted = true
+        permissionPoller?.stop()
+
+        Task { @MainActor [weak self] in
+            await self?.wiring?.shutdown()
+            self?.replyToTermination()
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            self?.replyToTermination()
+        }
+        return .terminateLater
+    }
+
+    private func replyToTermination() {
+        guard !terminationReplied else { return }
+        terminationReplied = true
+        NSApp.reply(toApplicationShouldTerminate: true)
+    }
 }
 
 let wiring = try AppWiring()
+let lifecycleDelegate = ApplicationLifecycleDelegate(wiring: wiring)
+app.delegate = lifecycleDelegate
 SafeLogger.shared.log(.info, subsystem: .app, event: .appStarted)
 wiring.start()
 
@@ -37,5 +78,6 @@ let permissionPoller: PermissionPoller? = {
     poller.start()
     return poller
 }()
+lifecycleDelegate.permissionPoller = permissionPoller
 
 app.run()

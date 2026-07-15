@@ -101,6 +101,7 @@ actor MockSessionTranscriber: Transcribing {
     var startCalled = false
     var fedFrames: [PCMFrame] = []
     var finishResult = "test transcript"
+    var finishCount = 0
     var partialCallback: (@Sendable (String) -> Void)?
 
     func start() async throws {
@@ -112,6 +113,7 @@ actor MockSessionTranscriber: Transcribing {
     }
 
     func finish() async -> String {
+        finishCount += 1
         return finishResult
     }
 
@@ -658,12 +660,50 @@ final class MeetingSessionTests: XCTestCase {
         // Assert capture was stopped
         let stopCalled = await capture.stopCalled
         XCTAssertTrue(stopCalled, "Capture should be stopped when skipping during recording")
+        let finishCount = await transcriber.finishCount
+        XCTAssertEqual(finishCount, 1, "Transcriber should be finished when skipping during recording")
 
         // Assert no persistence occurred
         let meetings = await persister.persistedMeetings
         XCTAssertEqual(meetings.count, 0, "userSkipped should never persist")
 
         // Assert panel was hidden
+        XCTAssertTrue(panel.hideCalled)
+    }
+
+    @MainActor
+    func testShutdownDuringRecordingIsIdempotentAndDoesNotPersist() async {
+        let panel = MockPanel()
+        let persister = MockPersister()
+        let capture = MockCapture()
+        let transcriber = MockSessionTranscriber()
+        let lifecycle = MockMeetingLifecycleTracker()
+        let session = MeetingSession(
+            panel: panel,
+            persister: persister,
+            authorizer: MockAuthorizer(),
+            makeCapture: { capture },
+            makeTranscriber: { transcriber },
+            clock: FakeClock(),
+            lifecycleTracker: lifecycle
+        )
+
+        await session.candidateDetected(bundleID: "us.zoom.xos", pid: 123, title: "Meeting")
+        await session.userAcceptedRecord()
+        await session.shutdown()
+        await session.shutdown()
+
+        let state = await session.state
+        let stopped = await capture.stopCalled
+        let finishCount = await transcriber.finishCount
+        let persisted = await persister.persistedMeetings
+        let lifecycleCounts = await lifecycle.counts()
+        XCTAssertEqual(state, .idle)
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(finishCount, 1)
+        XCTAssertTrue(persisted.isEmpty)
+        XCTAssertEqual(lifecycleCounts.start, 1)
+        XCTAssertEqual(lifecycleCounts.end, 1)
         XCTAssertTrue(panel.hideCalled)
     }
 }
@@ -691,5 +731,22 @@ extension MockCapture {
 
     func setWindowFrame(_ frame: CGRect) {
         windowFrame = frame
+    }
+}
+
+actor MockMeetingLifecycleTracker: MeetingLifecycleTracking {
+    private(set) var startCount = 0
+    private(set) var endCount = 0
+
+    func recordingStarted(kind: MeetingRecordingKind, startedAtMs: Int64) async {
+        startCount += 1
+    }
+
+    func recordingEnded() async {
+        endCount += 1
+    }
+
+    func counts() -> (start: Int, end: Int) {
+        (startCount, endCount)
     }
 }
