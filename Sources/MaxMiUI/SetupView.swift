@@ -7,7 +7,7 @@ public struct SetupView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("Setup & Connections").font(.headline).foregroundColor(Theme.text)
+            Text("Setup & Connections").sectionTitle()
             VStack(spacing: Theme.spacing1) {
                 ForEach(viewModel.snapshot.permissions) { item in statusRow(item) }
                 statusRow(viewModel.snapshot.encryption)
@@ -40,12 +40,11 @@ public struct SetupView: View {
             Text("Claude connection").font(.subheadline).foregroundColor(Theme.text)
             Text("Copy a reviewed setup command. MaxMi never edits Claude configuration from this screen.")
                 .font(.caption).foregroundColor(Theme.secondaryText)
-            HStack {
+            FlowLayout(spacing: Theme.spacing1) {
                 Button("Copy Claude Code command") { viewModel.copyMCPSetup(.claudeCode) }.buttonStyle(.bordered)
                 Button("Copy Desktop JSON") { viewModel.copyMCPSetup(.claudeDesktop) }.buttonStyle(.bordered)
             }
         }
-        .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 
     private func icon(_ state: SetupState) -> String {

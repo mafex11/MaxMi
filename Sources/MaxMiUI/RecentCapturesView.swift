@@ -5,76 +5,87 @@ import MaxMiCore
 public struct RecentCapturesView: View {
     @Bindable private var viewModel: RecentCapturesViewModel
 
+    /// Caps how many recent captures the list renders. Minimi shows the top few activities, so the
+    /// tray home passes 5; nil shows all (used by the full activity window).
+    private let limit: Int?
+
     /// Per-capture cloud-processing controls ("Allow AI" / "Keep Local") are hidden from the
     /// main dashboard. Minimi keeps capture privacy to a simple per-app on/off, so these controls
     /// aren't surfaced here. Flip to `true` to bring them back — the logic below is intact.
     private static let showsCloudControls = false
 
-    public init(viewModel: RecentCapturesViewModel) {
+    public init(viewModel: RecentCapturesViewModel, limit: Int? = nil) {
         self.viewModel = viewModel
+        self.limit = limit
+    }
+
+    private var visibleRows: [RecentCaptureRow] {
+        guard let limit else { return viewModel.rows }
+        return Array(viewModel.rows.prefix(limit))
     }
 
     public var body: some View {
         Group {
             if viewModel.rows.isEmpty {
-                VStack(spacing: Theme.spacing2) {
-                    Image(systemName: "waveform.path.ecg")
-                        .font(.system(size: Theme.iconSizeLarge))
+                VStack(spacing: Theme.spacing1) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: Theme.iconSizeLarge * 0.7))
                         .foregroundColor(Theme.secondaryText)
-                    Text("No local captures yet")
-                        .font(.title3)
+                    Text("No memories yet")
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(Theme.text)
                     Text("Focus an app for a few seconds, then reopen MaxMi.")
                         .font(.caption)
                         .foregroundColor(Theme.secondaryText)
+                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if limit != nil {
+                // Tray: fixed list, no scrolling — the capped rows fit the popover exactly.
+                VStack(spacing: Theme.spacing0) { rowsList }
             } else {
+                // Full window: scrollable.
                 ScrollView {
-                    LazyVStack(spacing: Theme.spacing1) {
-                        ForEach(viewModel.rows) { row in
-                            HStack(alignment: .center, spacing: Theme.spacing1) {
-                                // Minimi-style row: real app icon + summary only.
-                                appIcon(for: row)
-
-                                VStack(alignment: .leading, spacing: Theme.spacingHalf) {
-                                    Text(row.summary)
-                                        .font(.body)
-                                        .foregroundColor(Theme.text)
-                                        .lineLimit(2)
-                                    // Metadata line (app · title · time), detail line (kind · count ·
-                                    // parser), and per-capture cloud controls are hidden to match Minimi's
-                                    // minimal dashboard. Kept for easy restore.
-                                    //
-                                    // HStack(spacing: Theme.spacingHalf) {
-                                    //     Text(row.appLabel)
-                                    //     Text("·")
-                                    //     Text(row.sourceTitle)
-                                    //         .lineLimit(1)
-                                    //     Text("·")
-                                    //     Text(row.timeAgo)
-                                    // }
-                                    // .font(.caption)
-                                    // .foregroundColor(Theme.secondaryText)
-                                    // Text(row.detail)
-                                    //     .font(.caption2)
-                                    //     .foregroundColor(Theme.tertiaryText)
-                                    //     .lineLimit(1)
-                                    if Self.showsCloudControls {
-                                        cloudControls(row)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            .padding(Theme.spacing1)
-                            .background(Theme.surface)
-                            .cornerRadius(Theme.cornerRadius)
-                        }
-                    }
-                    .padding(.horizontal, Theme.spacing2)
-                    .padding(.bottom, Theme.spacing2)
+                    LazyVStack(spacing: Theme.spacing0) { rowsList }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var rowsList: some View {
+        ForEach(Array(visibleRows.enumerated()), id: \.element.id) { index, row in
+            if index > 0 {
+                Divider().overlay(Theme.divider).padding(.leading, Theme.spacing2)
+            }
+            HStack(alignment: .center, spacing: Theme.spacing1) {
+                // Minimi-style row: real app icon + summary only.
+                appIcon(for: row)
+
+                VStack(alignment: .leading, spacing: Theme.spacingHalf) {
+                    Text(row.summary)
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Metadata line (app · title · time), detail line (kind · count · parser), and
+                    // per-capture cloud controls are hidden to match Minimi's minimal dashboard.
+                    // Kept for easy restore.
+                    //
+                    // HStack(spacing: Theme.spacingHalf) {
+                    //     Text(row.appLabel); Text("·"); Text(row.sourceTitle).lineLimit(1)
+                    //     Text("·"); Text(row.timeAgo)
+                    // }
+                    // .font(.caption).foregroundColor(Theme.secondaryText)
+                    // Text(row.detail).font(.caption2).foregroundColor(Theme.tertiaryText).lineLimit(1)
+                    if Self.showsCloudControls {
+                        cloudControls(row)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.spacing2)
+            .padding(.vertical, Theme.spacing1)
         }
     }
 

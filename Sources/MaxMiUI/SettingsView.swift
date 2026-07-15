@@ -19,7 +19,7 @@ public struct SettingsView: View {
     public var body: some View {
         VStack(spacing: Theme.spacing0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: Theme.spacing3) {
+                VStack(alignment: .leading, spacing: Theme.spacing2) {
                     generalSection
                     Divider()
                         .background(Theme.divider)
@@ -35,30 +35,27 @@ public struct SettingsView: View {
                         .background(Theme.divider)
                     aboutSection
                 }
-                .padding(Theme.spacing3)
+                .padding(Theme.spacing2)
             }
         }
-        .frame(minWidth: 460, minHeight: 560)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
         .preferredColorScheme(.dark)
     }
 
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("General")
-                .font(.headline)
-                .foregroundColor(Theme.text)
+            Text("General").sectionTitle()
 
             Toggle(isOn: Binding(
                 get: { viewModel.launchAtLoginStatus == .enabled },
                 set: { newValue in Task { await viewModel.setLaunchAtLogin(newValue) } }
             )) {
-                HStack(spacing: Theme.spacing1) {
-                    Image(systemName: "power")
-                        .foregroundColor(Theme.accent)
-                    Text("Launch at Login")
-                        .foregroundColor(Theme.text)
-                }
+                settingLabel(
+                    icon: "power",
+                    title: "Open MaxMi when I log in",
+                    description: "Start capturing automatically after you sign in to your Mac."
+                )
             }
 
             if viewModel.launchAtLoginStatus == .requiresApproval {
@@ -90,17 +87,14 @@ public struct SettingsView: View {
 
     private var activitySection: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("Activity")
-                .font(.headline)
-                .foregroundColor(Theme.text)
+            Text("Activity Timeline").sectionTitle()
 
             Toggle(isOn: $viewModel.activityEnabled) {
-                HStack(spacing: Theme.spacing1) {
-                    Image(systemName: "chart.bar")
-                        .foregroundColor(Theme.accent)
-                    Text("Enable Activity Synthesis")
-                        .foregroundColor(Theme.text)
-                }
+                settingLabel(
+                    icon: "chart.bar",
+                    title: "Build a timeline of my day",
+                    description: "MaxMi groups what you did across apps into an hourly summary using Gemini AI. Screen content is sent to Google to build it. Off by default."
+                )
             }
             .disabled(!viewModel.consentGranted)
 
@@ -108,10 +102,10 @@ public struct SettingsView: View {
                 HStack(spacing: Theme.spacing1) {
                     Image(systemName: "hand.raised")
                         .foregroundColor(Theme.warning)
-                    Text("Consent required")
+                    Text("Needs your permission first")
                         .font(.caption)
                         .foregroundColor(Theme.secondaryText)
-                    Button("Grant Consent") {
+                    Button("Review & allow") {
                         viewModel.openPrivacy()
                     }
                     .buttonStyle(.link)
@@ -121,9 +115,12 @@ public struct SettingsView: View {
 
             if !viewModel.excludedApps.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.spacing1) {
-                    Text("Exclude apps from activity capture")
+                    Text("Skip these apps")
                         .font(.subheadline)
                         .foregroundColor(Theme.secondaryText)
+                    Text("Anything you do in these apps stays out of the timeline.")
+                        .font(.caption)
+                        .foregroundColor(Theme.tertiaryText)
 
                     ForEach(viewModel.excludedApps) { app in
                         Toggle(isOn: Binding(
@@ -139,11 +136,28 @@ public struct SettingsView: View {
         }
     }
 
+    /// A toggle/label with an icon, a plain-language title, and a one-line description underneath —
+    /// so each setting explains itself instead of relying on jargon.
+    private func settingLabel(icon: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.spacing1) {
+            Image(systemName: icon)
+                .foregroundColor(Theme.accent)
+                .frame(width: 18)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: Theme.spacingHalf) {
+                Text(title)
+                    .foregroundColor(Theme.text)
+                Text(description)
+                    .font(.caption)
+                    .foregroundColor(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("About")
-                .font(.headline)
-                .foregroundColor(Theme.text)
+            Text("About").sectionTitle()
 
             HStack(spacing: Theme.spacing2) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
@@ -160,7 +174,7 @@ public struct SettingsView: View {
                 }
             }
 
-            HStack {
+            FlowLayout(spacing: Theme.spacing1) {
                 Button("Release Information") {
                     Task { await viewModel.checkUpdates() }
                 }

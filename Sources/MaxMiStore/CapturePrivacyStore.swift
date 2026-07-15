@@ -55,9 +55,15 @@ extension Store {
     }
 
     public func cloudProcessingState(for sourceApp: String) throws -> CloudProcessingState {
+        // With the review gate disabled (Minimi-style), sources are never "pending" — they process
+        // unless explicitly kept local-only. Keeps activity/session recording flowing without approval.
+        let localOnly = try readSet("cloud_local_only_source_apps").contains(sourceApp)
+        guard try cloudReviewInitialized() else {
+            return localOnly ? .localOnly : .allowed
+        }
         let reviewed = try readSet("cloud_reviewed_source_apps")
         guard reviewed.contains(sourceApp) else { return .pendingReview }
-        return try readSet("cloud_local_only_source_apps").contains(sourceApp) ? .localOnly : .allowed
+        return localOnly ? .localOnly : .allowed
     }
 
     public func setCloudProcessing(_ sourceApp: String, allowed: Bool, nowMs: EpochMs) throws {

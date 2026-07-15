@@ -10,14 +10,15 @@ public struct ActionItemsView: View {
     }
 
     public var body: some View {
-        VStack(spacing: Theme.spacing0) {
-            Picker("", selection: $selectedSegment) {
-                Text("Open").tag(0)
-                Text("Archived").tag(1)
+        VStack(alignment: .leading, spacing: Theme.spacing1) {
+            // Simple text toggle instead of a segmented control — Actions is its own page now.
+            HStack(spacing: Theme.spacing2) {
+                segmentButton("Open", tag: 0, count: viewModel.open.count)
+                segmentButton("Archived", tag: 1, count: viewModel.archived.count)
+                Spacer()
             }
-            .pickerStyle(.segmented)
-            .padding(Theme.spacing2)
-            .animation(Theme.spring, value: selectedSegment)
+            .padding(.horizontal, Theme.spacing2)
+            .padding(.top, Theme.spacing1)
 
             if selectedSegment == 0 {
                 openItemsList
@@ -28,6 +29,17 @@ public struct ActionItemsView: View {
         .task {
             await viewModel.refresh()
         }
+    }
+
+    private func segmentButton(_ title: String, tag: Int, count: Int) -> some View {
+        Button {
+            withAnimation(Theme.spring) { selectedSegment = tag }
+        } label: {
+            Text(count > 0 ? "\(title) (\(count))" : title)
+                .font(.system(size: 13, weight: selectedSegment == tag ? .semibold : .regular))
+                .foregroundColor(selectedSegment == tag ? Theme.text : Theme.secondaryText)
+        }
+        .buttonStyle(.plain)
     }
 
     private var openItemsList: some View {
