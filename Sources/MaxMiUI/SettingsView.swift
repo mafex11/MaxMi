@@ -156,10 +156,16 @@ public struct SettingsView: View {
                 }
             }
 
-            Button("Check for Updates") {
-                Task { await viewModel.checkUpdates() }
+            HStack {
+                Button("Release Information") {
+                    Task { await viewModel.checkUpdates() }
+                }
+                .buttonStyle(.bordered)
+                Button("Open Official Releases") {
+                    viewModel.openReleasePage()
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
 
             if !viewModel.updateStatus.isEmpty {
                 Text(viewModel.updateStatus)

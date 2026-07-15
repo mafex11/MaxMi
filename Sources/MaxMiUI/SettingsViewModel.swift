@@ -68,6 +68,7 @@ public final class SettingsViewModel {
     private let onSetActivityEnabled: @Sendable (Bool) -> Void
     private let onToggleExcluded: @Sendable (String, Bool) async -> Void
     private let onCheckUpdates: @Sendable () async -> String
+    private let onOpenReleasePage: @MainActor @Sendable () -> Void
     private let onOpenPrivacy: @MainActor @Sendable () -> Void
     private let onOpenLoginItems: @MainActor @Sendable () -> Void
 
@@ -78,13 +79,15 @@ public final class SettingsViewModel {
         onToggleExcluded: @escaping @Sendable (String, Bool) async -> Void,
         onCheckUpdates: @escaping @Sendable () async -> String,
         onOpenPrivacy: @escaping @MainActor @Sendable () -> Void,
-        onOpenLoginItems: @escaping @MainActor @Sendable () -> Void
+        onOpenLoginItems: @escaping @MainActor @Sendable () -> Void,
+        onOpenReleasePage: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.load = load
         self.onSetLaunchAtLogin = onSetLaunchAtLogin
         self.onSetActivityEnabled = onSetActivityEnabled
         self.onToggleExcluded = onToggleExcluded
         self.onCheckUpdates = onCheckUpdates
+        self.onOpenReleasePage = onOpenReleasePage
         self.onOpenPrivacy = onOpenPrivacy
         self.onOpenLoginItems = onOpenLoginItems
     }
@@ -95,6 +98,10 @@ public final class SettingsViewModel {
 
     public func openLoginItems() {
         onOpenLoginItems()
+    }
+
+    public func openReleasePage() {
+        onOpenReleasePage()
     }
 
     public func refresh() async {

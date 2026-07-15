@@ -158,7 +158,9 @@ claims from unit tests as live evidence.
 - Secure distributed AI path: hosted-relay client, Keychain token storage, fail-closed
   tests, and bundle-secret scan pass locally; service provisioning, revocation, quotas,
   and production transport remain pending. See `PHASE7_SECURE_RELAY.md`.
-- Clean install, upgrade, signing, notarization, and Gatekeeper: pending Batch 7.8.
+- Release pipeline and manual release channel are implemented locally; Developer ID,
+  notarization, Gatekeeper, and fresh-user/second-Mac evidence remain pending external
+  prerequisites. See `RELEASE_CHECKLIST.md`.
 - Seven-day soak: pending Batch 7.9.
 
 ## Batch 7.1 structured logging and diagnostics

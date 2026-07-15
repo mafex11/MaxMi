@@ -483,6 +483,9 @@ final class AppWiring {
             },
             onOpenLoginItems: { @MainActor in
                 SMAppService.openSystemSettingsLoginItems()
+            },
+            onOpenReleasePage: { @MainActor in
+                NSWorkspace.shared.open(UpdateChecker.releaseURL)
             }
         )
 

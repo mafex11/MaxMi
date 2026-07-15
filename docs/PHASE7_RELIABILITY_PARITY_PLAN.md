@@ -314,6 +314,9 @@ Acceptance:
 
 ### Batch 7.7 — Secure Gemini distribution architecture
 
+**Status:** local hosted-relay client, scoped Keychain credential, fail-closed limits,
+and bundle scanning complete; hosted control plane and privacy policy pending.
+
 **Purpose:** remove the need for end users to supply a provider credential without
 shipping a reusable Gemini key inside a public macOS bundle.
 
@@ -344,6 +347,9 @@ Acceptance:
 - privacy disclosure accurately describes the network path and retention.
 
 ### Batch 7.8 — Update trust and release pipeline
+
+**Status:** manual release channel and local trust pipeline complete; Developer ID,
+notarization, Gatekeeper, and clean-install evidence pending external prerequisites.
 
 **Purpose:** make shared builds installable and upgradable safely.
 
