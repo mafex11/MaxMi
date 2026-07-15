@@ -1,7 +1,7 @@
 # Phase 7 — Reliability, Live Parity, and Distribution Plan
 
-**Status:** in progress; Batches 7.0–7.3 and 7.5 complete; Batch 7.4 has live
-voice-note/termination evidence and still needs a controlled two-sided meeting
+**Status:** all automatable work through Batch 7.8 complete; remaining acceptance
+requires the user actions in `PHASE7_USER_ACTIONS.md`
 **Created:** 2026-07-15  
 **Depends on:** Phases 0–6 on `main` through `4e14b37`  
 **Reference:** Minimi 1.0.59

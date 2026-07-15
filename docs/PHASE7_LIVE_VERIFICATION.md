@@ -1,6 +1,7 @@
 # Phase 7 live verification
 
-**Status:** Batches 7.0–7.3 complete; Batch 7.4 pending
+**Status:** all automatable work through Batch 7.8 complete; controlled meeting,
+long-run, hosted-service, Apple distribution, and fresh-install evidence pending
 **Started:** 2026-07-15  
 **Plan:** [`PHASE7_RELIABILITY_PARITY_PLAN.md`](PHASE7_RELIABILITY_PARITY_PLAN.md)
 
@@ -126,7 +127,7 @@ Implemented and automatically verified on 2026-07-15:
 - process-local watchdog counters for audio engines, screen streams, audio-device
   observers, and meeting detectors, plus MCP helper counts in diagnostics export.
 
-The complete automated suite passes 465 tests. The exact ownership and shutdown
+The complete automated suite passes 481 tests. The exact ownership and shutdown
 inventory is recorded in `PHASE7_RESOURCE_LIFECYCLE.md`. Real microphone, meeting,
 device-switch, and termination/relaunch acceptance remains in Batch 7.4 and is not
 claimed by these automated results.
@@ -161,6 +162,10 @@ claims from unit tests as live evidence.
 - Release pipeline and manual release channel are implemented locally; Developer ID,
   notarization, Gatekeeper, and fresh-user/second-Mac evidence remain pending external
   prerequisites. See `RELEASE_CHECKLIST.md`.
+- Local release preflight on 2026-07-15 passed 481 tests, version/build synchronization,
+  provider-credential bundle scanning, and strict signatures for MaxMi, MCP, and the
+  recovery helper. It stopped before DMG/notarization because only an Apple Development
+  identity is installed; this is expected and is not counted as distribution acceptance.
 - Seven-day soak: pending Batch 7.9.
 
 ## Batch 7.1 structured logging and diagnostics
