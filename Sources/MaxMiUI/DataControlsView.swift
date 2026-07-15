@@ -20,6 +20,17 @@ public struct DataControlsView: View {
                     .buttonStyle(.bordered)
             }
             .disabled(viewModel.isWorking)
+            Divider().background(Theme.divider)
+            Text("Diagnostics contain aggregate health, versions, permissions, process counts, and privacy-safe logs—never captured content.")
+                .font(.caption).foregroundColor(Theme.secondaryText)
+            HStack {
+                Button("Export Diagnostics…") { Task { await viewModel.exportDiagnostics() } }
+                    .buttonStyle(.bordered)
+                Button("Reveal Logs") { viewModel.revealLogs() }
+                    .buttonStyle(.bordered)
+                Spacer()
+            }
+            .disabled(viewModel.isWorking)
             if viewModel.isWorking { ProgressView().controlSize(.small) }
             if !viewModel.status.isEmpty {
                 Text(viewModel.status).font(.caption).foregroundColor(Theme.secondaryText)
@@ -28,4 +39,3 @@ public struct DataControlsView: View {
         .padding(Theme.spacing2).background(Theme.surface).cornerRadius(Theme.cornerRadius)
     }
 }
-

@@ -7,7 +7,9 @@ final class DataControlsViewModelTests: XCTestCase {
         let viewModel = DataControlsViewModel(
             onExport: { "exported" },
             onApplyRetention: { "pruned" },
-            onDeleteAll: { "deleted" }
+            onDeleteAll: { "deleted" },
+            onExportDiagnostics: { "diagnostics exported" },
+            onRevealLogs: { "logs revealed" }
         )
         await viewModel.export()
         XCTAssertEqual(viewModel.status, "exported")
@@ -15,6 +17,10 @@ final class DataControlsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.status, "pruned")
         await viewModel.deleteAll()
         XCTAssertEqual(viewModel.status, "deleted")
+        await viewModel.exportDiagnostics()
+        XCTAssertEqual(viewModel.status, "diagnostics exported")
+        viewModel.revealLogs()
+        XCTAssertEqual(viewModel.status, "logs revealed")
         XCTAssertFalse(viewModel.isWorking)
     }
 
@@ -28,4 +34,3 @@ final class DataControlsViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isWorking)
     }
 }
-

@@ -10,20 +10,32 @@ public final class DataControlsViewModel {
     private let onExport: @MainActor @Sendable () async throws -> String
     private let onApplyRetention: @MainActor @Sendable () async throws -> String
     private let onDeleteAll: @MainActor @Sendable () async throws -> String
+    private let onExportDiagnostics: @MainActor @Sendable () async throws -> String
+    private let onRevealLogs: @MainActor @Sendable () -> String
 
     public init(
         onExport: @escaping @MainActor @Sendable () async throws -> String,
         onApplyRetention: @escaping @MainActor @Sendable () async throws -> String,
-        onDeleteAll: @escaping @MainActor @Sendable () async throws -> String
+        onDeleteAll: @escaping @MainActor @Sendable () async throws -> String,
+        onExportDiagnostics: @escaping @MainActor @Sendable () async throws -> String = {
+            "Diagnostics export is unavailable"
+        },
+        onRevealLogs: @escaping @MainActor @Sendable () -> String = {
+            "Logs are unavailable"
+        }
     ) {
         self.onExport = onExport
         self.onApplyRetention = onApplyRetention
         self.onDeleteAll = onDeleteAll
+        self.onExportDiagnostics = onExportDiagnostics
+        self.onRevealLogs = onRevealLogs
     }
 
     public func export() async { await perform(onExport) }
     public func applyRetention() async { await perform(onApplyRetention) }
     public func deleteAll() async { await perform(onDeleteAll) }
+    public func exportDiagnostics() async { await perform(onExportDiagnostics) }
+    public func revealLogs() { status = onRevealLogs() }
 
     private func perform(_ operation: @MainActor @Sendable () async throws -> String) async {
         guard !isWorking else { return }
@@ -33,4 +45,3 @@ public final class DataControlsViewModel {
         catch { status = "Data operation failed: \(error.localizedDescription)" }
     }
 }
-

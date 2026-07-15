@@ -34,6 +34,24 @@ fileprivate func safeFileTimestamp(_ date: Date = Date()) -> String {
     return formatter.string(from: date)
 }
 
+fileprivate func maxMiProcessCount(matching pattern: String) -> Int {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    process.arguments = ["-f", pattern]
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return 0 }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").count
+    } catch {
+        return 0
+    }
+}
+
 @MainActor
 fileprivate func openPrivacySettings(_ pane: String) {
     guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
@@ -128,7 +146,8 @@ final class AppWiring {
             appSupport.appendingPathComponent(".env"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
         ])
-        let db = try MaxMiDatabase(path: appSupport.appendingPathComponent("maxmi.db").path)
+        let databaseURL = appSupport.appendingPathComponent("maxmi.db")
+        let db = try MaxMiDatabase(path: databaseURL.path)
         // Spec §6 ordering: key -> backfill -> capture. No key => capture stays paused
         // and we never write plaintext post-M3 (spec §9).
         let cipher: any FieldCipher
@@ -560,6 +579,66 @@ final class AppWiring {
                     return try activityStore.deleteAllMemory()
                 }.value
                 return "Deleted \(result.threads) threads and \(result.facts) facts; backup: \(backupURL.lastPathComponent)"
+            },
+            onExportDiagnostics: { @MainActor in
+                let panel = NSSavePanel()
+                panel.title = "Export Privacy-Safe MaxMi Diagnostics"
+                panel.nameFieldStringValue = "MaxMi Diagnostics-\(safeFileTimestamp())"
+                panel.canCreateDirectories = true
+                guard panel.runModal() == .OK, let destination = panel.url else {
+                    return "Diagnostics export cancelled"
+                }
+                do {
+                    let version = SafeLogToken(validating: MaxMiVersion.current)!
+                    let buildValue = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+                    let build = SafeLogToken(validating: buildValue)
+                        ?? SafeLogToken(validating: "unknown")!
+                    let manifest = SafeDiagnosticsManifest(
+                        appVersion: version,
+                        appBuild: build,
+                        encryptionAvailable: encryptionOK,
+                        permissions: SafeDiagnosticsPermissions(
+                            accessibility: AXIsProcessTrusted(),
+                            microphone: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+                            screenRecording: CGPreflightScreenCaptureAccess()
+                        ),
+                        processes: SafeDiagnosticsProcesses(
+                            app: maxMiProcessCount(matching: "/MaxMi.app/Contents/MacOS/MaxMi$"),
+                            mcp: maxMiProcessCount(matching: "/MaxMi.app/Contents/MacOS/maxmi-mcp$")
+                        ),
+                        database: try activityStore.runtimeDiagnostics(
+                            nowMs: epochNowMs(),
+                            databaseURL: databaseURL
+                        )
+                    )
+                    let entries = try SafeDiagnosticsBundleWriter.write(
+                        manifest: manifest,
+                        logDirectory: SafeLogger.defaultLogDirectory,
+                        to: destination
+                    )
+                    SafeLogger.shared.log(
+                        .info,
+                        subsystem: .diagnostics,
+                        event: .diagnosticsExported,
+                        fields: SafeLogFields(count: entries)
+                    )
+                    NSWorkspace.shared.activateFileViewerSelecting([
+                        destination.appendingPathComponent("manifest.json")
+                    ])
+                    return "Exported content-free diagnostics with \(entries) safe log events"
+                } catch {
+                    SafeLogger.shared.log(
+                        .error,
+                        subsystem: .diagnostics,
+                        event: .diagnosticsExportFailed,
+                        error: error
+                    )
+                    throw error
+                }
+            },
+            onRevealLogs: { @MainActor in
+                NSWorkspace.shared.open(SafeLogger.defaultLogDirectory)
+                return "Opened privacy-safe logs in Finder"
             }
         )
 
