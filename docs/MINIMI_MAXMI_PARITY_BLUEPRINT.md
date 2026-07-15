@@ -1453,6 +1453,10 @@ Acceptance criteria:
 - successful restore from backup;
 - signed/notarized artifact passes Gatekeeper when distribution is enabled.
 
+The detailed batch-by-batch execution plan, live verification gates, secure AI
+distribution decision, and final exit checklist are maintained in
+[`PHASE7_RELIABILITY_PARITY_PLAN.md`](PHASE7_RELIABILITY_PARITY_PLAN.md).
+
 ---
 
 ## 12. Testing and verification strategy
