@@ -43,7 +43,12 @@ final class ActivityPrivacyWindow: NSObject, NSWindowDelegate {
                     try store.setActivityConsent(.declined)
                 }
             } catch {
-                NSLog("MaxMi: failed to persist declined consent on window close: \(error)")
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .activity,
+                    event: .activityStateWriteFailed,
+                    error: error
+                )
             }
         }
     }
@@ -145,7 +150,12 @@ private struct ActivityPrivacyView: View {
             }
             recentApps = apps
         } catch {
-            NSLog("MaxMi: failed to load activity privacy state: \(error)")
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .activity,
+                event: .activityStateReadFailed,
+                error: error
+            )
         }
     }
 
@@ -156,7 +166,12 @@ private struct ActivityPrivacyView: View {
             // granted from `.unset`, permanently trapping declined users outside M6.
             try store.setActivitySynthesisEnabled(newValue, nowMs: epochNowMs())
         } catch {
-            NSLog("MaxMi: failed to update activity enabled state: \(error)")
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .activity,
+                event: .activityStateWriteFailed,
+                error: error
+            )
             loadState() // restore the persisted value after a failed toggle
         }
     }
@@ -175,7 +190,12 @@ private struct ActivityPrivacyView: View {
                 excludedApps.remove(bundleID)
             }
         } catch {
-            NSLog("MaxMi: failed to update app exclusion: \(error)")
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .activity,
+                event: .activityStateWriteFailed,
+                error: error
+            )
         }
     }
 }

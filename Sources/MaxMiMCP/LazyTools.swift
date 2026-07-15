@@ -57,7 +57,12 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
             let keyData: Data
             do { keyData = try keyProvider() }
             catch {
-                logStderr("keychain unavailable: \(error)")
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .mcp,
+                    event: .mcpKeychainUnavailable,
+                    error: error
+                )
                 lockedOut = true
                 return nil
             }
@@ -68,7 +73,12 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
             }
             return tools
         } catch {
-            logStderr("DB open failed: \(error)")
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .mcp,
+                event: .mcpDatabaseOpenFailed,
+                error: error
+            )
             return nil
         }
     }

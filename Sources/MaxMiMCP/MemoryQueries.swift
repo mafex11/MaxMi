@@ -49,7 +49,12 @@ public final class MemoryQueries: @unchecked Sendable {
         } else {
             do { vector = try await relay.embed(text: q) }
             catch {
-                logStderr("embed failed: \(error)")
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .mcp,
+                    event: .mcpEmbeddingFailed,
+                    error: error
+                )
                 return ToolResult(text: Self.offlineText, isError: true)
             }
             lruPut(q, vector)
@@ -265,7 +270,12 @@ public final class MemoryQueries: @unchecked Sendable {
             } else {
                 do { vector = try await relay.embed(text: q) }
                 catch {
-                    logStderr("embed failed: \(error)")
+                    SafeLogger.shared.log(
+                        .error,
+                        subsystem: .mcp,
+                        event: .mcpEmbeddingFailed,
+                        error: error
+                    )
                     return ToolResult(text: Self.offlineText, isError: true)
                 }
                 lruPut(q, vector)

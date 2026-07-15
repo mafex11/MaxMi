@@ -86,6 +86,33 @@ final class SafeLoggerTests: XCTestCase {
         XCTAssertNil(SafeLogToken(validating: String(repeating: "a", count: 97)))
     }
 
+    func testSourcesDoNotUseUnstructuredRuntimeLogging() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sources = repositoryRoot.appendingPathComponent("Sources", isDirectory: true)
+        let enumerator = FileManager.default.enumerator(
+            at: sources,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        )
+        let forbidden = [
+            "NSLog(", "FileHandle.standardError", "logStderr(", "os_log(",
+            "Logger(subsystem:", "os.Logger("
+        ]
+
+        while let file = enumerator?.nextObject() as? URL {
+            guard file.pathExtension == "swift", !file.path.contains("/CWhisper/") else { continue }
+            let source = try String(contentsOf: file, encoding: .utf8)
+            for pattern in forbidden {
+                XCTAssertFalse(source.contains(pattern), "\(file.lastPathComponent) uses \(pattern)")
+            }
+            if !file.path.hasSuffix("/MaxMiMCP/main.swift") {
+                XCTAssertFalse(source.contains("print("), "\(file.lastPathComponent) uses print(")
+            }
+        }
+    }
+
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

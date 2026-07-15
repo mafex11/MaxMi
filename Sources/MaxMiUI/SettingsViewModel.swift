@@ -124,7 +124,12 @@ public final class SettingsViewModel {
         do {
             try await onSetLaunchAtLogin(on)
         } catch {
-            NSLog("MaxMi: setLaunchAtLogin failed: \(error)")
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .settings,
+                event: .launchAtLoginWriteFailed,
+                error: error
+            )
             launchAtLoginError = error.localizedDescription
         }
         // Reload status after attempt (authoritative, not optimistic)

@@ -38,7 +38,12 @@ struct StoreMeetingPersister: MeetingPersisting, @unchecked Sendable {
                     nowMs: endedAtMs
                 )
             } catch {
-                NSLog("MaxMi: meeting persist failed: \(error)")
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .meeting,
+                    event: .meetingPersistFailed,
+                    error: error
+                )
             }
         }
     }

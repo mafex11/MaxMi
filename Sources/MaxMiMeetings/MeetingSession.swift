@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 import CoreGraphics
 
 /// Unsafe transfer wrapper for crossing actor boundaries with non-Sendable @MainActor types
@@ -208,6 +209,12 @@ public actor MeetingSession {
             }
 
         } catch {
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .meeting,
+                event: .meetingCaptureStartFailed,
+                error: error
+            )
             _state = .failed
             levelTask?.cancel()
             maxDurationTask?.cancel()

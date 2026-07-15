@@ -1,4 +1,5 @@
 import AppKit
+import MaxMiCore
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // menu-bar only; pairs with LSUIElement in Info.plist
@@ -26,6 +27,7 @@ final class PermissionPoller {
 }
 
 let wiring = try AppWiring()
+SafeLogger.shared.log(.info, subsystem: .app, event: .appStarted)
 wiring.start()
 
 let permissionPoller: PermissionPoller? = {

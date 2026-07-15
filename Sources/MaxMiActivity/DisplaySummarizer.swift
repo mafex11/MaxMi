@@ -20,6 +20,12 @@ public struct DisplaySummarizer: Sendable {
                 let summary = try await relay.summarizeSession(appLabel: session.appLabel, evidence: session.evidence)
                 await repo.saveSummary(sessionID: session.id, summary: summary, expectedSourceHash: session.expectedSourceHash, nowMs: nowMs)
             } catch {
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .activity,
+                    event: .activitySummaryFailed,
+                    error: error
+                )
                 await repo.markFailed(sessionID: session.id, error: error.localizedDescription, nowMs: nowMs)
             }
         }

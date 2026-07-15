@@ -22,7 +22,9 @@ public struct MCPServer {
     public func handle(_ line: String) async -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard let msg = JSONRPC.parse(trimmed) else {
-            if !trimmed.isEmpty { logStderr("dropped unparseable frame") }
+            if !trimmed.isEmpty {
+                SafeLogger.shared.log(.warning, subsystem: .mcp, event: .mcpFrameDropped)
+            }
             return nil
         }
         let id = msg["id"]
@@ -57,8 +59,4 @@ public struct MCPServer {
             return JSONRPC.error(id: id, code: -32601, message: "method not found: \(method)")
         }
     }
-}
-
-func logStderr(_ message: String) {
-    FileHandle.standardError.write(Data("maxmi-mcp: \(message)\n".utf8))
 }

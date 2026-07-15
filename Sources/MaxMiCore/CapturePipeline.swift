@@ -21,20 +21,20 @@ public actor CapturePipeline {
         do {
             due = try store.dueRetries(nowMs: now)
         } catch {
-            log("dueRetries failed: \(error)")
+            SafeLogger.shared.log(.error, subsystem: .pipeline, event: .retryQueueReadFailed, error: error)
         }
         for r in due {
             do {
                 try store.clearRetry(id: r.id)
             } catch {
-                log("clearRetry failed: \(error)")
+                SafeLogger.shared.log(.error, subsystem: .pipeline, event: .retryClearFailed, error: error)
             }
         }
         var work: [PipelineVersion] = []
         do {
             work = try store.pendingWork(nowMs: now, idleThresholdMs: idleThresholdMs)
         } catch {
-            log("pendingWork failed: \(error)")
+            SafeLogger.shared.log(.error, subsystem: .pipeline, event: .pendingWorkReadFailed, error: error)
             return
         }
         for v in work { await process(v, now: now) }
@@ -43,11 +43,11 @@ public actor CapturePipeline {
     private func process(_ v: PipelineVersion, now: EpochMs) async {
         // Skip processing corruption markers — don't send junk to Gemini.
         guard v.content != "[unreadable memory]" else {
-            log("skipping version \(v.id): unreadable memory marker")
+            SafeLogger.shared.log(.warning, subsystem: .pipeline, event: .unreadableVersionSkipped)
             do {
                 try store.markExtractFailed(versionID: v.id)
             } catch {
-                log("markExtractFailed failed: \(error)")
+                SafeLogger.shared.log(.error, subsystem: .pipeline, event: .extractionStateWriteFailed, error: error)
             }
             return
         }
@@ -74,14 +74,14 @@ public actor CapturePipeline {
                 do {
                     try store.markExtractFailed(versionID: v.id)
                 } catch {
-                    log("markExtractFailed failed: \(error)")
+                    SafeLogger.shared.log(.error, subsystem: .pipeline, event: .extractionStateWriteFailed, error: error)
                 }
             }
             do {
                 try store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
                                         error: e.kind, nowMs: now)
             } catch {
-                log("enqueueRetry failed: \(error)")
+                SafeLogger.shared.log(.error, subsystem: .pipeline, event: .retryQueueWriteFailed, error: error)
             }
         } catch {
             do {
@@ -89,13 +89,9 @@ public actor CapturePipeline {
                 try store.enqueueRetry(kind: "extract", versionID: v.id, derivativeID: nil,
                                         error: "unexpectedError", nowMs: now)
             } catch {
-                log("enqueueRetry failed: \(error)")
+                SafeLogger.shared.log(.error, subsystem: .pipeline, event: .retryQueueWriteFailed, error: error)
             }
         }
     }
 
-    private func log(_ message: String) {
-        FileHandle.standardError.write(Data("MaxMi pipeline: \(message)\n".utf8))
-    }
 }
-

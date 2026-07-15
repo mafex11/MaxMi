@@ -348,7 +348,14 @@ extension Store {
                 if let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) {
                     set = Set(arr)
                 } else {
-                    NSLog("MaxMi: activity_excluded_apps JSON decode failed, treating as empty: \(json)")
+                    SafeLogger.shared.log(
+                        .warning,
+                        subsystem: .store,
+                        event: .settingsDecodeFailed,
+                        fields: SafeLogFields(
+                            operation: SafeLogToken(validating: "activity_excluded_apps")
+                        )
+                    )
                 }
             }
 

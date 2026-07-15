@@ -99,6 +99,12 @@ public struct HourlyAgent: Sendable {
                 renewalTask.cancel()
                 try await repo.complete(runID: page.runID, ops: ops)
             } catch {
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .agent,
+                    event: .agentRunFailed,
+                    error: error
+                )
                 await repo.fail(runID: page.runID, error: error.localizedDescription)
                 break
             }

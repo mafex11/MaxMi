@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 
 public struct ParserRegistry: Sendable {
     public static let slackBundleID = "com.tinyspeck.slackmacgap"
@@ -88,12 +89,27 @@ public enum CaptureDispatch {
             // No-silent-fallback: registered parser owns this app. nil/throw -> skip, never generic.
             do {
                 guard let result = try parser.parse(window: window, app: app) else {
-                    FileHandle.standardError.write(Data("maxmi: parser for \(app.bundleID) returned nil (skipped)\n".utf8))
+                    SafeLogger.shared.log(
+                        .info,
+                        subsystem: .capture,
+                        event: .parserNoContent,
+                        fields: SafeLogFields(
+                            parserID: SafeLogToken(validating: String(describing: type(of: parser)))
+                        )
+                    )
                     return .noContent
                 }
                 return .parsed(result)
             } catch {
-                FileHandle.standardError.write(Data("maxmi: parser for \(app.bundleID) threw: \(error)\n".utf8))
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .capture,
+                    event: .parserFailed,
+                    error: error,
+                    fields: SafeLogFields(
+                        parserID: SafeLogToken(validating: String(describing: type(of: parser)))
+                    )
+                )
                 return .failed
             }
         }
@@ -103,6 +119,13 @@ public enum CaptureDispatch {
             }
             return .parsed(result)
         } catch {
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .capture,
+                event: .parserFailed,
+                error: error,
+                fields: SafeLogFields(parserID: SafeLogToken(validating: "GenericAXParser"))
+            )
             return .failed
         }
     }

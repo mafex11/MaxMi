@@ -30,7 +30,15 @@ extension Store {
                     return rows.count
                 }
                 total += encrypted
-                FileHandle.standardError.write(Data("MaxMi backfill: \(table) +\(encrypted)\n".utf8))
+                SafeLogger.shared.log(
+                    .info,
+                    subsystem: .migration,
+                    event: .backfillProgress,
+                    fields: SafeLogFields(
+                        operation: SafeLogToken(validating: table),
+                        count: encrypted
+                    )
+                )
                 if encrypted < batchSize { break }
             }
         }

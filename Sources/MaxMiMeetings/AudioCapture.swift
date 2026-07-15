@@ -1,4 +1,5 @@
 import Foundation
+import MaxMiCore
 @preconcurrency import AVFoundation
 @preconcurrency import ScreenCaptureKit
 @preconcurrency import CoreMedia
@@ -91,6 +92,12 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
 
             return "system+mic"
         } catch {
+            SafeLogger.shared.log(
+                .warning,
+                subsystem: .meeting,
+                event: .audioFallbackToMicrophone,
+                error: error
+            )
             // SCStream failed (permission denied, app not shareable, etc.) -> degrade to mic-only
             if let stream {
                 try? await stream.stopCapture()
@@ -192,8 +199,12 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
             do {
                 try await startMicTap()
             } catch {
-                // Log error but don't crash
-                print("AudioCapture: failed to restart mic tap after device change: \(error)")
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .meeting,
+                    event: .audioDeviceRestartFailed,
+                    error: error
+                )
             }
         }
     }
@@ -214,7 +225,12 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
 
 extension AudioCapture: SCStreamDelegate {
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
-        print("AudioCapture: SCStream stopped with error: \(error)")
+        SafeLogger.shared.log(
+            .error,
+            subsystem: .meeting,
+            event: .audioStreamStoppedWithError,
+            error: error
+        )
         // Don't crash; let the session handle error state
     }
 }

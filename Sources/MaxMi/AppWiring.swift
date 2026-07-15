@@ -136,7 +136,9 @@ final class AppWiring {
         do {
             cipher = AESGCMFieldCipher(keyData: try KeychainKeyStore.getOrCreate())
         } catch {
-            NSLog("MaxMi: encryption key unavailable: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .app, event: .encryptionKeyUnavailable, error: error
+            )
             // A cipher that throws on every operation: capture is paused below, but
             // even a future write path that slips past the guard fails loudly and
             // rolls back rather than writing plaintext-equivalent data (spec §9).
@@ -185,7 +187,9 @@ final class AppWiring {
                         )
                     }
                 } catch {
-                    NSLog("MaxMi: failed to load activity sessions: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .activity, event: .activityStateReadFailed, error: error
+                    )
                     return []
                 }
             },
@@ -220,7 +224,9 @@ final class AppWiring {
                     }
                     return (open: openDTOs, archived: archivedDTOs)
                 } catch {
-                    NSLog("MaxMi: failed to load action items: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .agent, event: .actionItemsReadFailed, error: error
+                    )
                     return (open: [], archived: [])
                 }
             },
@@ -256,7 +262,9 @@ final class AppWiring {
                         )
                     }
                 } catch {
-                    NSLog("MaxMi: failed to load recent captures: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .capture, event: .recentCapturesReadFailed, error: error
+                    )
                     return []
                 }
             },
@@ -265,7 +273,9 @@ final class AppWiring {
                 do {
                     try activityStore.setCloudProcessing(sourceApp, allowed: allowed, nowMs: epochNowMs())
                 } catch {
-                    NSLog("MaxMi: failed to update cloud processing policy: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .settings, event: .privacyStateWriteFailed, error: error
+                    )
                 }
             }
         )
@@ -287,7 +297,9 @@ final class AppWiring {
                         )
                     }
                 } catch {
-                    NSLog("MaxMi: failed to load meeting history")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .meeting, event: .meetingHistoryReadFailed
+                    )
                     return []
                 }
             },
@@ -320,7 +332,9 @@ final class AppWiring {
                         )
                     }
                 } catch {
-                    NSLog("MaxMi: failed to load capture health: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .capture, event: .captureHealthReadFailed, error: error
+                    )
                     return []
                 }
             },
@@ -365,7 +379,9 @@ final class AppWiring {
                         statusLines: statusLines
                     )
                 } catch {
-                    NSLog("MaxMi: failed to load settings snapshot: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .settings, event: .databaseReadFailed, error: error
+                    )
                     return SettingsSnapshot(
                         launchAtLoginStatus: .unavailable,
                         activityEnabled: false,
@@ -388,14 +404,18 @@ final class AppWiring {
                     }
                     try activityStore.setActivityEnabled(enabled)
                 } catch {
-                    NSLog("MaxMi: setActivityEnabled failed: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .activity, event: .activityStateWriteFailed, error: error
+                    )
                 }
             },
             onToggleExcluded: { @Sendable bundle, excluded in
                 do {
                     try activityStore.setActivityExcludedAndDeleteActivity(bundle, excluded: excluded)
                 } catch {
-                    NSLog("MaxMi: setActivityExcludedAndDeleteActivity failed: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .activity, event: .activityStateWriteFailed, error: error
+                    )
                 }
             },
             onCheckUpdates: { @Sendable in
@@ -450,7 +470,9 @@ final class AppWiring {
                         retentionDays: try activityStore.retentionDays()
                     )
                 } catch {
-                    NSLog("MaxMi: failed to load capture privacy: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .settings, event: .privacyStateReadFailed, error: error
+                    )
                     return CapturePrivacySnapshot(
                         isPaused: true, pauseDescription: "Privacy settings unavailable — capture fails closed",
                         blockedDomains: [], blockedApps: [], pausedThreads: [], localOnlySources: [], retentionDays: nil
@@ -735,10 +757,14 @@ final class AppWiring {
         menuBar.encryptionAvailable = encryptionAvailable
         guard encryptionAvailable else { return }          // capture paused per §9
         do { try store.encryptExistingContent(nowMs: epochNowMs()) }   // §6: backfill before capture
-        catch { NSLog("MaxMi: backfill failed, will retry next launch: \(error)") }
+        catch {
+            SafeLogger.shared.log(.error, subsystem: .migration, event: .backfillFailed, error: error)
+        }
         do { try store.bootstrapCloudProcessingReview(nowMs: epochNowMs()) }
         catch {
-            NSLog("MaxMi: cloud review bootstrap failed; capture remains stopped: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .settings, event: .cloudReviewBootstrapFailed, error: error
+            )
             paused = true
             menuBar.paused = true
             return
@@ -749,7 +775,9 @@ final class AppWiring {
             try store.closeOpenVisits(nowMs: epochNowMs())
             try store.closeOpenSessions(nowMs: epochNowMs())
         } catch {
-            NSLog("MaxMi: activity startup crash-repair failed: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .activity, event: .activityCrashRepairFailed, error: error
+            )
         }
 
         // Show privacy window on first run if consent is unset
@@ -758,7 +786,9 @@ final class AppWiring {
                 activityPrivacyWindow.show()
             }
         } catch {
-            NSLog("MaxMi: failed to check activity consent: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .activity, event: .activityConsentReadFailed, error: error
+            )
         }
 
         // Sleep/lock notification for activity
@@ -872,7 +902,9 @@ final class AppWiring {
             try store.closeOpenVisits(nowMs: nowMs)
             currentVisitID = nil
         } catch {
-            NSLog("MaxMi: activity close failed on focus change: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .activity, event: .activityStateWriteFailed, error: error
+            )
         }
 
         if !isCapturable {
@@ -892,7 +924,9 @@ final class AppWiring {
             let visitID = try store.openVisit(appBundle: app.bundleID, appLabel: app.name, nowMs: nowMs)
             currentVisitID = visitID
         } catch {
-            NSLog("MaxMi: activity visit open failed: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .activity, event: .activityStateWriteFailed, error: error
+            )
         }
     }
 
@@ -907,7 +941,9 @@ final class AppWiring {
                 && !Denylist.isSensitiveApp(bundleID)
                 && !excluded.contains(bundleID)
         } catch {
-            NSLog("MaxMi: activity eligibility check failed: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .activity, event: .activityStateReadFailed, error: error
+            )
             return false
         }
     }
@@ -1019,7 +1055,9 @@ final class AppWiring {
 
                 detector.start()
             } catch {
-                NSLog("MaxMi: whisper model download failed: \(error)")
+                SafeLogger.shared.log(
+                    .error, subsystem: .meeting, event: .modelDownloadFailed, error: error
+                )
                 panel.showError("Failed to prepare transcription model")
             }
         }
@@ -1045,7 +1083,9 @@ final class AppWiring {
                 return
             }
         } catch {
-            NSLog("MaxMi: pausedApps read failed, skipping capture: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .capturePolicyReadFailed, error: error
+            )
             recordCaptureHealth(
                 app: app, trigger: trigger, parser: parser,
                 outcome: .failed(.appPauseReadFailed), startedAtMs: startedAtMs
@@ -1147,7 +1187,9 @@ final class AppWiring {
                         return
                     }
                 } catch {
-                    NSLog("MaxMi: blockedDomains read failed, skipping capture: \(error)")
+                    SafeLogger.shared.log(
+                        .error, subsystem: .capture, event: .capturePolicyReadFailed, error: error
+                    )
                     recordCaptureHealth(
                         app: appInfo, trigger: trigger, parser: effectiveParserName,
                         outcome: .failed(.privacySettingsReadFailed), startedAtMs: startedAtMs
@@ -1195,7 +1237,9 @@ final class AppWiring {
             do {
                 pausedThreads = try store.pausedThreads()
             } catch {
-                NSLog("MaxMi: pausedThreads read failed, skipping capture: \(error)")
+                SafeLogger.shared.log(
+                    .error, subsystem: .capture, event: .capturePolicyReadFailed, error: error
+                )
                 recordCaptureHealth(
                     app: appInfo, trigger: trigger, parser: effectiveParserName,
                     outcome: .failed(.threadPauseReadFailed), startedAtMs: startedAtMs
@@ -1244,7 +1288,9 @@ final class AppWiring {
                             nowMs: nowMs
                         )
                     } catch {
-                        NSLog("MaxMi: activity capture failed: \(error)")
+                        SafeLogger.shared.log(
+                            .error, subsystem: .activity, event: .activityCaptureFailed, error: error
+                        )
                     }
                 }
             }
@@ -1288,7 +1334,9 @@ final class AppWiring {
                 startedAtMs: startedAtMs, terminalOutcome: .skipped(.emptyContent)
             )
         } catch {
-            NSLog("MaxMi capture skipped: \(error)")             // logged, skipped, never crash (spec §10)
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .captureCommitFailed, error: error
+            )
             recordCaptureHealth(
                 app: appInfo, trigger: trigger, parser: parserName,
                 outcome: .failed(.storeCommitFailed), startedAtMs: startedAtMs
@@ -1303,7 +1351,9 @@ final class AppWiring {
             menuBar.paused = persisted
             return persisted
         } catch {
-            NSLog("MaxMi: capture pause read failed; failing closed: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .capturePauseReadFailed, error: error
+            )
             paused = true
             menuBar.paused = true
             return true
@@ -1323,7 +1373,9 @@ final class AppWiring {
             menuBar.paused = paused
             Task { await trayHomeViewModel?.refresh() }
         } catch {
-            NSLog("MaxMi: failed to change capture pause: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .capturePauseWriteFailed, error: error
+            )
             paused = true
             menuBar.paused = true
         }
@@ -1375,7 +1427,9 @@ final class AppWiring {
             )
         } catch {
             // Diagnostics must never break capture or recursively record their own failure.
-            NSLog("MaxMi: capture health write failed")
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .captureHealthWriteFailed
+            )
         }
     }
 
@@ -1425,7 +1479,9 @@ final class AppWiring {
                 await agentScheduler.tick()
             }
         } catch {
-            NSLog("MaxMi: failed to check agent overdue status: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .agent, event: .agentStatusReadFailed, error: error
+            )
         }
     }
 
@@ -1443,7 +1499,9 @@ final class AppWiring {
                 lastSummarizedCount = summarizedCount
             }
         } catch {
-            NSLog("MaxMi: failed to check summarized session count: \(error)")
+            SafeLogger.shared.log(
+                .error, subsystem: .agent, event: .agentStatusReadFailed, error: error
+            )
         }
     }
 }

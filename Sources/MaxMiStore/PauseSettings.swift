@@ -18,7 +18,12 @@ extension Store {
             guard let json = try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?", arguments: [key]) else { return [] }
             // Recoverable metadata: log decode failure and treat as empty.
             guard let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) else {
-                NSLog("MaxMi: paused-set '\(key)' JSON decode failed, treating as empty: \(json)")
+                SafeLogger.shared.log(
+                    .warning,
+                    subsystem: .store,
+                    event: .settingsDecodeFailed,
+                    fields: SafeLogFields(operation: SafeLogToken(validating: key))
+                )
                 return []
             }
             return Set(arr)
@@ -33,7 +38,12 @@ extension Store {
                 if let arr = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) {
                     set = Set(arr)
                 } else {
-                    NSLog("MaxMi: paused-set '\(key)' JSON decode failed, treating as empty: \(json)")
+                    SafeLogger.shared.log(
+                        .warning,
+                        subsystem: .store,
+                        event: .settingsDecodeFailed,
+                        fields: SafeLogFields(operation: SafeLogToken(validating: key))
+                    )
                 }
             }
             if insert { set.insert(element) } else { set.remove(element) }

@@ -70,6 +70,12 @@ public struct CaptureDisplaySummarizer: Sendable {
                     nowMs: nowMs
                 )
             } catch {
+                SafeLogger.shared.log(
+                    .error,
+                    subsystem: .capture,
+                    event: .captureSummaryFailed,
+                    error: error
+                )
                 await repo.markCaptureSummaryFailed(
                     threadID: capture.threadID,
                     expectedSourceHash: capture.expectedSourceHash,

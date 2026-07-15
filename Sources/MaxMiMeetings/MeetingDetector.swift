@@ -1,7 +1,7 @@
 import Foundation
+import MaxMiCore
 #if os(macOS)
 import CoreAudio
-import os.log
 #endif
 
 /// Protocol for meeting detection
@@ -37,7 +37,6 @@ public final class MeetingDetector: MeetingDetecting {
     #if os(macOS)
     private var processListListener: AudioObjectPropertyListenerBlock?
     private var processInputListeners: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
-    private let logger = Logger(subsystem: "MaxMi", category: "MeetingDetector")
     #endif
 
     public var onCandidate: ((_ bundleID: String, _ pid: pid_t) -> Void)?
@@ -137,7 +136,12 @@ public final class MeetingDetector: MeetingDetecting {
         )
 
         guard status == noErr else {
-            logger.error("Failed to add process list listener: \(status)")
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .meeting,
+                event: .meetingListenerFailed,
+                fields: SafeLogFields(statusCode: Int(status))
+            )
             return
         }
 
