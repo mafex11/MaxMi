@@ -96,12 +96,20 @@ Existing detailed scenarios remain in the Phase 2–4 evidence documents. Phase 
 
 | Scenario | Detection | Capture | Cleanup | Persisted | App/MCP recall | Date |
 |---|---:|---:|---:|---:|---:|---|
-| Microphone voice note | pending | pending | pending | pending | pending | — |
+| Microphone voice note | explicit action | pass | pass | pass | pass | 2026-07-15 |
 | Mic-only controlled meeting | pending | pending | pending | pending | pending | — |
 | System + mic controlled meeting | pending | pending | pending | pending | pending | — |
 | Permission-denied fallback | pending | pending | pending | pending | pending | — |
 | Input-device switch | pending | pending | pending | pending | pending | — |
-| Termination/relaunch recovery | pending | pending | pending | pending | pending | — |
+| Termination/relaunch recovery | explicit action | pass | pass | correctly omitted | n/a | 2026-07-15 |
+
+The first live voice-note attempt exposed a Swift 6 executor trap in the AVAudioEngine
+realtime tap. The tap callback is now created from a nonisolated function and sends
+buffers only to the thread-safe mixer. On the rebuilt signed app, controlled synthetic
+speech produced one completed `voice-note-mic` row, one encrypted version/context, and
+a successful content-suppressed `meeting_memory` MCP list call. A second recording was
+terminated by quitting MaxMi: relaunch consumed the content-free marker, created no
+second recording, left no temporary audio, and resumed with one app process.
 
 ## Batch 7.2 lifecycle and recovery
 

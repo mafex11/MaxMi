@@ -801,6 +801,9 @@ final class AppWiring {
             onTogglePause: { @MainActor [weak self] in
                 self?.toggleGlobalPause()
             },
+            onStartVoiceNote: { @MainActor [weak self] in
+                Task { await self?.meetingSession?.startVoiceNote() }
+            },
             onOpenMaxMi: { @MainActor [weak self] in self?.activityWindow.show() }
         ))
         popoverController.view.frame = NSRect(x: 0, y: 0, width: 520, height: 650)

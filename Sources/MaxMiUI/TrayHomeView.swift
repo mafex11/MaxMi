@@ -5,6 +5,7 @@ public struct TrayHomeView: View {
     @Bindable private var viewModel: TrayHomeViewModel
     @Bindable private var recentCapturesViewModel: RecentCapturesViewModel
     private let onTogglePause: @MainActor () -> Void
+    private let onStartVoiceNote: @MainActor () -> Void
     private let onOpenMaxMi: @MainActor () -> Void
     private let onOpenSettings: @MainActor () -> Void
 
@@ -12,12 +13,14 @@ public struct TrayHomeView: View {
         viewModel: TrayHomeViewModel,
         recentCapturesViewModel: RecentCapturesViewModel,
         onTogglePause: @escaping @MainActor () -> Void,
+        onStartVoiceNote: @escaping @MainActor () -> Void,
         onOpenMaxMi: @escaping @MainActor () -> Void,
         onOpenSettings: @escaping @MainActor () -> Void
     ) {
         self.viewModel = viewModel
         self.recentCapturesViewModel = recentCapturesViewModel
         self.onTogglePause = onTogglePause
+        self.onStartVoiceNote = onStartVoiceNote
         self.onOpenMaxMi = onOpenMaxMi
         self.onOpenSettings = onOpenSettings
     }
@@ -123,6 +126,10 @@ public struct TrayHomeView: View {
     private var footer: some View {
         HStack {
             Button("Open MaxMi") { onOpenMaxMi() }.buttonStyle(.borderedProminent)
+            Button { onStartVoiceNote() } label: {
+                Label("Voice Note", systemImage: "mic.fill")
+            }
+            .buttonStyle(.bordered)
             Spacer()
             Button { onOpenSettings() } label: { Image(systemName: "gearshape") }
                 .buttonStyle(.bordered)
@@ -162,4 +169,3 @@ public struct TrayHomeView: View {
         }
     }
 }
-

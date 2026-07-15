@@ -75,8 +75,9 @@ Run `tools/check-recording-health.sh` before and after each test. Do not conduct
 | Accept with screen recording denied | mic-only recording persists | mocked; pending live |
 | Accept with system+mic | both speakers appear once and chronologically | deterministic mixer; pending live |
 | Change microphone during recording | tap restarts, recording continues | implementation present; pending live |
-| Stop recording | encrypted transcript, history row, summary/facts queued | automated; pending live |
-| Start/stop tray voice note | encrypted voice-note row visible in Recordings and MCP | automated; pending live |
+| Stop recording | encrypted transcript, history row, summary/facts queued | live pass for voice note, 2026-07-15; meeting pending |
+| Start/stop tray voice note | encrypted voice-note row visible in Recordings and MCP | live pass, 2026-07-15 |
+| Quit during active voice note, then relaunch | marker consumed; no partial row or temp audio | live pass, 2026-07-15 |
 | Meeting window on secondary display | panel docks to that display | automated geometry; pending live |
 
 The implementation is not considered fully live-accepted until the Zen Meet, two-speaker system+mic, device-switch, and tray voice-note rows are completed without exposing their content in diagnostics.

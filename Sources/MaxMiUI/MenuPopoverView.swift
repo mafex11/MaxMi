@@ -24,6 +24,7 @@ public struct MenuPopoverView: View {
     @Bindable private var dataControlsViewModel: DataControlsViewModel
     @Bindable private var setupViewModel: SetupViewModel
     private let onTogglePause: @MainActor () -> Void
+    private let onStartVoiceNote: @MainActor () -> Void
     private let onOpenMaxMi: @MainActor () -> Void
 
     public init(
@@ -35,6 +36,7 @@ public struct MenuPopoverView: View {
         dataControlsViewModel: DataControlsViewModel,
         setupViewModel: SetupViewModel,
         onTogglePause: @escaping @MainActor () -> Void,
+        onStartVoiceNote: @escaping @MainActor () -> Void,
         onOpenMaxMi: @escaping @MainActor () -> Void
     ) {
         self.navigation = navigation
@@ -45,6 +47,7 @@ public struct MenuPopoverView: View {
         self.dataControlsViewModel = dataControlsViewModel
         self.setupViewModel = setupViewModel
         self.onTogglePause = onTogglePause
+        self.onStartVoiceNote = onStartVoiceNote
         self.onOpenMaxMi = onOpenMaxMi
     }
 
@@ -56,6 +59,7 @@ public struct MenuPopoverView: View {
                     viewModel: trayHomeViewModel,
                     recentCapturesViewModel: recentCapturesViewModel,
                     onTogglePause: onTogglePause,
+                    onStartVoiceNote: onStartVoiceNote,
                     onOpenMaxMi: onOpenMaxMi,
                     onOpenSettings: { navigation.showSettings() }
                 )

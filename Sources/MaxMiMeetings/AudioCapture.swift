@@ -177,12 +177,12 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         // Install tap on input node to capture mic audio
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
-            guard let self = self else { return }
-            let duration = UInt64(Double(buffer.frameLength) / buffer.format.sampleRate * 1_000_000_000)
-            let now = DispatchTime.now().uptimeNanoseconds
-            self.mixer.mixMic(buffer, timestampNs: now - min(now, duration))
-        }
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 4096,
+            format: inputFormat,
+            block: Self.makeMicTapHandler(mixer: mixer)
+        )
 
         // Observe configuration changes (device switch)
         NotificationCenter.default.addObserver(
@@ -197,6 +197,19 @@ public final class AudioCapture: NSObject, AudioCaptureControlling, @unchecked S
         observerTracked = true
         MeetingResourceTracker.shared.audioEngineStarted()
         MeetingResourceTracker.shared.deviceObserverStarted()
+    }
+
+    /// AVAudioEngine invokes tap blocks on its realtime queue. Building the block from
+    /// a nonisolated function prevents Swift 6 from inheriting MainActor isolation from
+    /// `startMicTap`, which otherwise traps at runtime on the first audio buffer.
+    nonisolated private static func makeMicTapHandler(mixer: AudioMixer) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            let duration = UInt64(
+                Double(buffer.frameLength) / buffer.format.sampleRate * 1_000_000_000
+            )
+            let now = DispatchTime.now().uptimeNanoseconds
+            mixer.mixMic(buffer, timestampNs: now - min(now, duration))
+        }
     }
 
     @objc private func handleAudioEngineConfigurationChange() {
