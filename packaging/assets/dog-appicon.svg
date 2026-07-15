@@ -1,31 +1,53 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- MaxMi app icon: white standing-dog side profile on a graphite squircle. -->
+<!-- MaxMi app icon: a minimal, front-facing dog head on a graphite squircle. -->
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2b2b2e"/>
-      <stop offset="1" stop-color="#0e0e10"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#292a30"/>
+      <stop offset="1" stop-color="#0c0d11"/>
     </linearGradient>
   </defs>
-  <rect x="96" y="96" width="832" height="832" rx="196" ry="196" fill="url(#bg)"/>
 
-  <g fill="#ffffff">
-    <rect x="300" y="440" width="380" height="170" rx="85"/>
-    <ellipse cx="640" cy="470" rx="110" ry="120"/>
-    <ellipse cx="330" cy="520" rx="110" ry="120"/>
-    <rect x="620" y="320" width="120" height="180" rx="55" transform="rotate(18 680 410)"/>
-    <circle cx="740" cy="320" r="92"/>
-    <path d="M812 300 q 96 8 116 60 q 8 30 -28 44 l -96 20 q -40 4 -44 -34 z"/>
-    <path d="M700 268 q -44 -34 -30 -92 q 10 -34 46 -24 q 44 14 60 66 q 12 44 -18 74 q -34 22 -58 -30 z"/>
-    <rect x="330" y="590" width="66" height="180" rx="30"/>
-    <rect x="420" y="600" width="60" height="170" rx="28"/>
-    <rect x="560" y="600" width="60" height="170" rx="28"/>
-    <rect x="640" y="590" width="66" height="180" rx="30"/>
-    <path d="M300 470 q -70 -20 -104 -78 q -16 -30 12 -48 q 26 -14 46 16 q 26 42 62 58 q 26 12 -16 52 z"/>
-  </g>
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="url(#bg)"/>
+  <rect x="76" y="76" width="872" height="872" rx="212" fill="none"
+        stroke="#ffffff" stroke-opacity="0.07" stroke-width="4"/>
 
-  <g fill="#0e0e10">
-    <circle cx="748" cy="300" r="15"/>
-    <circle cx="910" cy="352" r="14"/>
+  <!-- Long, soft ears make the silhouette read as a dog at a glance. -->
+  <path d="M376 330
+           C326 272 244 282 206 350
+           C168 418 212 542 292 648
+           C326 692 380 670 386 616
+           L406 414
+           C410 380 400 352 376 330 Z"
+        fill="#ffffff"/>
+  <path d="M648 330
+           C698 272 780 282 818 350
+           C856 418 812 542 732 648
+           C698 692 644 670 638 616
+           L618 414
+           C614 380 624 352 648 330 Z"
+        fill="#ffffff"/>
+
+  <!-- One uncomplicated head shape, narrowed gently into the muzzle. -->
+  <path d="M512 246
+           C622 246 690 326 684 436
+           C680 518 662 614 608 682
+           C566 734 458 734 416 682
+           C362 614 344 518 340 436
+           C334 326 402 246 512 246 Z"
+        fill="#ffffff"/>
+
+  <g fill="#101116">
+    <circle cx="438" cy="454" r="18"/>
+    <circle cx="586" cy="454" r="18"/>
+    <path d="M478 528
+             C478 506 546 506 546 528
+             C546 554 530 568 512 568
+             C494 568 478 554 478 528 Z"/>
   </g>
+  <path d="M512 566 V588
+           M512 588 C492 610 472 612 458 596
+           M512 588 C532 610 552 612 566 596"
+        fill="none" stroke="#101116" stroke-width="13"
+        stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
