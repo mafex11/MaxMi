@@ -10,6 +10,8 @@ public enum RelayError: Error {
     case network(underlying: Error)
     case httpStatus(Int)        // 429/5xx -> retryable
     case malformedResponse(String)
+    case requestTooLarge
+    case insecureEndpoint
 
     public var kind: String {
         switch self {
@@ -17,6 +19,8 @@ public enum RelayError: Error {
         case .network: return "network"
         case .httpStatus(let code): return "httpStatus(\(code))"
         case .malformedResponse: return "malformedResponse"
+        case .requestTooLarge: return "requestTooLarge"
+        case .insecureEndpoint: return "insecureEndpoint"
         }
     }
 }

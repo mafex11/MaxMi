@@ -155,7 +155,9 @@ claims from unit tests as live evidence.
   version rows and a portable pre-restore backup, 2026-07-15.
 - CPU/memory/disk/queue profiles: instrumentation and short signed-app profile pass;
   eight-hour normal-use profile pending. See `PHASE7_RUNTIME_BUDGETS.md`.
-- Secure distributed AI path: pending Batch 7.7.
+- Secure distributed AI path: hosted-relay client, Keychain token storage, fail-closed
+  tests, and bundle-secret scan pass locally; service provisioning, revocation, quotas,
+  and production transport remain pending. See `PHASE7_SECURE_RELAY.md`.
 - Clean install, upgrade, signing, notarization, and Gatekeeper: pending Batch 7.8.
 - Seven-day soak: pending Batch 7.9.
 

@@ -1,7 +1,7 @@
 import Foundation
 import MaxMiCore
 
-public final class GeminiClient: MemoryRelay {
+public final class GeminiClient: GenerationMemoryRelay {
     let config: EnvConfig
     let session: URLSession
     let baseURL: URL

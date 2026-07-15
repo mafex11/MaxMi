@@ -2,12 +2,23 @@ import Foundation
 
 public struct EnvConfig: Sendable, Equatable {
     public let geminiAPIKey: String?
+    public let relayURL: URL?
+    public let relayToken: String?
     public let extractModel: String
     public let embedModel: String
     public let embedDims: Int
 
-    public init(geminiAPIKey: String?, extractModel: String, embedModel: String, embedDims: Int) {
+    public init(
+        geminiAPIKey: String?,
+        extractModel: String,
+        embedModel: String,
+        embedDims: Int,
+        relayURL: URL? = nil,
+        relayToken: String? = nil
+    ) {
         self.geminiAPIKey = geminiAPIKey
+        self.relayURL = relayURL
+        self.relayToken = relayToken
         self.extractModel = extractModel
         self.embedModel = embedModel
         self.embedDims = embedDims
@@ -32,7 +43,25 @@ public struct EnvConfig: Sendable, Equatable {
             geminiAPIKey: kv["GEMINI_API_KEY"],
             extractModel: kv["MAXMI_EXTRACT_MODEL"] ?? "gemini-flash-lite-latest",
             embedModel: kv["MAXMI_EMBED_MODEL"] ?? "gemini-embedding-001",
-            embedDims: kv["MAXMI_EMBED_DIMS"].flatMap(Int.init) ?? 1536
+            embedDims: kv["MAXMI_EMBED_DIMS"].flatMap(Int.init) ?? 1536,
+            relayURL: kv["MAXMI_RELAY_URL"].flatMap(URL.init(string:)),
+            relayToken: kv["MAXMI_RELAY_TOKEN"]
+        )
+    }
+
+    public var usesHostedRelay: Bool { relayURL != nil || relayToken != nil }
+    public var aiServiceConfigured: Bool {
+        (relayURL != nil && relayToken != nil) || geminiAPIKey != nil
+    }
+
+    public func replacingRelayToken(_ token: String?) -> EnvConfig {
+        EnvConfig(
+            geminiAPIKey: geminiAPIKey,
+            extractModel: extractModel,
+            embedModel: embedModel,
+            embedDims: embedDims,
+            relayURL: relayURL,
+            relayToken: token
         )
     }
 }

@@ -38,7 +38,10 @@ let package = Package(
                 .linkedFramework("Accelerate")
             ]
         ),
-        .target(name: "MaxMiCore"),
+        .target(
+            name: "MaxMiCore",
+            linkerSettings: [.linkedFramework("Security")]
+        ),
         .target(name: "MaxMiStore", dependencies: [
             "MaxMiCore", "CSQLiteVec",
             .product(name: "GRDB", package: "GRDB.swift"),

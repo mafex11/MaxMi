@@ -39,4 +39,13 @@ final class EnvConfigTests: XCTestCase {
         let c = EnvConfig.load(searchPaths: [u])
         XCTAssertNil(c.geminiAPIKey, "empty-string value yields nil")
     }
+    func testHostedRelayConfigurationIsLoadedWithoutProviderKey() throws {
+        let u = try write("MAXMI_RELAY_URL=https://relay.example.test\nMAXMI_RELAY_TOKEN=install-token-1234")
+        let c = EnvConfig.load(searchPaths: [u])
+        XCTAssertEqual(c.relayURL?.absoluteString, "https://relay.example.test")
+        XCTAssertEqual(c.relayToken, "install-token-1234")
+        XCTAssertTrue(c.usesHostedRelay)
+        XCTAssertTrue(c.aiServiceConfigured)
+        XCTAssertNil(c.geminiAPIKey)
+    }
 }

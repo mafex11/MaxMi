@@ -4,7 +4,7 @@ import MaxMiRelay
 import MaxMiActivity
 
 struct GeminiAgentRelay: AgentGenerationRelay, Sendable {
-    let geminiClient: GeminiClient
+    let geminiClient: any GenerationMemoryRelay
 
     func reviewActivity(_ input: AgentReviewInput) async throws -> [AgentOpDTO] {
         let prompt = AgentPrompts.hourlyReview(input: input)

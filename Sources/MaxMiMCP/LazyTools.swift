@@ -50,10 +50,14 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
             let db = try MaxMiDatabase(path: dbPath, readOnly: true)
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("MaxMi")
-            let config = EnvConfig.load(searchPaths: [
+            var config = EnvConfig.load(searchPaths: [
                 appSupport.appendingPathComponent(".env"),
                 URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
             ])
+            if config.relayURL != nil, config.relayToken == nil,
+               let token = try? RelayTokenStore.read() {
+                config = config.replacingRelayToken(token)
+            }
             let keyData: Data
             do { keyData = try keyProvider() }
             catch {
@@ -66,9 +70,13 @@ public final class LazyTools: ToolProvider, @unchecked Sendable {
                 lockedOut = true
                 return nil
             }
-            let queries = MemoryQueries(store: Store(db: db, cipher: AESGCMFieldCipher(keyData: keyData)), relay: GeminiClient(config: config))
+            let relay = RelayClientFactory.make(config: config)
+            let queries = MemoryQueries(
+                store: Store(db: db, cipher: AESGCMFieldCipher(keyData: keyData)),
+                relay: relay
+            )
             let tools = MaxMiTools(queries: queries)
-            if config.geminiAPIKey != nil {
+            if config.aiServiceConfigured {
                 cached = tools
             }
             return tools

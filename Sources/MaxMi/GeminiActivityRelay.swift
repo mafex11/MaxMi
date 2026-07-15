@@ -3,7 +3,7 @@ import MaxMiRelay
 import MaxMiActivity
 
 struct GeminiActivityRelay: ActivityGenerationRelay, CaptureDisplayGenerationRelay {
-    let geminiClient: GeminiClient
+    let geminiClient: any GenerationMemoryRelay
     let maxEvidenceChars: Int
     let modelID: String
 

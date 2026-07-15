@@ -172,10 +172,17 @@ final class AppWiring {
             directoryURL: appSupport.appendingPathComponent("RecordingState", isDirectory: true)
         )
 
-        let config = EnvConfig.load(searchPaths: [
+        var config = EnvConfig.load(searchPaths: [
             appSupport.appendingPathComponent(".env"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"),
         ])
+        if config.relayURL != nil {
+            if let token = config.relayToken {
+                try? RelayTokenStore.store(token)
+            } else if let token = try? RelayTokenStore.read() {
+                config = config.replacingRelayToken(token)
+            }
+        }
         let databaseURL = appSupport.appendingPathComponent("maxmi.db")
         let db = try MaxMiDatabase(path: databaseURL.path)
         // Spec §6 ordering: key -> backfill -> capture. No key => capture stays paused
@@ -196,10 +203,10 @@ final class AppWiring {
         }
         store = Store(db: db, cipher: cipher)
         self.encryptionAvailable = encryptionAvailable
-        let relay = GeminiClient(config: config)
+        let relay = RelayClientFactory.make(config: config)
         pipeline = CapturePipeline(store: StoreAdapter(store: store), relay: relay)
         menuBar = MenuBarController()
-        menuBar.aiServiceAvailable = config.geminiAPIKey != nil
+        menuBar.aiServiceAvailable = config.aiServiceConfigured
         let activityRepo = StoreActivitySummaryRepository(store: store, modelID: config.extractModel)
         let activityRelay = GeminiActivityRelay(
             geminiClient: relay,
@@ -393,7 +400,7 @@ final class AppWiring {
 
         // Initialize settings window
         // Capture values needed for settings load closure before self is fully initialized
-        let aiServiceAvailable = config.geminiAPIKey != nil
+        let aiServiceAvailable = config.aiServiceConfigured
         let encryptionOK = encryptionAvailable
         nonisolated(unsafe) let mb = menuBar
         nonisolated(unsafe) let privacyWindow = activityPrivacyWindow
