@@ -1,6 +1,7 @@
 # Phase 7 — Reliability, Live Parity, and Distribution Plan
 
-**Status:** in progress; Batches 7.0–7.2 complete
+**Status:** in progress; Batches 7.0–7.3 complete; Batch 7.4 needs controlled
+real-audio acceptance; Batch 7.5 recovery design is constrained below
 **Created:** 2026-07-15  
 **Depends on:** Phases 0–6 on `main` through `4e14b37`  
 **Reference:** Minimi 1.0.59
@@ -247,12 +248,20 @@ Acceptance:
 
 **Purpose:** make recovery operational rather than theoretical.
 
+**Design constraint recorded 2026-07-15:** the existing consistent-backup path is
+tested and a copied backup opens successfully through the normal store. An experiment
+to validate a backup through an additional read-only SQLite connection in the same
+process exposed an SQLite/sqlite-vec `SQLITE_CANTOPEN` failure after the live database
+queue was closed. No restore code from that experiment was shipped. The production
+workflow must therefore validate and swap files in a short-lived recovery helper after
+MaxMi exits, then relaunch. It must not attempt an in-process database replacement.
+
 Implementation:
 
 1. Add a read-only integrity/diagnostics action.
-2. Add a restore workflow that closes workers, validates a selected backup, creates a
-   backup of the current database, atomically replaces the database, and requires a
-   controlled relaunch.
+2. Add a restore workflow that hands off to a short-lived recovery helper: it validates
+   a selected backup after MaxMi exits, creates a backup of the current database,
+   atomically replaces the database, and relaunches MaxMi only on success.
 3. Add repair guidance for SQLite corruption; never mutate the only copy.
 4. Define a migration manifest containing version, preconditions, verification, and
    rollback/restore instructions.
