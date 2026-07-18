@@ -7,7 +7,6 @@ public struct SetupView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("Setup & Connections").sectionTitle()
             VStack(spacing: Theme.spacing1) {
                 ForEach(viewModel.snapshot.permissions) { item in statusRow(item) }
                 statusRow(viewModel.snapshot.encryption)

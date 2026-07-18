@@ -39,11 +39,8 @@ public struct TrayHomeView: View {
         VStack(alignment: .leading, spacing: Theme.spacing1) {
             header
             sectionRow
-            // The recent captures (top 5) are the home surface, like Minimi.
+            // Variant B (Timeline): rows sit flat on the background with hairline dividers — no card.
             RecentCapturesView(viewModel: recentCapturesViewModel, limit: Self.recentLimit)
-                .background(Theme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadiusLarge, style: .continuous))
-                .padding(.horizontal, Theme.spacing2)
             Spacer(minLength: 0)
             footer
         }
@@ -51,6 +48,16 @@ public struct TrayHomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.background)
         .preferredColorScheme(.dark)
+        // Poll while the popover is open so the memory list stays live as new captures land.
+        // The AppKit onWillShow hook doesn't reliably re-render a transient NSPopover's SwiftUI
+        // content, so we drive refreshes from the view itself on a short interval.
+        .task {
+            while !Task.isCancelled {
+                await recentCapturesViewModel.refresh()
+                await viewModel.refresh()
+                try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2s
+            }
+        }
     }
 
     // Minimi-style header: brand icon + wordmark + status dot on the left; Actions + gear on the right.

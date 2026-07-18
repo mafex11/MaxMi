@@ -7,7 +7,6 @@ public struct CapturePrivacyView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("Capture & Privacy").sectionTitle()
             Text("Control what MaxMi records and where it goes.")
                 .font(.caption).foregroundColor(Theme.tertiaryText)
             pauseCard

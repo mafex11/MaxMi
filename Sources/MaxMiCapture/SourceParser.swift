@@ -5,8 +5,11 @@ public struct AppInfo: Sendable, Equatable {
     public let bundleID: String
     public let name: String
     public let windowTitle: String?
-    public init(bundleID: String, name: String, windowTitle: String?) {
-        self.bundleID = bundleID; self.name = name; self.windowTitle = windowTitle
+    /// Stable CGWindowID of the focused window when known — lets terminal threads separate by
+    /// window even when no cwd is sniffable. nil for callers that don't resolve it.
+    public let windowID: UInt32?
+    public init(bundleID: String, name: String, windowTitle: String?, windowID: UInt32? = nil) {
+        self.bundleID = bundleID; self.name = name; self.windowTitle = windowTitle; self.windowID = windowID
     }
 }
 

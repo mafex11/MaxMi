@@ -41,6 +41,12 @@ public enum CaptureNotificationClassifier {
 public final class FocusObserver {
     static let observedAXNotifications: [String] = [
         kAXFocusedUIElementChangedNotification,
+        // Window/tab switches within the SAME app fire no NSWorkspace app-activation notification,
+        // so without these a second terminal window (or any same-app window swap) is never
+        // re-captured until the periodic timer — and it reads stale focus. These make a window/tab
+        // switch trigger a fresh snapshot immediately.
+        kAXFocusedWindowChangedNotification,
+        kAXMainWindowChangedNotification,
         kAXTitleChangedNotification,
         kAXValueChangedNotification,
         kAXSelectedChildrenChangedNotification,

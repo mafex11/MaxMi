@@ -54,6 +54,13 @@ public struct TerminalParser: SourceParser {
         if let dir = workingDirectory(fromContent: content) ?? workingDirectory(fromTitle: app.windowTitle) {
             return "terminal:\(appSlug)/\(dir)"
         }
+        // No sniffable cwd (e.g. a full-screen TUI like Claude Code). Separate by the stable window
+        // id so distinct windows get distinct threads instead of merging into one "terminal:warp"
+        // bucket. We deliberately DON'T key on the window title — TUI titles are volatile (spinners)
+        // and would spawn a new thread on every capture. Bare app name only if no window id resolved.
+        if let wid = app.windowID {
+            return "terminal:\(appSlug)/win-\(wid)"
+        }
         return "terminal:\(appSlug)"
     }
 

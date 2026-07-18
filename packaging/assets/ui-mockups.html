@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MaxMi — UI Mockups (devmafex palette)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ===== devmafex.com palette (OKLCH, dark mode) ===== */
+  :root{
+    --bg:        oklch(0.185 0.021 130);   /* olive-greenish-black */
+    --fg:        oklch(0.920 0.012 90);    /* warm-neutral text */
+    --card:      oklch(0.225 0.021 130);   /* surface a notch above bg */
+    --muted:     oklch(0.295 0.021 130);   /* subtle fills */
+    --muted-fg:  oklch(0.700 0.012 90);    /* secondary text */
+    --border:    oklch(0.880 0.020 130 / 12%);
+    --ring:      oklch(0.485 0.060 125);   /* olive accent */
+    --destructive: oklch(0.704 0.191 22.216);
+    --radius: 10px;
+    --font: "Outfit", -apple-system, sans-serif;
+    --mono: "Geist Mono", monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:#0c0d0b; color:var(--fg); font-family:var(--font);
+    -webkit-font-smoothing:antialiased; padding:40px; line-height:1.4;
+  }
+  .page-head{max-width:1100px; margin:0 auto 32px;}
+  .page-head h1{font-size:22px; font-weight:600; letter-spacing:-0.02em;}
+  .page-head p{color:var(--muted-fg); font-size:14px; margin-top:6px;}
+  .swatches{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap;}
+  .sw{display:flex; align-items:center; gap:7px; font-size:11px; color:var(--muted-fg); font-family:var(--mono);}
+  .sw i{width:16px; height:16px; border-radius:4px; border:1px solid var(--border); display:inline-block;}
+
+  .section-title{max-width:1100px; margin:40px auto 18px; font-size:13px; font-weight:600;
+    text-transform:uppercase; letter-spacing:0.08em; color:var(--muted-fg);
+    border-bottom:1px solid var(--border); padding-bottom:10px;}
+
+  .grid{max-width:1100px; margin:0 auto; display:flex; flex-wrap:wrap; gap:28px; align-items:flex-start;}
+  .variant{display:flex; flex-direction:column; gap:10px;}
+  .variant .label{font-size:12px; color:var(--muted-fg); font-family:var(--mono);}
+  .variant .label b{color:var(--fg); font-weight:600; font-size:13px; font-family:var(--font); display:block; margin-bottom:2px;}
+
+  /* ===== the popover frame ===== */
+  .pop{width:340px; background:var(--bg); border:1px solid var(--border);
+    border-radius:16px; overflow:hidden;}
+  .pop.tall{min-height:460px; display:flex; flex-direction:column;}
+
+  /* header shared */
+  .hd{display:flex; align-items:center; gap:9px; padding:14px 16px;}
+  .hd .logo{width:26px; height:26px; border-radius:7px; background:var(--muted);
+    display:grid; place-items:center; overflow:hidden;}
+  .hd .logo svg{width:26px; height:26px;}
+  .hd .name{font-size:18px; font-weight:600; letter-spacing:-0.01em;}
+  .hd .dot{width:7px; height:7px; border-radius:50%; background:var(--ring);}
+  .hd .sp{flex:1;}
+  .hd .ico{color:var(--muted-fg); width:17px; height:17px;}
+
+  .sec-row{display:flex; align-items:center; justify-content:space-between; padding:4px 16px 10px;}
+  .sec-row .h{font-size:14px; font-weight:600;}
+  .sec-row .a{font-size:12px; color:var(--muted-fg); display:flex; align-items:center; gap:4px;}
+
+  /* memory rows */
+  .appicon{width:26px; height:26px; border-radius:6px; flex:none; display:grid; place-items:center; font-size:13px;}
+  .foot{padding:12px 16px; text-align:center; font-size:11px; color:var(--muted-fg); border-top:1px solid var(--border);}
+  .foot a{color:var(--fg); text-decoration:underline; text-underline-offset:2px;}
+
+  /* toggle + button primitives */
+  .btn{font-family:var(--font); font-size:12px; padding:5px 10px; border-radius:7px;
+    border:1px solid var(--border); background:transparent; color:var(--fg); cursor:pointer;}
+  .btn.solid{background:var(--ring); border-color:var(--ring); color:oklch(0.98 0.01 90);}
+  .tog{width:34px; height:20px; border-radius:11px; background:var(--muted); position:relative; flex:none;}
+  .tog.on{background:var(--ring);}
+  .tog::after{content:""; position:absolute; width:16px; height:16px; border-radius:50%; background:#fff; top:2px; left:2px;}
+  .tog.on::after{left:16px;}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>MaxMi — UI mockups</h1>
+  <p>devmafex.com palette: olive-greenish-black + warm neutral, Outfit type, borders not shadows, no gradients. Pick per-section: popover variant + settings variant.</p>
+  <div class="swatches">
+    <span class="sw"><i style="background:var(--bg)"></i>bg</span>
+    <span class="sw"><i style="background:var(--card)"></i>card</span>
+    <span class="sw"><i style="background:var(--muted)"></i>muted</span>
+    <span class="sw"><i style="background:var(--fg)"></i>text</span>
+    <span class="sw"><i style="background:var(--ring)"></i>olive accent</span>
+  </div>
+</div>
+
+<div class="section-title">Popover — pick one</div>
+<div class="grid" id="popovers"></div>
+
+<div class="section-title">Settings page — pick one</div>
+<div class="grid" id="settings"></div>
+
+<script>
+// ---- shared bits ----
+const dogLogo = `<svg viewBox="0 0 512 512"><path fill="currentColor" d="M231.6 16.18l16.7 120.02 73.8 20.5c37.3-11.2 78.5-18.2 102.3-43.6 9.7-10.3 17.2-24.78 9.1-37.92l-75.3 2.22-14.6-31.79h-74.7c-7.7-11.71-22.8-20.46-37.3-29.43zm5.7 145.22c-46.9 19.8-110.1 146.3-111.8 276.5-34.02-58.1-24.9-122.6-2.9-202.6C55.31 287 4.732 448.4 133.1 486.9H346s-6.3-21.5-14.1-28.9c-12.7-12-48.2-20.2-48.2-20.2 27.8-39.2 33.5-71.7 38.6-103.9 4.5 59.8 40.7 126.8 57.4 153h76.5s4.6-15.9.2-21.5c-10.9-13.8-51.3-11.9-51.3-11.9-31.1-107.2-46.3-260.2-90-273.2-21.7-6.5-54.3-14.1-77.8-18.9z"/></svg>`;
+
+// app icon colors (fake macOS app tiles)
+const apps = {
+  Chrome:{c:"#4285F4",t:"◑"}, Slack:{c:"#611f69",t:"#"}, Cursor:{c:"#000",t:"›_"},
+  Warp:{c:"#01a0c6",t:">"}, Discord:{c:"#5865F2",t:"◗"}, Zen:{c:"#f76f53",t:"z"},
+  Spotify:{c:"#1DB954",t:"♪"}, Notion:{c:"#000",t:"N"}, WhatsApp:{c:"#25D366",t:"◍"},
+};
+function icon(app){const a=apps[app]||{c:"#555",t:"●"}; return `<div class="appicon" style="background:${a.c};color:#fff">${a.t}</div>`;}
+
+const mem = [
+  ["Cursor","You're editing the MaxMi popover layout in RecentCapturesView.swift.","2m"],
+  ["Chrome","Reading the Minimi architecture teardown on how AX parsers work.","8m"],
+  ["Slack","Discussed the icon redesign with the design channel.","21m"],
+  ["Warp","Rebuilt and relaunched the MaxMi app bundle several times.","34m"],
+  ["Spotify","Listening to the 2026 album 'ICEMAN' by Drake.","1h"],
+];
+
+const header = (gear=true)=>`
+  <div class="hd">
+    <div class="logo">${dogLogo}</div>
+    <div class="name">MaxMi</div>
+    <div class="dot"></div>
+    <div class="sp"></div>
+    ${gear?`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`:""}
+  </div>`;
+
+const footer = `<div class="foot">made with ♥ by <a href="#">mafex</a></div>`;
+
+// ============ POPOVER VARIANTS ============
+const popovers = [
+  {
+    name:"A · Flat list", note:"Minimi-parity. Icon + summary, hairline dividers, no cards.",
+    html: header() +
+      `<div class="sec-row"><span class="h">Recent memories</span><span class="a">Record voice note ●</span></div>` +
+      `<div style="padding:0 8px 8px">` +
+      mem.map((m,i)=>`
+        <div style="display:flex;gap:10px;align-items:center;padding:9px 8px;${i?'border-top:1px solid var(--border)':''}">
+          ${icon(m[0])}
+          <div style="font-size:13px;line-height:1.35;flex:1">${m[1]}</div>
+        </div>`).join("") +
+      `</div>` + footer
+  },
+  {
+    name:"B · Timeline", note:"Each row shows app + time-ago as a meta line under the summary.",
+    html: header() +
+      `<div class="sec-row"><span class="h">Recent memories</span></div>` +
+      `<div style="padding:0 8px 8px">` +
+      mem.map((m,i)=>`
+        <div style="display:flex;gap:10px;padding:10px 8px;${i?'border-top:1px solid var(--border)':''}">
+          ${icon(m[0])}
+          <div style="flex:1">
+            <div style="font-size:13px;line-height:1.35">${m[1]}</div>
+            <div style="font-size:11px;color:var(--muted-fg);margin-top:3px;font-family:var(--mono)">${m[0]} · ${m[2]} ago</div>
+          </div>
+        </div>`).join("") +
+      `</div>` + footer
+  },
+  {
+    name:"C · Quiet cards", note:"Each memory a low-contrast card (bends the no-nested-cards rule slightly).",
+    html: header() +
+      `<div class="sec-row"><span class="h">Recent memories</span></div>` +
+      `<div style="padding:0 12px 10px;display:flex;flex-direction:column;gap:7px">` +
+      mem.map(m=>`
+        <div style="display:flex;gap:10px;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:10px">
+          ${icon(m[0])}
+          <div style="flex:1">
+            <div style="font-size:13px;line-height:1.35">${m[1]}</div>
+            <div style="font-size:11px;color:var(--muted-fg);margin-top:2px">${m[2]} ago</div>
+          </div>
+        </div>`).join("") +
+      `</div>` + footer
+  },
+  {
+    name:"D · Dense mono", note:"One line each, monospace meta, terminal-ish. Most info per pixel.",
+    html: header() +
+      `<div class="sec-row"><span class="h">Recent memories</span></div>` +
+      `<div style="padding:0 6px 10px">` +
+      mem.map((m,i)=>`
+        <div style="display:flex;gap:9px;align-items:center;padding:7px 10px;${i?'border-top:1px solid var(--border)':''}">
+          ${icon(m[0])}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m[1]}</div>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted-fg);font-family:var(--mono);flex:none">${m[2]}</div>
+        </div>`).join("") +
+      `</div>` + footer
+  },
+];
+
+// ============ SETTINGS VARIANTS ============
+const settingsHeader = `
+  <div class="hd" style="border-bottom:1px solid var(--border)">
+    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+    <div class="sp"></div>
+    <div class="name" style="font-size:15px">Settings</div>
+    <div class="sp"></div>
+    <div style="width:17px"></div>
+  </div>`;
+
+const settings = [
+  {
+    name:"1 · Flat sections", note:"Uppercase labels, plain rows with descriptions, hairline dividers. Matches portfolio flat style.",
+    html: settingsHeader + `<div style="padding:16px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted-fg);margin-bottom:12px">General</div>
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:16px">
+        <div style="flex:1">
+          <div style="font-size:14px">Open MaxMi when I log in</div>
+          <div style="font-size:12px;color:var(--muted-fg);margin-top:2px">Start capturing automatically after you sign in.</div>
+        </div><div class="tog on"></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:16px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted-fg);margin-bottom:12px">Activity Timeline</div>
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:6px">
+        <div style="flex:1">
+          <div style="font-size:14px">Build a timeline of my day</div>
+          <div style="font-size:12px;color:var(--muted-fg);margin-top:2px">Groups your activity into an hourly summary via Gemini. Off by default.</div>
+        </div><div class="tog"></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:16px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted-fg);margin-bottom:10px">Capture &amp; Privacy</div>
+      <div style="font-size:13px;margin-bottom:6px">Pause capture</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+        <span class="btn">15 min</span><span class="btn">1 hour</span><span class="btn">Until tomorrow</span><span class="btn">Indefinitely</span>
+      </div>
+      <div style="font-size:13px;margin-bottom:6px">Never capture these websites</div>
+      <div style="display:flex;gap:6px"><input style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:6px 9px;color:var(--fg);font-family:var(--font);font-size:12px" placeholder="example.com"><span class="btn">Block</span></div>
+    </div>`
+  },
+  {
+    name:"2 · Grouped rows", note:"macOS System-Settings style: inset grouped rows inside one rounded container per section.",
+    html: settingsHeader + `<div style="padding:16px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted-fg);margin:0 4px 8px">General</div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 14px">
+          <div style="flex:1"><div style="font-size:14px">Open at login</div></div><div class="tog on"></div>
+        </div>
+      </div>
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted-fg);margin:0 4px 8px">Activity Timeline</div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 14px">
+          <div style="flex:1"><div style="font-size:14px">Build a timeline of my day</div>
+          <div style="font-size:11.5px;color:var(--muted-fg);margin-top:2px">Uses Gemini · off by default</div></div><div class="tog"></div>
+        </div>
+      </div>
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted-fg);margin:0 4px 8px">Capture &amp; Privacy</div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border)">
+          <span style="font-size:14px">Capture</span><span class="btn">Pause ▾</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border)">
+          <span style="font-size:14px">Keep memories</span><span style="font-size:13px;color:var(--muted-fg)">Forever ▾</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px">
+          <span style="font-size:14px">Blocked websites</span><span style="font-size:13px;color:var(--muted-fg)">0 ›</span>
+        </div>
+      </div>
+    </div>`
+  },
+  {
+    name:"3 · Compact single-column", note:"Tighter, no section containers — just labels + controls, minimal chrome.",
+    html: settingsHeader + `<div style="padding:14px 16px;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:13px">Open at login</span><div class="tog on"></div></div>
+      <div style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:13px">Build a timeline of my day</span><div class="tog"></div></div>
+      <div style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:13px">Launch capture on startup</span><div class="tog on"></div></div>
+      <div style="border-top:1px solid var(--border);padding-top:14px;display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:13px">Pause capture</span><span class="btn">1 hour ▾</span></div>
+      <div style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:13px">Keep memories for</span><span class="btn">Forever ▾</span></div>
+      <div style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:13px">Blocked websites</span><span class="btn">Manage</span></div>
+      <div style="border-top:1px solid var(--border);padding-top:14px;display:flex;gap:8px">
+        <span class="btn">Export memory</span><span class="btn" style="color:var(--destructive);border-color:var(--destructive)">Delete all</span>
+      </div>
+    </div>`
+  },
+];
+
+function render(list, mount, tall){
+  const el=document.getElementById(mount);
+  list.forEach(v=>{
+    const wrap=document.createElement("div"); wrap.className="variant";
+    wrap.innerHTML=`<div class="label"><b>${v.name}</b>${v.note}</div><div class="pop ${tall?'tall':''}">${v.html}</div>`;
+    el.appendChild(wrap);
+  });
+}
+render(popovers,"popovers",true);
+render(settings,"settings",true);
+</script>
+</body>
+</html>

@@ -19,21 +19,17 @@ public struct SettingsView: View {
     public var body: some View {
         VStack(spacing: Theme.spacing0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: Theme.spacing2) {
-                    generalSection
-                    Divider()
-                        .background(Theme.divider)
-                    SetupView(viewModel: setupViewModel)
-                    Divider()
-                        .background(Theme.divider)
-                    activitySection
-                    Divider()
-                        .background(Theme.divider)
-                    CapturePrivacyView(viewModel: capturePrivacyViewModel)
-                    DataControlsView(viewModel: dataControlsViewModel)
-                    Divider()
-                        .background(Theme.divider)
-                    aboutSection
+                // Grouped-rows layout (variant 2): each section is an uppercase label above one
+                // rounded container; sub-views keep their own content but sit inside a group card.
+                VStack(alignment: .leading, spacing: Theme.spacing3) {
+                    settingsGroup("General") { generalSection }
+                    settingsGroup("Setup & Connections") { SetupView(viewModel: setupViewModel) }
+                    // Activity Timeline group hidden — the Timeline UI was removed, so its opt-in
+                    // toggle isn't surfaced. `activitySection` is kept for a possible return.
+                    // settingsGroup("Activity Timeline") { activitySection }
+                    settingsGroup("Capture & Privacy") { CapturePrivacyView(viewModel: capturePrivacyViewModel) }
+                    settingsGroup("Data Controls") { DataControlsView(viewModel: dataControlsViewModel) }
+                    settingsGroup("About") { aboutSection }
                 }
                 .padding(Theme.spacing2)
             }
@@ -43,10 +39,29 @@ public struct SettingsView: View {
         .preferredColorScheme(.dark)
     }
 
+    /// Grouped-rows section: an uppercase label above one rounded, bordered container (devmafex
+    /// "grouped rows" style). The section titles that used to live inside each sub-view are now
+    /// provided here, so the sub-views should render only their controls.
+    @ViewBuilder
+    private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: Theme.spacing1) {
+            Text(title).sectionTitle().padding(.horizontal, Theme.spacingHalf)
+            VStack(alignment: .leading, spacing: Theme.spacing2) {
+                content()
+            }
+            .padding(Theme.spacing2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cornerRadiusLarge, style: .continuous)
+                    .stroke(Theme.divider, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadiusLarge, style: .continuous))
+        }
+    }
+
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("General").sectionTitle()
-
             Toggle(isOn: Binding(
                 get: { viewModel.launchAtLoginStatus == .enabled },
                 set: { newValue in Task { await viewModel.setLaunchAtLogin(newValue) } }
@@ -87,8 +102,6 @@ public struct SettingsView: View {
 
     private var activitySection: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("Activity Timeline").sectionTitle()
-
             Toggle(isOn: $viewModel.activityEnabled) {
                 settingLabel(
                     icon: "chart.bar",
@@ -157,8 +170,6 @@ public struct SettingsView: View {
 
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("About").sectionTitle()
-
             HStack(spacing: Theme.spacing2) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
                     .resizable()

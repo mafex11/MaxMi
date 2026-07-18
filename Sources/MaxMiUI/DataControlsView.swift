@@ -7,7 +7,6 @@ public struct DataControlsView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacing2) {
-            Text("Data Controls").sectionTitle()
             Text("Exports contain decrypted plaintext. Retention cleanup and deletion create a private SQLite backup before changing memory.")
                 .font(.caption).foregroundColor(Theme.secondaryText)
             FlowLayout(spacing: Theme.spacing1) {

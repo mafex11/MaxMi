@@ -1404,8 +1404,11 @@ final class AppWiring {
             return
         }
 
-        // Build AppInfo with authoritative AXReader title
-        let appInfo = AppInfo(bundleID: app.bundleID, name: app.name, windowTitle: title ?? app.windowTitle)
+        // Build AppInfo with authoritative AXReader title + stable focused-window id (used by the
+        // terminal parser to separate windows into distinct threads when there's no cwd to key on).
+        let appInfo = AppInfo(bundleID: app.bundleID, name: app.name,
+                              windowTitle: title ?? app.windowTitle,
+                              windowID: AXReader.focusedWindowID(pid: pid))
 
         do {
             let parsed: ParsedCapture?

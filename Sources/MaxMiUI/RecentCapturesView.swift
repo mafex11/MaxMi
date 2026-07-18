@@ -58,26 +58,21 @@ public struct RecentCapturesView: View {
             if index > 0 {
                 Divider().overlay(Theme.divider).padding(.leading, Theme.spacing2)
             }
-            HStack(alignment: .center, spacing: Theme.spacing1) {
-                // Minimi-style row: real app icon + summary only.
+            HStack(alignment: .top, spacing: Theme.spacing1) {
+                // Timeline row (variant B): app icon + summary + "app · time ago" meta line.
                 appIcon(for: row)
 
-                VStack(alignment: .leading, spacing: Theme.spacingHalf) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(row.summary)
                         .font(.system(size: 13))
                         .foregroundColor(Theme.text)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                    // Metadata line (app · title · time), detail line (kind · count · parser), and
-                    // per-capture cloud controls are hidden to match Minimi's minimal dashboard.
-                    // Kept for easy restore.
-                    //
-                    // HStack(spacing: Theme.spacingHalf) {
-                    //     Text(row.appLabel); Text("·"); Text(row.sourceTitle).lineLimit(1)
-                    //     Text("·"); Text(row.timeAgo)
-                    // }
-                    // .font(.caption).foregroundColor(Theme.secondaryText)
-                    // Text(row.detail).font(.caption2).foregroundColor(Theme.tertiaryText).lineLimit(1)
+                    Text("\(row.appLabel) · \(row.timeAgo)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Theme.tertiaryText)
+                        .lineLimit(1)
+                    // Per-capture cloud controls hidden (Minimi-style). Kept for easy restore.
                     if Self.showsCloudControls {
                         cloudControls(row)
                     }

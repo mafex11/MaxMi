@@ -1,21 +1,22 @@
 import SwiftUI
 
 public enum Theme {
-    // MARK: - Colors (always dark, branded — matched to Minimi's popover palette)
-    // Sampled from Minimi 1.0.x: bg #242525, card #2f2f2f, muted-green CTA #41503b,
-    // white primary text, ~#6d6d6d secondary.
-    public static let background = Color(red: 0.141, green: 0.145, blue: 0.145)   // #242525
-    public static let surface = Color(red: 0.184, green: 0.184, blue: 0.184)      // #2f2f2f
-    public static let text = Color.white
-    public static let secondaryText = Color(red: 0.427, green: 0.427, blue: 0.427) // #6d6d6d
-    public static let tertiaryText = Color.white.opacity(0.45)
-    public static let accent = Color(red: 0.255, green: 0.314, blue: 0.231)        // #41503b muted green
-    public static let accentText = Color.white
-    public static let success = Color(red: 0.259, green: 0.384, blue: 0.208)       // #426235 status dot
-    public static let destructive = Color.red
+    // MARK: - Colors (devmafex.com palette — olive-greenish-black + warm neutral)
+    // Converted from the portfolio's OKLCH tokens (DESIGN.md / globals.css, .dark mode) to sRGB.
+    // bg oklch(0.185 0.021 130), card 0.225, muted 0.295, text 0.920, olive accent 0.485 0.060 125.
+    public static let background = Color(red: 0.061, green: 0.0808, blue: 0.0416)  // olive-greenish-black
+    public static let surface = Color(red: 0.096, green: 0.1168, blue: 0.0761)     // card
+    public static let text = Color(red: 0.9079, green: 0.8955, blue: 0.8618)       // warm-neutral
+    public static let secondaryText = Color(red: 0.632, green: 0.6204, blue: 0.5889) // muted-foreground
+    public static let tertiaryText = Color(red: 0.632, green: 0.6204, blue: 0.5889).opacity(0.7)
+    public static let accent = Color(red: 0.3417, green: 0.3966, blue: 0.2472)     // olive ring
+    public static let accentText = Color(red: 0.9079, green: 0.8955, blue: 0.8618)
+    public static let success = Color(red: 0.3417, green: 0.3966, blue: 0.2472)    // olive (status dot)
+    public static let destructive = Color(red: 1.0, green: 0.3912, blue: 0.4039)   // warm red
     public static let warning = Color.orange
-    public static let divider = Color.white.opacity(0.08)
-    public static let badgeBackground = Color.white.opacity(0.08)
+    public static let muted = Color(red: 0.161, green: 0.1835, blue: 0.1403)       // subtle fills
+    public static let divider = Color(red: 0.88, green: 0.9, blue: 0.86).opacity(0.12)
+    public static let badgeBackground = Color(red: 0.161, green: 0.1835, blue: 0.1403)
 
     // MARK: - Spacing (8pt grid)
     public static let spacing0: CGFloat = 0
