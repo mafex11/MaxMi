@@ -177,7 +177,10 @@ final class CapturedContentTests: XCTestCase {
 
         let calendar = CapturedContent.calendar([
             CalendarEvent(title: "Daily Sync", dateString: "Mon 09:00", start: nil, end: nil,
-                          organizer: "Ana", location: "Room 2", hasConference: true),
+                          organizer: "Ana", location: "Room 2", hasConference: true,
+                          notes: "agenda line one\nagenda line two"),
+            CalendarEvent(title: "Solo block", dateString: "Mon 11:00", start: nil, end: nil,
+                          organizer: nil, location: nil, hasConference: false, notes: nil),
         ])
         XCTAssertEqual(try roundTrip(calendar), calendar)
 
@@ -442,9 +445,11 @@ public struct CalendarEvent: Codable, Sendable, Equatable {
     public let organizer: String?
     public let location: String?
     public let hasConference: Bool
+    /// The event's detail/notes body, as the app exposes it.
+    public let notes: String?
 
     public init(title: String, dateString: String, start: Date?, end: Date?,
-                organizer: String?, location: String?, hasConference: Bool) {
+                organizer: String?, location: String?, hasConference: Bool, notes: String?) {
         self.title = title
         self.dateString = dateString
         self.start = start
@@ -452,6 +457,7 @@ public struct CalendarEvent: Codable, Sendable, Equatable {
         self.organizer = organizer
         self.location = location
         self.hasConference = hasConference
+        self.notes = notes
     }
 }
 
@@ -664,14 +670,25 @@ final class ContentRendererTests: XCTestCase {
     func testCalendarGolden() {
         let content = CapturedContent.calendar([
             CalendarEvent(title: "Daily Sync", dateString: "Mon 09:00", start: nil, end: nil,
-                          organizer: "Ana", location: "Room 2", hasConference: true),
+                          organizer: "Ana", location: "Room 2", hasConference: true,
+                          notes: "Bring the metrics"),
             CalendarEvent(title: "Solo block", dateString: "Mon 11:00", start: nil, end: nil,
-                          organizer: nil, location: nil, hasConference: false),
+                          organizer: nil, location: nil, hasConference: false, notes: nil),
         ])
         XCTAssertEqual(full(content), """
         Mon 09:00 — Daily Sync @Room 2 / Ana [conference]
+        Details: Bring the metrics
         Mon 11:00 — Solo block
         """)
+    }
+
+    func testCalendarNotesKeepFurtherLinesIndented() {
+        let content = CapturedContent.calendar([
+            CalendarEvent(title: "Review", dateString: "Tue 14:00", start: nil, end: nil,
+                          organizer: nil, location: nil, hasConference: false,
+                          notes: "line one\nline two"),
+        ])
+        XCTAssertEqual(full(content), "Tue 14:00 — Review\nDetails: line one\n  line two")
     }
 
     func testTerminalGolden() {
@@ -907,6 +924,11 @@ public enum ContentRenderer {
         if let location = event.location, !location.isEmpty { line += " @\(location)" }
         if let organizer = event.organizer, !organizer.isEmpty { line += " / \(organizer)" }
         if event.hasConference { line += " [conference]" }
+        if let notes = event.notes, !notes.isEmpty {
+            let lines = notes.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            line += "\nDetails: \(lines.first ?? "")"
+            for extra in lines.dropFirst() { line += "\n  " + extra }
+        }
         return line
     }
 
@@ -974,7 +996,7 @@ public enum ContentRenderer {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter ContentRendererTests`
-Expected: PASS, 17 tests.
+Expected: PASS, 18 tests.
 
 Then confirm nothing regressed in the string accumulator whose `bound` you just re-scoped:
 
@@ -3285,7 +3307,7 @@ final class StructuredAccumulatorTests: XCTestCase {
 
         let calendarPrevious = CapturedContent.calendar([
             CalendarEvent(title: "Sync", dateString: "Mon 09:00", start: nil, end: nil,
-                          organizer: nil, location: nil, hasConference: false),
+                          organizer: nil, location: nil, hasConference: false, notes: nil),
         ])
         XCTAssertEqual(merge(calendarPrevious, calendarPrevious).content, calendarPrevious)
     }
@@ -4994,7 +5016,7 @@ git commit -m "Map Mail records onto typed conversation messages"
 - Consumes: `StructuredEntityExtraction.preferredDetailRoot`, `orderedFields`, `firstValue`, `remainingValues`, `looksLikeDateOrTime`, `shortHash` (all unchanged); `CalendarEvent`, `TaskItem`, `TaskStatus`.
 - Produces: `StructuredEntityExtraction.calendarContent(window:app:sourceApp:) -> (content: CapturedContent, sourceKey: String, sourceTitle: String)?` and `taskContent(window:app:sourceApp:) -> (content: CapturedContent, sourceKey: String, sourceTitle: String)?`, plus `parseStructured` on all seven parsers. `sourceKey` and `contentKind` are unchanged from v1, so no thread identity moves.
 
-**One documented loss.** The v1 calendar rendering carried a `Details:` block of leftover field text. `CalendarEvent` (§4a, architect-final) has no notes field, so those leftovers are dropped for calendar captions; the event's title, date, location, organizer, and conference flag all survive. `TaskItem.notes` keeps the task equivalent, so nothing is lost on the task side. Phase D's anchored Calendar parser restores the detail body.
+**Nothing is dropped.** The v1 rendering's `Details:` block of leftover field text maps onto `CalendarEvent.notes`, rendered as a `Details: …` line (§4b); `TaskItem.notes` carries the task equivalent. Title, date, location, organizer, and the conference flag all survive too.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5024,6 +5046,8 @@ final class StructuredEntityTypedTests: XCTestCase {
         XCTAssertEqual(events[0].dateString, "Tuesday, 3:00 PM")
         XCTAssertEqual(events[0].location, "Studio room")
         XCTAssertEqual(events[0].organizer, "Work", "the calendar/account name lands in organizer")
+        XCTAssertEqual(events[0].notes, "Review the interaction flow.",
+                       "the leftover detail text becomes CalendarEvent.notes")
         XCTAssertFalse(events[0].hasConference)
         XCTAssertNil(events[0].start)
         XCTAssertNil(events[0].end)
@@ -5038,7 +5062,10 @@ final class StructuredEntityTypedTests: XCTestCase {
         XCTAssertEqual(capture.contentKind, .calendar)
         XCTAssertEqual(capture.accumulationPolicy, .replace)
         XCTAssertEqual(capture.parserVersion, 2)
-        XCTAssertEqual(capture.content, "Tuesday, 3:00 PM — Design review @Studio room / Work")
+        XCTAssertEqual(capture.content, """
+        Tuesday, 3:00 PM — Design review @Studio room / Work
+        Details: Review the interaction flow.
+        """)
         XCTAssertEqual(capture.content, ContentRenderer.render(
             try XCTUnwrap(capture.structured), style: .full))
     }
@@ -5198,13 +5225,19 @@ Then replace `StructuredEntityExtraction.calendar` and `.task` with a typed core
             return value.contains("zoom.us") || value.contains("meet.google.com")
                 || value.contains("teams.microsoft.com") || value.contains("join with")
         }
+        // Everything the four named fields did not claim becomes the detail body, exactly as
+        // the v1 `Details:` block did.
+        let details = remainingValues(
+            fields, excluding: [title, when, location, organizer].compactMap { $0 }
+        )
         let event = CalendarEvent(
             title: title,
             dateString: when ?? "",
             start: nil, end: nil,
             organizer: organizer,
             location: location,
-            hasConference: hasConference
+            hasConference: hasConference,
+            notes: details.isEmpty ? nil : details.joined(separator: "\n")
         )
         let identity = [title, when ?? "", organizer ?? ""].joined(separator: "|")
         return Extracted(content: .calendar([event]),
@@ -5282,8 +5315,8 @@ Then replace `StructuredEntityExtraction.calendar` and `.task` with a typed core
 
 Update the existing assertions in `Tests/MaxMiCaptureTests/StructuredNativeParserTests.swift`:
 
-- `:20-23` — replace the four `Event:`/`When:`/`Location:`/`Calendar:` checks with
-  `XCTAssertEqual(capture.content, "Tuesday, 3:00 PM — Design review @Studio room / Work")`.
+- `:20-23` — replace the four `Event:`/`When:`/`Location:`/`Calendar:` checks with an exact
+  equality against `"Tuesday, 3:00 PM — Design review @Studio room / Work\nDetails: Review the interaction flow."`.
 - `:45-47` — replace the three `Status:`/`List:`/`Due:` checks with
   `XCTAssertEqual(capture.content, "- [ ] Submit project notes (due Tomorrow, 5:00 PM) [Work]")`.
 - `:65` — `contains("Status: completed")` becomes `hasPrefix("- [x] ")`.
@@ -6523,6 +6556,7 @@ Run against the spec with fresh eyes after the plan was complete.
 | §4b | `RenderStyle`, `ContentRenderer.render`, all six `.full` rules, block rules | 2 |
 | §4b | `(From: You)(sent …)`, `(draft)`, `[user]` never rendered, multi-line indent | 2 |
 | §4b | `.compact` = head/tail policy; `.mainOnly` = main + dialog | 2 |
+| §4a/§4b | `CalendarEvent.notes` and its `Details: …` render line | 1, 2, 13 |
 | §4b/§10 | `render(LegacyContentAdapter.adapt(s), .full) == s` byte-for-byte | 3 |
 | §4c | `v10` adds two nullable `TEXT` columns; `currentIdentifier = "v10"`; no backfill | 8 |
 | §4c | `LegacyContentAdapter.adapt(renderedContent:kind:)` | 3 |
@@ -6562,7 +6596,7 @@ Run against the spec with fresh eyes after the plan was complete.
 - §11 criterion 4 (`capture_events`), criterion 5 (typing), criterion 7 (hourly agent), and criterion 8 (`AXQuery`) belong to Phases B, C and D and are correctly absent. Criterion 6's "capture summaries name the user's action" is Phase C; Phase A only supplies the delta it needs, which Task 9 produces under the exact names §5a specifies.
 - §5a's `CaptureDelta` is defined and computed **here** rather than in Phase B, because §4d's `StructuredAccumulationResult` and `CommitResult.committed` both carry it and §5a itself says it is "computed inside `CaptureAccumulator.merge` (§4d), never recomputed elsewhere". Phase B consumes `Sources/MaxMiCore/CaptureDelta.swift` unchanged.
 
-Three consequences of following the spec exactly are recorded so they are not mistaken for oversights: the `.document`/`.generic` replace-instead-of-accumulate change (Global Constraints), the loss of the calendar `Details:` block because `CalendarEvent` has no notes field (Task 13), and Outlook/Spark going generic-v2 rather than `.conversation` because they expose no sender or date (Task 12).
+Two consequences of following the spec exactly are recorded so they are not mistaken for oversights: the `.document`/`.generic` replace-instead-of-accumulate change (Global Constraints), and Outlook/Spark going generic-v2 rather than `.conversation` because they expose no sender or date (Task 12).
 
 ### 2. Placeholder scan
 

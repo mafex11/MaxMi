@@ -157,6 +157,7 @@ public struct CalendarEvent: Codable, Sendable, Equatable {
     public let organizer: String?
     public let location: String?
     public let hasConference: Bool
+    public let notes: String?          // the event's detail/notes body
 }
 
 public struct TerminalSegment: Codable, Sendable, Equatable {
@@ -237,7 +238,7 @@ Rules, exhaustively:
 | `.document` | `"# \(title)"`, blank line, then blocks. |
 | `.conversation` | One line per message, matching Minimi's observed wire shape: `"(From: \(sender))(sent \(timeString)): \(text)"`. **`isUser` renders the sender as `"You"`, not `"[user]"`** — `[user]` is the internal `Authorship` marker only and never appears in rendered text. The `(sent …)` clause is omitted when `timeString` is nil; when `timeString` is nil but `timestamp` is set, format it as `"MMM d, HH:mm zzz"` in the local timezone. `isDraft` appends `" (draft)"` to the sender: `"(From: You (draft)): …"`. Multi-line `text` keeps its newlines, indented two spaces after the first line. |
 | `.tasks` | One line per item: `"- [x] "` when `.completed`, `"- [ ] "` when `.open`, `"- "` when `.unknown`; then `title`; then ` (due \(dueString))`, ` [\(project)]`, ` #tag` for each tag, and `notes` indented two spaces on following lines. |
-| `.calendar` | One line per event: `"\(dateString) — \(title)"`, then ` @\(location)`, ` / \(organizer)`, ` [conference]` when `hasConference`. |
+| `.calendar` | One line per event: `"\(dateString) — \(title)"`, then ` @\(location)`, ` / \(organizer)`, ` [conference]` when `hasConference`; then, when `notes` is non-nil and non-empty, a following line `"Details: \(notes)"` with any further notes lines indented two spaces. |
 | `.terminal` | Per segment: `"$ \(command)"` when `command != nil`, then the output verbatim, then `"… (running)"` when `isRunning`. Segments separated by a blank line. |
 | `.generic` | Regions in a fixed order: `.main`, `.dialog`, then `.sidebar`, `.navigation`, `.toolbar`, `.banner`, `.footer`, `.unknown` — each non-main region preceded by a header line `"## Sidebar"`, `"## Dialog"`, `"## Navigation"`, `"## Toolbar"`, `"## Banner"`, `"## Footer"`, `"## Other"`. `.main` gets no header. `url` renders as a first line `"URL: \(url)"` when present. |
 
