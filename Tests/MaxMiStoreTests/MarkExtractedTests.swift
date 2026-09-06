@@ -15,7 +15,7 @@ final class MarkExtractedTests: XCTestCase {
     }
     @discardableResult
     func commit(_ content: String, at: EpochMs, url: String = "https://e.com/p") throws -> (vid: String, hash: String) {
-        guard case .committed(let v, let h) = try store.commitCapture(
+        guard case .committed(let v, let h, _) = try store.commitCapture(
             CaptureInput(sourceApp: "Web", sourceKey: url, sourceTitle: nil, content: content), nowMs: at)
         else { fatalError("dedup unexpected") }
         return (v, h)

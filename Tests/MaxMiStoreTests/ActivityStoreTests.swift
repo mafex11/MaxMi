@@ -41,7 +41,7 @@ final class ActivityStoreTests: XCTestCase {
             nowMs: t0
         )
         try store.bootstrapCloudProcessingReview(nowMs: t0 + 1)
-        guard case .committed(let versionID, _) = try store.commitCapture(
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
             CaptureInput(sourceApp: "Slack", sourceKey: "new", sourceTitle: "New", content: "new source"),
             nowMs: t0 + 2
         ) else { return XCTFail("expected commit") }

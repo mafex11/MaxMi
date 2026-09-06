@@ -1571,7 +1571,7 @@ final class AppWiring {
             let cloudAllowed = (try? store.cloudProcessingState(for: parsed.sourceApp)) == .allowed
             if cloudAllowed && MaxMiCore.shouldRecordActivity(captureGeneration: captureGeneration, currentGeneration: focusGeneration, eligible: eligible) {
                 // Only record activity for .committed captures (not deduplicated)
-                if case .committed(let versionID, _) = result {
+                if case .committed(let versionID, _, _) = result {
                     do {
                         _ = try store.recordActivityCapture(
                             appBundle: appInfo.bundleID,
@@ -1589,7 +1589,7 @@ final class AppWiring {
             }
 
             switch result {
-            case .committed(let versionID, _):
+            case .committed(let versionID, _, _):
                 captureCount += 1
                 menuBar.captureCount = captureCount
                 lastSourceKey = cleanKey
