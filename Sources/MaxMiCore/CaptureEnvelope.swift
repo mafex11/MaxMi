@@ -266,9 +266,10 @@ public enum CaptureAccumulator {
         return Double(shared) / Double(min(left.count, right.count))
     }
 
-    private static func bound(_ content: String, to limit: Int) -> String {
+    /// Retain the identity-bearing beginning and the more recent tail. Internal (not private)
+    /// because `ContentRenderer.render(_, .compact:)` is defined as exactly this policy.
+    static func bound(_ content: String, to limit: Int) -> String {
         guard content.count > limit else { return content }
-        // Retain the identity-bearing beginning and the more recent tail.
         let headCount = limit / 3
         let tailCount = limit - headCount - 3
         return String(content.prefix(headCount)) + "\n…\n" + String(content.suffix(tailCount))
