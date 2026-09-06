@@ -22,22 +22,30 @@ public struct AXNode: Codable, Sendable {
     public let selectedText: String?
     /// "AXHidden".
     public let hidden: Bool
+    /// "AXDOMClassList", read only under an AXWebArea ancestor (or when forced by a
+    /// ParserConfig.attributeSet). Web/Electron trees only — nil everywhere else.
+    public let domClassList: [String]?
+    /// "AXDOMIdentifier", same gate as domClassList.
+    public let domIdentifier: String?
 
     public init(role: String, value: String?, title: String?, url: String?,
                 frame: CGRect?, focused: Bool, children: [AXNode],
                 identifier: String? = nil, label: String? = nil,
                 subrole: String? = nil, headingLevel: Int? = nil, selected: Bool = false,
-                placeholder: String? = nil, selectedText: String? = nil, hidden: Bool = false) {
+                placeholder: String? = nil, selectedText: String? = nil, hidden: Bool = false,
+                domClassList: [String]? = nil, domIdentifier: String? = nil) {
         self.role = role; self.value = value; self.title = title
         self.url = url; self.frame = frame; self.focused = focused; self.children = children
         self.identifier = identifier; self.label = label
         self.subrole = subrole; self.headingLevel = headingLevel; self.selected = selected
         self.placeholder = placeholder; self.selectedText = selectedText; self.hidden = hidden
+        self.domClassList = domClassList; self.domIdentifier = domIdentifier
     }
 
     private enum CodingKeys: String, CodingKey {
         case role, value, title, url, frame, focused, children, identifier, label
         case subrole, headingLevel, selected, placeholder, selectedText, hidden
+        case domClassList, domIdentifier
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +65,8 @@ public struct AXNode: Codable, Sendable {
         placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
         selectedText = try container.decodeIfPresent(String.self, forKey: .selectedText)
         hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        domClassList = try container.decodeIfPresent([String].self, forKey: .domClassList)
+        domIdentifier = try container.decodeIfPresent(String.self, forKey: .domIdentifier)
 
         if let frameDict = try? container.decode([String: CGFloat].self, forKey: .frame) {
             let x = frameDict["x"] ?? 0
@@ -85,6 +95,8 @@ public struct AXNode: Codable, Sendable {
         try container.encodeIfPresent(placeholder, forKey: .placeholder)
         try container.encodeIfPresent(selectedText, forKey: .selectedText)
         try container.encode(hidden, forKey: .hidden)
+        try container.encodeIfPresent(domClassList, forKey: .domClassList)
+        try container.encodeIfPresent(domIdentifier, forKey: .domIdentifier)
 
         if let frame = frame {
             let frameDict: [String: CGFloat] = [
