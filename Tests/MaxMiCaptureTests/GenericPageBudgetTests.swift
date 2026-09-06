@@ -191,4 +191,102 @@ final class GenericPageBudgetTests: XCTestCase {
         ])
         XCTAssertNil(extract([menu, text("body", y: 500)]).page.focused)
     }
+
+    // MARK: - Viewport-anchored trimming
+
+    private func paragraph(_ text: String) -> Block { Block(type: .paragraph, text: text) }
+
+    func testAnchorTextIsTheFocusedFieldValue() {
+        let focused = FocusedElement(role: "AXTextArea", identifier: "body",
+                                    value: "  the paragraph I am editing  ",
+                                    selectedText: nil, isSecure: false)
+        XCTAssertEqual(GenericPageExtractor.anchorText(focused), "the paragraph I am editing")
+    }
+
+    func testAnchorTextRefusesSecureBlankAndTinyValues() {
+        XCTAssertNil(GenericPageExtractor.anchorText(nil))
+        XCTAssertNil(GenericPageExtractor.anchorText(FocusedElement(
+            role: "AXTextField", identifier: nil, value: "secret", selectedText: nil,
+            isSecure: true)))
+        XCTAssertNil(GenericPageExtractor.anchorText(FocusedElement(
+            role: "AXTextArea", identifier: nil, value: "   ", selectedText: nil,
+            isSecure: false)))
+        XCTAssertNil(GenericPageExtractor.anchorText(FocusedElement(
+            role: "AXTextArea", identifier: nil, value: "x", selectedText: nil, isSecure: false)))
+    }
+
+    func testAnchorIndexPrefersAnExactTrimmedMatchThenContainment() {
+        let blocks = [paragraph("intro"), paragraph("the target line"),
+                      paragraph("wrapping the target line inside more text")]
+        XCTAssertEqual(GenericPageExtractor.anchorIndex(in: blocks, text: "the target line"), 1)
+        XCTAssertEqual(GenericPageExtractor.anchorIndex(in: blocks, text: "wrapping the target"), 2)
+        XCTAssertNil(GenericPageExtractor.anchorIndex(in: blocks, text: "absent"))
+        XCTAssertNil(GenericPageExtractor.anchorIndex(in: blocks, text: nil))
+    }
+
+    func testTrimAnchoredWithoutAnAnchorIsExactlyTheOldTopOfPageBehaviour() {
+        let blocks = (0..<10).map { paragraph("line \($0)") }
+        let anchored = GenericPageExtractor.trimAnchored(blocks, to: 30, anchorIndex: nil)
+        let plain = GenericPageExtractor.trim(blocks, to: 30)
+        XCTAssertEqual(anchored.blocks.map(\.text), plain.blocks.map(\.text))
+        XCTAssertEqual(anchored.truncated, plain.truncated)
+    }
+
+    func testTrimAnchoredKeepsTheWindowAroundTheAnchor() {
+        let blocks = (0..<20).map { paragraph("line \($0)") }
+        // "line 10" costs 7 + 1 separator; the allowance fits the anchor plus four neighbours.
+        let result = GenericPageExtractor.trimAnchored(blocks, to: 8 * 5, anchorIndex: 10)
+        XCTAssertTrue(result.truncated)
+        XCTAssertTrue(result.blocks.contains { $0.text == "line 10" })
+        XCTAssertFalse(result.blocks.contains { $0.text == "line 0" })
+        // Page order is preserved, and the kept blocks are contiguous.
+        let indexes = result.blocks.map { Int($0.text.dropFirst("line ".count))! }
+        XCTAssertEqual(indexes, Array(indexes.min()!...indexes.max()!))
+        // Forward-first expansion: the anchor's continuation matters more than its preamble.
+        XCTAssertTrue(result.blocks.contains { $0.text == "line 11" })
+    }
+
+    func testTrimAnchoredAlwaysKeepsTheAnchorEvenWhenItAloneExceedsTheAllowance() {
+        let blocks = [paragraph("short"), paragraph(String(repeating: "L", count: 500))]
+        let result = GenericPageExtractor.trimAnchored(blocks, to: 10, anchorIndex: 1)
+        XCTAssertEqual(result.blocks.count, 1)
+        XCTAssertEqual(result.blocks[0].text.count, 500)
+        XCTAssertTrue(result.truncated)
+    }
+
+    func testTrimAnchoredWithAnOutOfRangeAnchorFallsBackToTopOfPage() {
+        let blocks = (0..<5).map { paragraph("line \($0)") }
+        let result = GenericPageExtractor.trimAnchored(blocks, to: 20, anchorIndex: 99)
+        XCTAssertEqual(result.blocks.first?.text, "line 0")
+    }
+
+    /// End to end: an over-budget document whose focused field sits near the bottom keeps the
+    /// bottom, not the top.
+    func testOverBudgetDocumentKeepsWhatTheUserIsLookingAt() {
+        var children: [AXNode] = (0..<40).map { index in
+            text(String(repeating: "body ", count: 20) + "\(index)", y: 320 + CGFloat(index) * 18)
+        }
+        children.append(node("AXTextArea", value: "the line I am editing", identifier: "body",
+                             frame: CGRect(x: 520, y: 320 + 40 * 18, width: 400, height: 18),
+                             focused: true))
+        var options = GenericPageExtractor.Options()
+        options.totalBudget = 900
+        let result = extract(children, options: options)
+        let texts = blocks(result, .main).map(\.text)
+        XCTAssertTrue(result.truncated)
+        XCTAssertTrue(texts.contains("the line I am editing"), "\(texts)")
+        XCTAssertFalse(texts.contains { $0.hasSuffix(" 0") }, "the top of the page was dropped")
+    }
+
+    /// No focused field means no anchor, so an over-budget page still keeps its top — the Phase A
+    /// contract every other budget test in this file asserts.
+    func testOverBudgetDocumentWithoutAFocusedFieldStillKeepsTheTop() {
+        let children: [AXNode] = (0..<40).map { index in
+            text(String(repeating: "body ", count: 20) + "\(index)", y: 320 + CGFloat(index) * 18)
+        }
+        var options = GenericPageExtractor.Options()
+        options.totalBudget = 900
+        let texts = blocks(extract(children, options: options), .main).map(\.text)
+        XCTAssertTrue(texts.first?.hasSuffix(" 0") == true, "\(texts.prefix(1))")
+    }
 }

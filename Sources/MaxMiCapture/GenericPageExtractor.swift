@@ -89,13 +89,13 @@ public enum GenericPageExtractor {
         var order = 0
         walk(window, window: window, claimIndex: 0, parentIsSplitGroup: false,
              listDepth: 0, options: options, order: &order, claims: &claims)
-        let budgeted = applyBudgets(assemble(claims), options: options)
+        // Resolved BEFORE budgeting: what the user is looking at decides which part of an
+        // over-budget page survives (spec 4e final-review amendment).
+        let focused = resolveFocusedElement(in: window, fallback: focusedElement)
+        let budgeted = applyBudgets(assemble(claims), anchorText: anchorText(focused),
+                                    options: options)
         return Result(
-            page: GenericPage(
-                regions: budgeted.regions,
-                focused: resolveFocusedElement(in: window, fallback: focusedElement),
-                url: url
-            ),
+            page: GenericPage(regions: budgeted.regions, focused: focused, url: url),
             truncated: budgeted.truncated
         )
     }
@@ -326,5 +326,15 @@ public enum GenericPageExtractor {
             selectedText: node.selectedText,
             isSecure: isSecure
         )
+    }
+
+    /// The focused field's value, when it is usable as a trim anchor. A secure field has no value
+    /// at all; a blank or single-character value would match almost any block and would anchor
+    /// the window somewhere arbitrary.
+    static func anchorText(_ focused: FocusedElement?) -> String? {
+        guard let focused, !focused.isSecure,
+              let value = focused.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.count >= 2 else { return nil }
+        return value
     }
 }
