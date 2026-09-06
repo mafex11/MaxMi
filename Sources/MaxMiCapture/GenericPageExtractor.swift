@@ -246,8 +246,11 @@ public enum GenericPageExtractor {
         orderedDescendantText(node, roles: ["AXStaticText", "AXHeading"]).joined(separator: " ")
     }
 
+    /// `AXTextField`/`AXTextArea` are collected because Finder's name column is an editable
+    /// field, not static text — without them a file row loses its file name. `AXImage` is not:
+    /// an icon's description is chrome, and would print as a cell of its own.
     static func rowCells(_ node: AXNode) -> [String] {
-        orderedDescendantText(node, roles: ["AXCell", "AXStaticText"])
+        orderedDescendantText(node, roles: ["AXCell", "AXStaticText", "AXTextField", "AXTextArea"])
     }
 
     /// Descendant text in visual (y, x) order, adjacent duplicates dropped. A matching node
@@ -261,6 +264,9 @@ public enum GenericPageExtractor {
         var order = 0
         func visit(_ current: AXNode) {
             if menuRoles.contains(current.role) || current.hidden { return }
+            // A cell is not a loophole around the secure-field rule: the value is never read here
+            // either, and the subtree is not descended into.
+            if current.subrole == secureSubrole { return }
             if roles.contains(current.role) {
                 let text = readableText(current)
                 if !text.isEmpty {

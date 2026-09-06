@@ -188,6 +188,8 @@ final class GenericPageRegionTests: XCTestCase {
             .tableRow(cells: ["Name", "Size"], selected: false),
             .tableRow(cells: ["Report.pdf", "12 KB"], selected: true),
             .tableRow(cells: ["Notes.txt", "4 KB"], selected: false),
+            // Finder exposes the name cell of a row being renamed as an editable text field.
+            .tableRow(cells: ["Renamed.pdf", "12 KB"], selected: false),
         ])
         XCTAssertEqual(blocks(result.page.regions, .toolbar).map(\.text), ["Uploading 34 items"])
     }
@@ -200,12 +202,30 @@ final class GenericPageRegionTests: XCTestCase {
         Name | Size
         * Report.pdf | 12 KB
         Notes.txt | 4 KB
+        Renamed.pdf | 12 KB
         ## Sidebar
         - Favorites
         - Projects
         ## Toolbar
         Uploading 34 items
         """)
+    }
+
+    func testARowNeverCollectsASecureFieldAsACell() {
+        let row = node("AXRow", frame: CGRect(x: 500, y: 320, width: 1000, height: 20), children: [
+            node("AXCell", frame: CGRect(x: 508, y: 320, width: 300, height: 20), children: [
+                node("AXTextField", value: "hunter2", subrole: "AXSecureTextField",
+                     frame: CGRect(x: 508, y: 320, width: 300, height: 16)),
+            ]),
+            node("AXCell", frame: CGRect(x: 900, y: 320, width: 200, height: 20), children: [
+                node("AXStaticText", value: "Passwords",
+                     frame: CGRect(x: 900, y: 320, width: 200, height: 16)),
+            ]),
+        ])
+        let main = blocks(regions([row]), .main)
+        XCTAssertEqual(main.map(\.type), [.tableRow(cells: ["Passwords"], selected: false)])
+        XCTAssertFalse(main.contains { $0.text.contains("hunter2") },
+                       "a table cell is not a loophole around the secure-field rule")
     }
 
     func testWebTableColumnsDoNotRepublishTheirCells() throws {
