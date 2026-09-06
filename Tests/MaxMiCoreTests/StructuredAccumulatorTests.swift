@@ -256,22 +256,24 @@ final class StructuredAccumulatorTests: XCTestCase {
             let bounded = CaptureAccumulator.boundHard(content, to: 300)
             let rendered = ContentRenderer.render(bounded, style: .full)
             XCTAssertLessThanOrEqual(rendered.count, 300, "hard cap holds for \(content)")
-            XCTAssertEqual(rendered, ContentRenderer.render(bounded, style: .full),
-                           "the bounded STRUCTURED value is what renders — no string post-trim")
             guard case .conversation(let result) = bounded else { return XCTFail() }
             XCTAssertFalse(result.messages.isEmpty, "a bounded conversation is never emptied")
         }
     }
 
     func testHardBoundAlsoBoundsAnOversizeSenderHead() {
-        let content = conversation([message(String(repeating: "S", count: 500), "body",
-                                            time: String(repeating: "t", count: 500))])
-        let bounded = CaptureAccumulator.boundHard(content, to: 120)
-        XCTAssertLessThanOrEqual(ContentRenderer.render(bounded, style: .full).count, 120,
+        // Sized so the sender is trimmed but SURVIVES: the body goes first, and the remaining
+        // overflow is smaller than the sender, so an empty sender would not satisfy the cap.
+        let sender = String(repeating: "S", count: 200)
+        let content = conversation([message(sender, "body", time: String(repeating: "t", count: 200))])
+        let bounded = CaptureAccumulator.boundHard(content, to: 300)
+        XCTAssertLessThanOrEqual(ContentRenderer.render(bounded, style: .full).count, 300,
                                  "an over-cap head is bounded too, not just the body")
         guard case .conversation(let result) = bounded,
               let kept = result.messages.first else { return XCTFail() }
-        XCTAssertTrue(String(repeating: "S", count: 500).hasPrefix(kept.sender),
+        XCTAssertFalse(kept.sender.isEmpty, "the sender is trimmed, not erased")
+        XCTAssertLessThan(kept.sender.count, sender.count, "and it IS trimmed")
+        XCTAssertTrue(sender.hasPrefix(kept.sender),
                       "a sender name reads from the front, so its PREFIX survives")
     }
 
