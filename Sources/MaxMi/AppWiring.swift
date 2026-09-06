@@ -1379,8 +1379,14 @@ final class AppWiring {
         // it must NOT run on the main thread, or it freezes the menu-bar UI. Read off-main, then
         // resume on the main actor for the DB commit. AXNode is Sendable so the snapshot crosses
         // the actor boundary safely.
+        // Electron trees (Slack, Notion, Obsidian) do not reliably expose an AXWebArea above
+        // their DOM, so the claiming v2 parser's ParserConfig.attributeSet forces the two DOM
+        // reads for the whole tree. Every other app forces nothing and pays nothing (spec §8).
+        let forcedAttributes = registry.forcedAttributes(for: app.bundleID)
         Task.detached(priority: .utility) { [weak self] in
-            let snapshot = AXReader.snapshotFrontmostWindow(pid: pid)
+            let snapshot = AXReader.snapshotFrontmostWindow(
+                pid: pid, forcedAttributes: forcedAttributes
+            )
             let confirmationSnapshot: (window: AXNode, title: String?)?
             if ParserRegistry.whatsAppBundleIDs.contains(app.bundleID),
                trigger == .appActivated || trigger == .conversationChanged {
@@ -1388,7 +1394,9 @@ final class AppWiring {
                 // vice versa). Re-read once after a short settle and only commit a stable
                 // WhatsApp identity below.
                 try? await Task.sleep(for: .milliseconds(350))
-                confirmationSnapshot = AXReader.snapshotFrontmostWindow(pid: pid)
+                confirmationSnapshot = AXReader.snapshotFrontmostWindow(
+                    pid: pid, forcedAttributes: forcedAttributes
+                )
             } else {
                 confirmationSnapshot = nil
             }
