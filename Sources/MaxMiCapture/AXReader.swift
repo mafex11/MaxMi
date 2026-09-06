@@ -80,7 +80,12 @@ public enum AXReader {
     private static func convert(_ el: AXUIElement, depth: Int, maxDepth: Int, budget: inout Int) -> AXNode {
         budget -= 1
         let role = copyAttr(el, kAXRoleAttribute) as? String ?? "?"
-        let rawValue = copyAttr(el, kAXValueAttribute)
+        // Read FIRST so a secure field's value, placeholder and selection are never read at all:
+        // masking after the fact would still have put the secret in this process's memory and in
+        // `AXNode`, where any consumer could pick it up.
+        let subrole = copyAttr(el, kAXSubroleAttribute) as? String
+        let isSecure = subrole == GenericPageExtractor.secureSubrole
+        let rawValue = isSecure ? nil : copyAttr(el, kAXValueAttribute)
         let value = (rawValue as? String) ?? (rawValue as? NSNumber)?.stringValue
         let title = copyAttr(el, kAXTitleAttribute) as? String
         // AXURL (WebKit/Gecko) then AXDocument (Chromium) — spec §5 primary URL source.
@@ -91,17 +96,16 @@ public enum AXReader {
         let identifier = copyAttr(el, kAXIdentifierAttribute) as? String
         let label = (copyAttr(el, kAXDescriptionAttribute) as? String)
             ?? (copyAttr(el, kAXHelpAttribute) as? String)
-        // Three unconditional extra reads: region detection needs subrole, table rows need
-        // selected, and hidden is recorded so consumers can skip offscreen containers — `convert`
-        // itself still descends into them.
-        let subrole = copyAttr(el, kAXSubroleAttribute) as? String
+        // Two more unconditional extra reads (subrole is read above): table rows need selected,
+        // and hidden is recorded so consumers can skip offscreen containers — `convert` itself
+        // still descends into them.
         let selected = (copyAttr(el, kAXSelectedAttribute) as? Bool) ?? false
         let hidden = (copyAttr(el, "AXHidden") as? Bool) ?? false
         // Conditional reads: keep the per-node cost off the roles that cannot carry them.
         let headingLevel = role == "AXHeading"
             ? (copyAttr(el, "AXHeadingLevel") as? NSNumber)?.intValue
             : nil
-        let isTextEntry = Self.textEntryRoles.contains(role)
+        let isTextEntry = Self.textEntryRoles.contains(role) && !isSecure
         let placeholder = isTextEntry ? copyAttr(el, kAXPlaceholderValueAttribute) as? String : nil
         let selectedText = isTextEntry ? copyAttr(el, kAXSelectedTextAttribute) as? String : nil
         var frame: CGRect? = nil

@@ -73,6 +73,18 @@ final class GenericPageBudgetTests: XCTestCase {
         XCTAssertNil(focused?.value)
     }
 
+    func testSecureFocusedFieldNeverCarriesItsSelectedText() throws {
+        let secure = node("AXTextField", value: "hunter2", identifier: "password",
+                          subrole: "AXSecureTextField", selectedText: "hunter2",
+                          frame: CGRect(x: 520, y: 340, width: 400, height: 24), focused: true)
+        let page = extract([secure]).page
+        XCTAssertNil(page.focused?.value)
+        XCTAssertNil(page.focused?.selectedText)
+        let encoded = try CapturedContentEnvelope.encode(.generic(page))
+        XCTAssertFalse(encoded.contains("hunter2"),
+                       "the secret must not reach the stored envelope by any field")
+    }
+
     func testNothingIsTrimmedWhenEverythingFits() {
         let result = extract([text("alpha", y: 320), text("bravo", y: 340)])
         XCTAssertEqual(blocks(result, .main).map(\.text), ["alpha", "bravo"])

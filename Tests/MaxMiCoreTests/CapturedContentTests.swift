@@ -123,6 +123,15 @@ final class CapturedContentTests: XCTestCase {
         XCTAssertNotEqual(a, Message.makeID(sender: "Bo", timeString: "09:20", text: "ping"))
     }
 
+    func testSecureFocusedElementDropsValueAndSelectedText() {
+        let focused = FocusedElement(role: "AXTextField", identifier: "password",
+                                     value: "hunter2", selectedText: "hunter2", isSecure: true)
+        XCTAssertNil(focused.value)
+        XCTAssertNil(focused.selectedText,
+                     "a selection inside a secure field is the secret, character for character")
+        XCTAssertTrue(focused.isSecure)
+    }
+
     func testBlockAuthoredByUserDefaultsFalseAndDecodesWhenAbsent() throws {
         XCTAssertFalse(Block(type: .paragraph, text: "x").authoredByUser)
         let decoder = JSONDecoder()

@@ -61,6 +61,8 @@ public struct FocusedElement: Codable, Sendable, Equatable {
     public let identifier: String?
     /// nil when `isSecure` — a secure field's value is never read, not merely not stored.
     public let value: String?
+    /// nil when `isSecure` for the same reason `value` is: a selection inside a secure field is
+    /// the secret itself, so a caller cannot leak it by reading the selection instead.
     public let selectedText: String?
     public let isSecure: Bool
 
@@ -68,7 +70,7 @@ public struct FocusedElement: Codable, Sendable, Equatable {
         self.role = role
         self.identifier = identifier
         self.value = isSecure ? nil : value
-        self.selectedText = selectedText
+        self.selectedText = isSecure ? nil : selectedText
         self.isSecure = isSecure
     }
 }
