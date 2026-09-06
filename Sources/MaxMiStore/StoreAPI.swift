@@ -34,6 +34,22 @@ public final class Store {
         (try? cipher.decrypt(stored)) ?? "[unreadable memory]"
     }
 
+    /// A NULL column, a decrypt failure, a JSON decode failure, and a schema version newer than
+    /// this build are all the same case: fall back to the legacy adaptation of the rendered
+    /// content. Never a throw, never a lost capture.
+    func structuredOrLegacy(
+        _ stored: String?,
+        renderedContent: String,
+        kind: CaptureContentKind
+    ) -> CapturedContent {
+        guard let stored,
+              let plain = try? cipher.decrypt(stored),
+              let content = CapturedContentEnvelope.decode(plain) else {
+            return LegacyContentAdapter.adapt(renderedContent: renderedContent, kind: kind)
+        }
+        return content
+    }
+
     /// Split content into items, fingerprint each (normalized), record novel ones.
     /// Returns true if ANY item was novel (=> commit). Fails OPEN (true) on error (spec §7).
     private func recordNovelFingerprints(_ content: String, threadID: String, nowMs: EpochMs,

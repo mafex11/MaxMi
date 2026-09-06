@@ -1,7 +1,7 @@
 import GRDB
 
 enum Migrations {
-    static let currentIdentifier = "v9"
+    static let currentIdentifier = "v10"
 
     static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
@@ -299,6 +299,16 @@ enum Migrations {
               ON latest_contexts(captured_at DESC, thread_id);
             CREATE INDEX idx_latest_contexts_summary_due
               ON latest_contexts(summary_status, summary_next_attempt_at, captured_at);
+            """)
+        }
+        m.registerMigration("v10") { db in
+            // Additive and nullable: v9 readers are unaffected, so rollback is "ignore the two
+            // new columns". TEXT, not BLOB, because FieldCipher.encrypt returns the "enc:v1:"
+            // prefixed base64 String and every other ciphertext column in the schema is TEXT.
+            // No backfill: rows written before v10 read through LegacyContentAdapter.
+            try db.execute(sql: """
+            ALTER TABLE versions        ADD COLUMN structured_ciphertext TEXT;
+            ALTER TABLE latest_contexts ADD COLUMN structured_ciphertext TEXT;
             """)
         }
         return m

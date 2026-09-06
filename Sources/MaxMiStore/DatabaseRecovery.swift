@@ -102,7 +102,8 @@ public enum DatabaseRecovery {
                 guard hasMigrationHistory == 1 else {
                     throw DatabaseRecoveryError.incompatibleBackup
                 }
-                let knownIdentifiers = Set((1...9).map { "v\($0)" })
+                // Derived from the migrator so a new migration never has to be added here too.
+                let knownIdentifiers = Set(Migrations.migrator.migrations)
                 let applied = try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
                 guard !applied.isEmpty, Set(applied).isSubset(of: knownIdentifiers) else {
                     throw DatabaseRecoveryError.incompatibleBackup
