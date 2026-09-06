@@ -27,8 +27,10 @@ public enum GenericPageExtractor {
 
     /// Menu content is structurally excluded, not filtered by text.
     static let menuRoles: Set<String> = ["AXMenuBar", "AXMenuBarItem", "AXMenu"]
-    /// Skipped entirely, subtree included.
-    static let skipRoles: Set<String> = ["AXScrollBar", "AXSplitter", "AXGrowArea"]
+    /// Skipped entirely, subtree included. `AXColumn` is a dead end because it republishes the
+    /// same `AXCell`s the row already emitted — walking it would print every cell a second time
+    /// as a loose paragraph.
+    static let skipRoles: Set<String> = ["AXScrollBar", "AXSplitter", "AXGrowArea", "AXColumn"]
     static let paragraphRoles: Set<String> = ["AXStaticText", "AXParagraph"]
     static let inputRoles: Set<String> = ["AXTextArea", "AXTextField", "AXSearchField", "AXComboBox"]
     static let listItemRoles: Set<String> = ["AXListItem", "AXTreeItem"]

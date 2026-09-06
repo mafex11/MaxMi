@@ -208,6 +208,20 @@ final class GenericPageRegionTests: XCTestCase {
         """)
     }
 
+    func testWebTableColumnsDoNotRepublishTheirCells() throws {
+        let result = GenericPageExtractor.extract(
+            window: try fixture("web-table-with-columns"), focusedElement: nil, url: nil
+        )
+        let main = blocks(result.page.regions, .main)
+        XCTAssertEqual(main.count, 2, "one block per row, not one per row plus one per column")
+        XCTAssertEqual(main.map(\.type), [
+            .tableRow(cells: ["Widget", "17 in stock"], selected: false),
+            .tableRow(cells: ["Sprocket", "4 in stock"], selected: false),
+        ])
+        XCTAssertFalse(main.contains { $0.type == .paragraph },
+                       "a column's cells must not fall through to loose paragraphs")
+    }
+
     func testDialogOverWindowFixturePutsSheetContentInDialog() throws {
         let result = GenericPageExtractor.extract(
             window: try fixture("dialog-over-window"), focusedElement: nil, url: nil
