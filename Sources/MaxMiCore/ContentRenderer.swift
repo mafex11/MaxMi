@@ -79,10 +79,8 @@ public enum ContentRenderer {
         if let stamp = message.timeString ?? message.timestamp.map(formatTimestamp) {
             head += "(sent \(stamp))"
         }
-        let lines = message.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var out = "\(head): \(lines.first ?? "")"
-        for line in lines.dropFirst() { out += "\n  " + line }
-        return out
+        let lines = message.text.split(separator: "\n", omittingEmptySubsequences: false)
+        return "\(head): \(lines.first ?? "")" + indentContinuation(lines.dropFirst())
     }
 
     public static func renderTask(_ item: TaskItem) -> String {
@@ -97,9 +95,7 @@ public enum ContentRenderer {
         if let project = item.project, !project.isEmpty { line += " [\(project)]" }
         for tag in item.tags { line += " #\(tag)" }
         if let notes = item.notes, !notes.isEmpty {
-            for note in notes.split(separator: "\n", omittingEmptySubsequences: false) {
-                line += "\n  " + note
-            }
+            line += indentContinuation(notes.split(separator: "\n", omittingEmptySubsequences: false))
         }
         return line
     }
@@ -110,9 +106,8 @@ public enum ContentRenderer {
         if let organizer = event.organizer, !organizer.isEmpty { line += " / \(organizer)" }
         if event.hasConference { line += " [conference]" }
         if let notes = event.notes, !notes.isEmpty {
-            let lines = notes.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            line += "\nDetails: \(lines.first ?? "")"
-            for extra in lines.dropFirst() { line += "\n  " + extra }
+            let lines = notes.split(separator: "\n", omittingEmptySubsequences: false)
+            line += "\nDetails: \(lines.first ?? "")" + indentContinuation(lines.dropFirst())
         }
         return line
     }
@@ -144,6 +139,14 @@ public enum ContentRenderer {
 
     private static func orderIndex(_ kind: RegionKind) -> Int {
         regionOrder.firstIndex(of: kind) ?? regionOrder.count
+    }
+
+    /// Renders each line as `"\n  " + line`, concatenated in order. Shared by `renderMessage`,
+    /// `renderTask`, and `renderEvent` for their multi-line text/notes fields: callers that want
+    /// the first line inline pass `lines.dropFirst()`; `renderTask` passes every note line since
+    /// task notes have no inline first line.
+    private static func indentContinuation(_ lines: some Sequence<Substring>) -> String {
+        lines.reduce(into: "") { $0 += "\n  " + $1 }
     }
 
     private static func renderFull(_ content: CapturedContent) -> String {
