@@ -3,11 +3,16 @@ import MaxMiCore
 
 /// Native Notion app. Window title is the page name; body comes from generic v2.
 public struct NotionParser: SourceParser {
-    static let offscreen: OffscreenCapturePolicy = .accessibilityScroll(maxSteps: 3)
+    // Whole-page `.replace` accumulation bounds ONE capture to `pageBudget`, so the scroll
+    // ceiling is `pageBudget` too — a larger one would be unreachable.
+    static let offscreen: OffscreenCapturePolicy = .accessibilityScroll(
+        maxSteps: 3, maxCharacters: StructuredEntityExtraction.pageBudget)
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        GenericV2Content.page(window: window, offscreenPolicy: Self.offscreen)
+        GenericV2Content.page(window: window,
+                              budget: StructuredEntityExtraction.pageBudget,
+                              offscreenPolicy: Self.offscreen)
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {

@@ -977,6 +977,10 @@ Nothing below was silently redesigned. Each item states what the brief assumed, 
 - §4e — `Options.totalBudget` is now documented as an 8_000 default that individual parsers may override with a larger budget to preserve their existing cap (browser path 16_000; Word/Pages/Outlook/Spark 32_000).
 - §4f — Outlook and Spark now produce `.generic` with `contentKind` `.email` in Phase A, since no `MailRecord` source exists for them; typed `.conversation` for both is deferred to a later phase. Also clarified nil-`structured` resolution: the write path resolves in `CaptureEnvelope.init` (the one place both `ParsedCapture.envelope` and `CaptureEnvelope.legacy` route through), the read path resolves a NULL/undecodable `structured_ciphertext` via `LegacyContentAdapter` in the store, and no other site resolves nil.
 
+**Amendments (2026-09-06, final review)**
+
+- §4e — the note apps (Notes, Notion, Obsidian) use the 32_000 page budget, not the 8_000 default, and their `accessibilityScroll` ceiling matches it, so a long note is bounded exactly like a Pages or Word document. Viewport-anchored trimming for `.document` (keeping what the user is looking at rather than the top of the page) is a Phase B item. `.dialog` is trimmed only as a last resort, after its rollover from `main` and `rest` is exhausted (Task 7 ruling).
+
 ## 13. Rollout
 
 Per the established M5/M6 workflow: **spec → Codex review → revise → implementation plan per phase → Codex review of the plan → revise → subagent-driven build → Codex review of the implementation → revise → live verify.** Phase A's plan lands first and must include the `AXNode`/`AXReader` attribute additions, because both B and D build on them. Phase D runs in its own worktree in parallel with B/C.

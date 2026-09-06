@@ -105,6 +105,28 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 
+    /// A note is a document, and the 8_000 default would trim one at a length Pages and Word
+    /// keep whole. The three note apps therefore declare the same page budget and scroll ceiling.
+    func testNoteAppsUseTheDocumentPageBudget() throws {
+        let long = body((0..<400).map { index in
+            text("paragraph \(index) " + String(repeating: "x", count: 40), y: CGFloat(20 * index))
+        }, title: "Long note")
+        let cases: [(parser: any SourceParser, app: AppInfo, label: String)] = [
+            (NotesParser(), AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Long note"), "Notes"),
+            (NotionParser(), AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Long note"), "Notion"),
+            (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Long note - My Vault - Obsidian v1.5"), "Obsidian"),
+        ]
+        for entry in cases {
+            let capture = try XCTUnwrap(try entry.parser.parse(window: long, app: entry.app), entry.label)
+            XCTAssertEqual(capture.offscreenPolicy.maxCharacters,
+                           StructuredEntityExtraction.pageBudget, entry.label)
+            XCTAssertGreaterThan(capture.content.count, 8_000,
+                                 "\(entry.label) must not be trimmed at the 8_000 default")
+            XCTAssertLessThanOrEqual(capture.content.count,
+                                     StructuredEntityExtraction.pageBudget, entry.label)
+        }
+    }
+
     func testEmptyWindowsStillReturnNilEverywhere() throws {
         let empty = body([], title: "x")
         let apps: [(any SourceParser, AppInfo)] = [
