@@ -165,6 +165,56 @@ final class StructuredConversationParserTests: XCTestCase {
             """)
     }
 
+    /// WhatsApp exposes a whole bubble as ONE label reading "<participant>: <body>". It is split
+    /// only when the prefix names a participant this walk can vouch for — the user ("You") or,
+    /// in a 1:1 chat, the contact (the conversation title). "Note: check the doc" is not a
+    /// speaker, so it stays whole.
+    func testWhatsAppSplitsSingleLabelBubblesOnlyForKnownParticipants() throws {
+        func bubble(_ id: String, _ y: CGFloat, _ label: String) -> AXNode {
+            AXNode(role: "AXButton", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 400, y: y, width: 500, height: 40), focused: false,
+                   children: [], identifier: id, label: label)
+        }
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+            children: [
+                AXNode(role: "AXHeading", value: "Alex", title: nil, url: nil,
+                       frame: CGRect(x: 400, y: 20, width: 300, height: 30), focused: false,
+                       children: [], identifier: "conversation-header"),
+                bubble("message-1", 200, "Alex: First controlled message"),
+                bubble("message-2", 260, "You: on my way"),
+                bubble("message-3", 320, "Note: check the doc"),
+            ]
+        )
+        let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
+                          windowTitle: "WhatsApp")
+        let messages = try messages(try WhatsAppParser().parseStructured(window: window, app: app))
+        XCTAssertEqual(messages.map(\.sender), ["Alex", "You", "unknown"])
+        XCTAssertEqual(messages.map(\.text),
+                       ["First controlled message", "on my way", "Note: check the doc"])
+        XCTAssertEqual(messages.map(\.isUser), [false, true, false])
+    }
+
+    /// Teams has no such label convention, so a single-label row is never split.
+    func testTeamsNeverSplitsASingleLabelRow() throws {
+        let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                         frame: CGRect(x: 400, y: 200, width: 500, height: 40), focused: false,
+                         children: [
+            AXNode(role: "AXStaticText", value: "Alex: hi", title: nil, url: nil,
+                   frame: CGRect(x: 420, y: 200, width: 200, height: 20), focused: false,
+                   children: []),
+        ])
+        let window = AXNode(role: "AXWindow", value: nil, title: "Microsoft Teams", url: nil,
+                            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+                            children: [row])
+        let app = AppInfo(bundleID: "com.microsoft.teams2", name: "Microsoft Teams",
+                          windowTitle: "Alex")
+        let messages = try messages(try TeamsParser().parseStructured(window: window, app: app))
+        XCTAssertEqual(messages.map(\.sender), ["unknown"])
+        XCTAssertEqual(messages.map(\.text), ["Alex: hi"])
+    }
+
     /// Teams exposes no "You" label, so the same sender name is not an outgoing signal there.
     func testTeamsDoesNotTreatASenderCalledYouAsTheUser() throws {
         let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,

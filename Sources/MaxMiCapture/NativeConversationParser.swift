@@ -12,7 +12,7 @@ public struct WhatsAppParser: SourceParser {
             keyPrefix: "whatsapp",
             requiresConversationIdentity: true,
             allowsFallback: false,
-            labelsUserAsYou: true
+            usesWhatsAppSenderLabels: true
         ).content
     }
 
@@ -24,7 +24,7 @@ public struct WhatsAppParser: SourceParser {
             keyPrefix: "whatsapp",
             requiresConversationIdentity: true,
             allowsFallback: false,
-            labelsUserAsYou: true
+            usesWhatsAppSenderLabels: true
         )
     }
 }
@@ -79,7 +79,10 @@ enum NativeConversationExtraction {
         keyPrefix: String,
         requiresConversationIdentity: Bool = false,
         allowsFallback: Bool = true,
-        labelsUserAsYou: Bool = false
+        // WhatsApp's two sender conventions: the user's own bubbles carry the literal sender
+        // "You", and a whole bubble is often exposed as ONE accessible label reading
+        // "<sender>: <body>". Teams does neither, so it opts out.
+        usesWhatsAppSenderLabels: Bool = false
     ) throws -> Extracted {
         let boundary = mainPaneBoundary(window)
         let conversation = conversationTitle(
@@ -114,6 +117,15 @@ enum NativeConversationExtraction {
         guard !requiresConversationIdentity || conversation != nil else {
             throw ParserRefusal(reason: "unconfirmed-conversation-identity")
         }
+        if usesWhatsAppSenderLabels {
+            // Participants this walk can vouch for: the user, plus the contact in a 1:1 chat —
+            // which is exactly the conversation title. No group marker survives the walk, so
+            // `isGroup` below is always false and the title is always the contact; Phase D's
+            // group detection must drop the title from this set for a group chat.
+            var known: Set<String> = ["you"]
+            if let conversation { known.insert(conversation.lowercased()) }
+            bubbles = bubbles.map { split($0, byKnownParticipant: known) }
+        }
 
         let identity = conversation ?? meaningfulWindowTitle(app.windowTitle, excluding: sourceApp) ?? "unknown"
         let typed = Conversation(
@@ -122,7 +134,8 @@ enum NativeConversationExtraction {
             // read the participant list.
             isGroup: false,
             messages: bubbles.map {
-                message(sender: $0.sender, text: $0.text, labelsUserAsYou: labelsUserAsYou)
+                message(sender: $0.sender, text: $0.text,
+                        labelsUserAsYou: usesWhatsAppSenderLabels)
             }
         )
         return Extracted(
@@ -139,13 +152,13 @@ enum NativeConversationExtraction {
         keyPrefix: String,
         requiresConversationIdentity: Bool = false,
         allowsFallback: Bool = true,
-        labelsUserAsYou: Bool = false
+        usesWhatsAppSenderLabels: Bool = false
     ) throws -> ParsedCapture {
         let extracted = try extract(
             window: window, app: app, sourceApp: sourceApp, keyPrefix: keyPrefix,
             requiresConversationIdentity: requiresConversationIdentity,
             allowsFallback: allowsFallback,
-            labelsUserAsYou: labelsUserAsYou
+            usesWhatsAppSenderLabels: usesWhatsAppSenderLabels
         )
         return ParsedCapture(
             sourceApp: sourceApp,
@@ -158,6 +171,19 @@ enum NativeConversationExtraction {
             offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000),
             structured: extracted.content
         )
+    }
+
+    /// Splits a one-label bubble ("<sender>: <body>") when the prefix names a KNOWN participant.
+    /// Any other prefix is left alone: this walk cannot tell a speaker from a word, so
+    /// "Note: check the doc" must stay a message rather than become a message from "Note".
+    static func split(
+        _ bubble: (sender: String?, text: String),
+        byKnownParticipant known: Set<String>
+    ) -> (sender: String?, text: String) {
+        guard bubble.sender == nil, let separator = bubble.text.range(of: ": ") else { return bubble }
+        let prefix = String(bubble.text[..<separator.lowerBound])
+        guard known.contains(prefix.lowercased()) else { return bubble }
+        return (prefix, String(bubble.text[separator.upperBound...]))
     }
 
     /// A bubble the AX walk attributed (`sender != nil`) or could not (`sender == nil`, which
