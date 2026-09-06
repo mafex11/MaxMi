@@ -54,6 +54,10 @@ public enum AXReader {
     /// keeps this to the element plus its immediate children.
     public static func focusedElementSnapshot(pid: pid_t) -> AXNode? {
         let app = AXUIElementCreateApplication(pid)
+        // Same dormant-tree problem as snapshotFrontmostWindow: a Chromium/Electron app exposes no
+        // focused element until an assistive client asks. This may run before (or without) a window
+        // snapshot, so it cannot rely on that call having already woken the process.
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         guard let element = copyAttr(app, kAXFocusedUIElementAttribute) as! AXUIElement? else { return nil }
         var budget = 64
         return convert(element, depth: 0, maxDepth: 1, budget: &budget)
@@ -88,7 +92,8 @@ public enum AXReader {
         let label = (copyAttr(el, kAXDescriptionAttribute) as? String)
             ?? (copyAttr(el, kAXHelpAttribute) as? String)
         // Three unconditional extra reads: region detection needs subrole, table rows need
-        // selected, and hidden containers must never be walked for text.
+        // selected, and hidden is recorded so consumers can skip offscreen containers — `convert`
+        // itself still descends into them.
         let subrole = copyAttr(el, kAXSubroleAttribute) as? String
         let selected = (copyAttr(el, kAXSelectedAttribute) as? Bool) ?? false
         let hidden = (copyAttr(el, "AXHidden") as? Bool) ?? false
