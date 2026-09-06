@@ -253,6 +253,21 @@ final class TypingObserverTests: XCTestCase {
         XCTAssertEqual(gate.trackedKeyCount, 1, "the stale key is forgotten, so the map is bounded")
     }
 
+    func testPollGateForgetsAnAbandonedScheduledRead() {
+        var gate = TypingPollGate()
+        XCTAssertEqual(gate.admit(key: "a", nowMs: t0), .read)
+        XCTAssertEqual(gate.admit(key: "a", nowMs: t0 + 1),
+                       .schedule(afterMs: TypingPollGate.intervalMs - 1))
+
+        XCTAssertEqual(gate.admit(key: "b", nowMs: t0 + TypingPollGate.staleAfterMs + 1), .read)
+        XCTAssertEqual(gate.trackedKeyCount, 1, "cleanup must remove all state for stale key a")
+
+        XCTAssertEqual(gate.admit(key: "a", nowMs: t0 + TypingPollGate.staleAfterMs + 1), .read)
+        XCTAssertEqual(gate.admit(key: "a", nowMs: t0 + TypingPollGate.staleAfterMs + 2),
+                       .schedule(afterMs: TypingPollGate.intervalMs - 1),
+                       "cleanup must also remove a stale pending trailing read")
+    }
+
     func testKeyFromAppInfoAndFocusedElement() {
         let app = AppInfo(bundleID: "com.example.chat", name: "Chat", windowTitle: "General",
                           windowID: 9)

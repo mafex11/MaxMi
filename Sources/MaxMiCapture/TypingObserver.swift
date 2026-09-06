@@ -79,6 +79,7 @@ public struct TypingPollGate: Sendable {
 
     public mutating func admit(key: String, nowMs: EpochMs) -> Decision {
         lastReadAtMs = lastReadAtMs.filter { nowMs - $0.value < Self.staleAfterMs }
+        pending.formIntersection(Set(lastReadAtMs.keys))
         guard let last = lastReadAtMs[key] else {
             lastReadAtMs[key] = nowMs
             return .read
