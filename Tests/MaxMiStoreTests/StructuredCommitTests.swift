@@ -37,6 +37,35 @@ final class StructuredCommitTests: XCTestCase {
         }
     }
 
+    /// A page envelope, so the empty-render guard can be driven with `.replace` accumulation.
+    func pageEnvelope(_ page: CapturedContent) -> CaptureEnvelope {
+        CaptureEnvelope(
+            sourceApp: "Web", sourceKey: "https://example.com/docs", sourceTitle: "Docs",
+            content: ContentRenderer.render(page, style: .full), contentKind: .webpage,
+            parserID: "BrowserWeb.v2", parserVersion: 2, accumulationPolicy: .replace,
+            offscreenPolicy: .visibleOnly(), trigger: .unknown, truncated: false, structured: page
+        )
+    }
+
+    func testAnEmptyRenderNeverReplacesStoredContent() throws {
+        let page = CapturedContent.generic(GenericPage(
+            regions: [Region(kind: .main, blocks: [Block(type: .paragraph, text: "the real page")])],
+            focused: nil, url: "https://example.com/docs"
+        ))
+        guard case .committed = try store.commitCapture(pageEnvelope(page), nowMs: h10)
+        else { return XCTFail("expected a commit") }
+        let stored = try XCTUnwrap(try store.latestContexts(limit: 1).first).content
+
+        let empty = CapturedContent.generic(GenericPage(regions: [], focused: nil, url: nil))
+        XCTAssertEqual(try store.commitCapture(pageEnvelope(empty), nowMs: h10 + 1_000),
+                       .deduplicated, "an empty render is not a capture")
+        let after = try XCTUnwrap(try store.latestContexts(limit: 1).first)
+        XCTAssertEqual(after.content, stored, "the page the user was reading survives")
+        XCTAssertEqual(after.structured, page)
+        XCTAssertEqual(try storedStructured(table: "versions"), page,
+                       "the version keeps the last non-empty render too")
+    }
+
     func testCommitWritesStructuredToBothTablesEncrypted() throws {
         let structured = CapturedContent.conversation(Conversation(
             channel: "#dev", isGroup: true, messages: [message("Ana", "ping")]))

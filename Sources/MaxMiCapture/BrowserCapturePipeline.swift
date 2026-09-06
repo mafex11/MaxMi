@@ -25,7 +25,7 @@ public enum BrowserCapturePipeline {
             windowTitle: windowTitle,
             engine: browser.browserEngine
         )
-        let web = WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: contentBudget)
+        let web = try WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: contentBudget)
         let quality: BrowserCaptureQuality
         if web.preservedBoundaries {
             quality = .high

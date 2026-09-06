@@ -125,6 +125,11 @@ public final class Store {
                 policy: envelope.accumulationPolicy,
                 maxCharacters: envelope.offscreenPolicy.maxCharacters
             )
+            // An empty render is not new information, and under `.replace` accumulation it would
+            // wipe a thread that already holds a real capture (a browser page whose AX tree went
+            // blank for one poll, a window mid-relayout). Refused before any write, so both the
+            // latest context and this hour's version keep the last non-empty render.
+            if accumulated.rendered.isEmpty, previous?.isEmpty == false { return .deduplicated }
             let accumulatedHash = ContentHash.sha256Hex(accumulated.rendered)
             let accumulatedStored = try cipher.encrypt(accumulated.rendered)
             let structuredStored = try cipher.encrypt(

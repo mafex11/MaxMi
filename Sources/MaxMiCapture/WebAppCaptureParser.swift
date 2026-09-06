@@ -51,7 +51,7 @@ public enum WebAppCaptureParser {
         tab: TabCapture,
         window: AXNode,
         contentBudget: Int = contentCap
-    ) -> WebAppParseResult {
+    ) throws -> WebAppParseResult {
         let app = classify(url: tab.url)
         let isLinkedInMessaging = app == .linkedin
             && (URLComponents(string: tab.url)?.path.hasPrefix("/messaging") == true)
@@ -93,6 +93,10 @@ public enum WebAppCaptureParser {
                 url: tab.url,
                 options: options
             )
+            // A page with no regions renders to nothing but its URL, which would overwrite a
+            // real capture of this thread with an empty one. Same rule as
+            // `GenericV2Content.page` returning nil for a native window.
+            guard !extracted.page.regions.isEmpty else { throw ExtractionError.emptyContent }
             structured = .generic(extracted.page)
             truncated = extracted.truncated
             preservedBoundaries = false

@@ -83,7 +83,7 @@ final class WebAppStructuredTests: XCTestCase {
         ])
         let tab = TabCapture(url: "https://example.com/x", title: "x", content: "chrome only",
                              urlSource: .addressBar, quality: .fallback, truncated: false)
-        let result = WebAppCaptureParser.parse(tab: tab, window: window)
+        let result = try WebAppCaptureParser.parse(tab: tab, window: window)
         guard case .generic(let page) = try XCTUnwrap(result.capture.structured) else {
             return XCTFail("expected .generic")
         }
@@ -124,7 +124,7 @@ final class WebAppStructuredTests: XCTestCase {
         XCTAssertTrue(result.truncated)
     }
 
-    func testConversationTruncationIsReportedWhenBoundingDropsMessages() {
+    func testConversationTruncationIsReportedWhenBoundingDropsMessages() throws {
         func text(_ value: String, y: CGFloat) -> AXNode {
             AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
                    frame: CGRect(x: 0, y: y, width: 300, height: 16), focused: false, children: [])
@@ -141,11 +141,11 @@ final class WebAppStructuredTests: XCTestCase {
                              content: "unused", urlSource: .webArea, quality: .high,
                              truncated: false)
 
-        let whole = WebAppCaptureParser.parse(tab: tab, window: window)
+        let whole = try WebAppCaptureParser.parse(tab: tab, window: window)
         XCTAssertEqual(whole.capture.content, "(From: Alex): first\n(From: Sam): second")
         XCTAssertFalse(whole.truncated)
 
-        let bounded = WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: 30)
+        let bounded = try WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: 30)
         XCTAssertEqual(bounded.capture.content, "(From: Sam): second")
         XCTAssertTrue(bounded.truncated, "a message was shed off the front")
     }
