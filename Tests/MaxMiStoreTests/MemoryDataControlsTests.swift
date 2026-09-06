@@ -262,4 +262,51 @@ final class MemoryDataControlsTests: XCTestCase {
                 """, arguments: [ciphertext, hash, t0, content.count])
         }
     }
+
+    private func seedCaptureEvent(atMs: EpochMs, threadKey: String) throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: threadKey, sourceTitle: "T",
+                         content: "content \(threadKey)"),
+            nowMs: atMs
+        )
+        try store.recordCaptureEvent(
+            kind: .contentDelta,
+            appBundle: "com.example.web",
+            threadID: try store.threadID(forKey: threadKey),
+            versionID: nil,
+            trigger: .periodic,
+            payload: CaptureDelta(addedChars: 4),
+            nowMs: atMs
+        )
+    }
+
+    func testPruneDeletesCaptureEventsOlderThanTheCutoffAndCountsThem() throws {
+        try seedCaptureEvent(atMs: t0, threadKey: "old")
+        try seedCaptureEvent(atMs: t0 + 100_000, threadKey: "new")
+
+        let result = try store.pruneMemory(olderThan: t0 + 50_000)
+        XCTAssertEqual(result.events, 1)
+        let remaining = try store.recentCaptureEvents()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.atMs, t0 + 100_000)
+    }
+
+    func testDeleteAllMemoryRemovesCaptureEventsAndCountsThem() throws {
+        try seedCaptureEvent(atMs: t0, threadKey: "one")
+        let result = try store.deleteAllMemory()
+        XCTAssertEqual(result.events, 1)
+        XCTAssertTrue(try store.recentCaptureEvents().isEmpty)
+    }
+
+    /// The trim gate must not survive a delete-all: a fresh database should trim on its first
+    /// write, not wait an hour.
+    func testDeleteAllMemoryClearsTheTrimGate() throws {
+        try seedCaptureEvent(atMs: t0, threadKey: "one")
+        _ = try store.deleteAllMemory()
+        let gate = try store.db.dbQueue.read { d in
+            try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?",
+                                arguments: [CaptureEventRetention.lastTrimSettingsKey])
+        }
+        XCTAssertNil(gate)
+    }
 }

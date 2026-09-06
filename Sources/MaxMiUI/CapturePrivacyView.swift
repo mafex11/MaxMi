@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// User-facing capture-privacy strings that tests assert verbatim. MaxMi's only automatic,
+/// unasked deletion is the 30-day `capture_events` window, so it is stated on the retention card.
+public enum CapturePrivacyCopy {
+    public static let eventRetentionNote = "Activity events are kept for 30 days."
+}
+
 public struct CapturePrivacyView: View {
     @Bindable private var viewModel: CapturePrivacyViewModel
 
@@ -107,6 +113,8 @@ public struct CapturePrivacyView: View {
             VStack(alignment: .leading) {
                 Text("How long to keep memories").font(.subheadline).foregroundColor(Theme.text)
                 Text("Older memories are removed when you run cleanup in Data Controls.").font(.caption).foregroundColor(Theme.secondaryText)
+                Text(CapturePrivacyCopy.eventRetentionNote)
+                    .font(.caption).foregroundColor(Theme.tertiaryText)
             }
             Spacer()
             Picker("", selection: Binding(
