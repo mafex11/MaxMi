@@ -10,6 +10,29 @@ public struct SlackParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        extract(window: window, app: app)?.content
+    }
+
+    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        guard let extracted = extract(window: window, app: app) else { return nil }
+        return ParsedCapture(
+            sourceApp: "Slack",
+            sourceKey: key(fromTitle: app.windowTitle),
+            sourceTitle: app.windowTitle,
+            content: ContentRenderer.render(extracted.content, style: .full),
+            contentKind: .conversation,
+            parserVersion: 2,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+            structured: extracted.content,
+            truncated: extracted.truncated
+        )
+    }
+
+    private func extract(
+        window: AXNode,
+        app: AppInfo
+    ) -> (content: CapturedContent, truncated: Bool)? {
         let messages = messages(in: window, windowX: window.frame?.origin.x ?? 0)
         guard !messages.isEmpty else { return nil }
         let conversation = Conversation(
@@ -20,22 +43,9 @@ public struct SlackParser: SourceParser {
         // Newest-anchored HARD cap on the STRUCTURED value: the rendered text is derived from it,
         // so capping the string afterwards would be undone by CaptureEnvelope, and one
         // pathological message must not bloat a version unboundedly.
-        return CaptureAccumulator.boundHard(.conversation(conversation), to: Self.contentCap)
-    }
-
-    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = try parseStructured(window: window, app: app) else { return nil }
-        return ParsedCapture(
-            sourceApp: "Slack",
-            sourceKey: key(fromTitle: app.windowTitle),
-            sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(structured, style: .full),
-            contentKind: .conversation,
-            parserVersion: 2,
-            accumulationPolicy: .appendItems,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 3),
-            structured: structured
-        )
+        let unbounded = CapturedContent.conversation(conversation)
+        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        return (content, content != unbounded)
     }
 
     /// "<view> - <workspace> - Slack" -> "<view>"; else the whole title.

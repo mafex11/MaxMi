@@ -66,6 +66,7 @@ enum NativeConversationExtraction {
         let content: CapturedContent
         let sourceKey: String
         let sourceTitle: String?
+        let truncated: Bool
     }
 
     /// Throws `ParserRefusal` rather than returning nil when this window is a conversation
@@ -138,10 +139,13 @@ enum NativeConversationExtraction {
                         labelsUserAsYou: usesWhatsAppSenderLabels)
             }
         )
+        let unbounded = CapturedContent.conversation(typed)
+        let content = CaptureAccumulator.boundHard(unbounded, to: contentCap)
         return Extracted(
-            content: CaptureAccumulator.boundHard(.conversation(typed), to: contentCap),
+            content: content,
             sourceKey: "\(keyPrefix):\(slug(identity))",
-            sourceTitle: conversation ?? app.windowTitle
+            sourceTitle: conversation ?? app.windowTitle,
+            truncated: content != unbounded
         )
     }
 
@@ -169,7 +173,8 @@ enum NativeConversationExtraction {
             parserVersion: 2,
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000),
-            structured: extracted.content
+            structured: extracted.content,
+            truncated: extracted.truncated
         )
     }
 

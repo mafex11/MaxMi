@@ -13,29 +13,34 @@ public struct MessagesParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        let lines = conversationLines(in: window)
-        guard !lines.isEmpty else { return nil }
-        // Bubble order comes from the y sort in conversationLines; Phase D adds sender sides.
-        return GenericV2Content.lines(lines).map {
-            CaptureAccumulator.bound($0, to: Self.contentCap)
-        }
+        extract(window: window)?.content
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = try parseStructured(window: window, app: app) else { return nil }
+        guard let extracted = extract(window: window) else { return nil }
         return ParsedCapture(
             sourceApp: "Messages",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(structured, style: .full),
+            content: ContentRenderer.render(extracted.content, style: .full),
             contentKind: .conversation,
             parserVersion: 2,
             // Unchanged from v1: the wrapped `.lines` page is legacy-shaped, so accumulation
             // still appends across windows until the anchored parser lands in Phase D.
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3),
-            structured: structured
+            structured: extracted.content,
+            truncated: extracted.truncated
         )
+    }
+
+    private func extract(window: AXNode) -> (content: CapturedContent, truncated: Bool)? {
+        let lines = conversationLines(in: window)
+        guard !lines.isEmpty else { return nil }
+        // Bubble order comes from the y sort in conversationLines; Phase D adds sender sides.
+        guard let unbounded = GenericV2Content.lines(lines) else { return nil }
+        let content = CaptureAccumulator.bound(unbounded, to: Self.contentCap)
+        return (content, content != unbounded)
     }
 
     /// Window title is the chat name (contact or group). "Harnish" -> "imessage:harnish".

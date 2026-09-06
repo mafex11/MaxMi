@@ -31,6 +31,37 @@ final class NativeConversationParserTests: XCTestCase {
         XCTAssertFalse(capture.content.contains("Other Chat"))
     }
 
+    func testSelfBoundingCaptureReportsTruncation() throws {
+        func conversationWindow(_ bodies: [String]) -> AXNode {
+            AXNode(
+                role: "AXWindow", value: nil, title: "Project chat", url: nil,
+                frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+                children: bodies.enumerated().map { index, body in
+                    AXNode(
+                        role: "AXStaticText", value: body, title: nil, url: nil,
+                        frame: CGRect(x: 400, y: CGFloat(index * 20), width: 500, height: 18),
+                        focused: false, children: []
+                    )
+                }
+            )
+        }
+        let app = AppInfo(
+            bundleID: "com.microsoft.teams2", name: "Microsoft Teams", windowTitle: "Project chat"
+        )
+
+        let small = try XCTUnwrap(try TeamsParser().parse(
+            window: conversationWindow(["A short message"]), app: app))
+        XCTAssertFalse(small.truncated)
+
+        let oversize = try XCTUnwrap(try TeamsParser().parse(
+            window: conversationWindow((0..<200).map {
+                "message \($0) " + String(repeating: "conversation body ", count: 10)
+            }),
+            app: app
+        ))
+        XCTAssertTrue(oversize.truncated)
+    }
+
     /// Refuses rather than returning nil: nil would let the generic extractor store the sidebar
     /// chat list instead (spec 4f rule 3, refusal case).
     func testEmptyConversationRefusesInsteadOfFallingThrough() throws {

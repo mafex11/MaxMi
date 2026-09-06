@@ -28,6 +28,26 @@ final class MessagesParserTests: XCTestCase {
         XCTAssertEqual(cap.content, "hey are you free\nyes what's up\ncall me")
     }
 
+    func testSelfBoundingCaptureReportsTruncation() throws {
+        func conversationWindow(_ messages: [String]) -> AXNode {
+            node("AXWindow", nil, y: 0, messages.enumerated().map { index, message in
+                node("AXTextArea", message, y: CGFloat(index * 20))
+            })
+        }
+
+        let small = try XCTUnwrap(try MessagesParser().parse(
+            window: conversationWindow(["A short message"]), app: app("Harnish")))
+        XCTAssertFalse(small.truncated)
+
+        let oversize = try XCTUnwrap(try MessagesParser().parse(
+            window: conversationWindow((0..<120).map {
+                "message \($0) " + String(repeating: "bubble body ", count: 10)
+            }),
+            app: app("Harnish")
+        ))
+        XCTAssertTrue(oversize.truncated)
+    }
+
     func testEmptyConversationReturnsNil() throws {
         XCTAssertNil(try MessagesParser().parse(window: node("AXWindow", nil, y: 0, [node("AXButton")]), app: app("Harnish")))
     }

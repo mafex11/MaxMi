@@ -57,4 +57,24 @@ final class DiscordParserTests: XCTestCase {
         let cap = try XCTUnwrap(try DiscordParser().parse(window: win, app: app("#c | s - Discord")))
         XCTAssertTrue(cap.content.contains("message with no frame"))
     }
+
+    func testSelfBoundingCaptureReportsTruncation() throws {
+        func conversationWindow(_ messages: [String]) -> AXNode {
+            node("AXWindow", nil, x: 230, messages.map {
+                node("AXStaticText", $0, x: 460)
+            })
+        }
+
+        let small = try XCTUnwrap(try DiscordParser().parse(
+            window: conversationWindow(["A short message"]), app: app("#general | Acme - Discord")))
+        XCTAssertFalse(small.truncated)
+
+        let oversize = try XCTUnwrap(try DiscordParser().parse(
+            window: conversationWindow((0..<120).map {
+                "message \($0) " + String(repeating: "discord body ", count: 10)
+            }),
+            app: app("#general | Acme - Discord")
+        ))
+        XCTAssertTrue(oversize.truncated)
+    }
 }

@@ -25,9 +25,9 @@ public struct ParsedCapture: Sendable, Equatable {
     /// The typed shape, when this parser has been migrated. nil for an unmigrated parser, which
     /// is handed a `LegacyContentAdapter` shape by `resolvedStructured`.
     public let structured: CapturedContent?
-    /// Whether this parser dropped content to stay inside its budget. The parser is the only
-    /// thing that knows: `AppWiring` cannot infer it from the rendered length (Phase A ledger,
-    /// Task 16 deferred item).
+    /// Whether this capture itself dropped content, including during a parser's own bounding
+    /// step. The parser is the only thing that knows: `AppWiring` cannot infer it from the
+    /// rendered length (Phase A ledger, Task 16 deferred item).
     public let truncated: Bool
 
     public init(
