@@ -120,6 +120,18 @@ final class AppWiring {
     let store: Store
     let pipeline: CapturePipeline
     var observer: FocusObserver?
+    /// Focused-field typing. Nothing is persisted inside it; the LRU is in-actor memory and is
+    /// gone on quit (spec 5c).
+    var typingObserver: TypingObserver?
+    /// Gates the AX READ, per app, before it happens. `onAXNotification` fires ahead of
+    /// `FocusObserver`'s capture debounce and for every value change any element publishes, so
+    /// without this a progress bar would buy a main-actor AX round trip per tick.
+    var typingPollGate = TypingPollGate()
+    /// Thread id of the last capture that produced a typing event for a given field, so a value
+    /// change arriving BETWEEN captures is still attributable to a thread. In-memory only, bounded
+    /// to `TypingObserver.maxTrackedFields` entries, cleared on shutdown.
+    var typingThreadIDs: [FocusedFieldKey: String] = [:]
+    var typingThreadIDOrder: [FocusedFieldKey] = []
     let menuBar: MenuBarController
     var pipelineTimer: Timer?
     var captureSummaryTimer: Timer?
@@ -1004,6 +1016,14 @@ final class AppWiring {
         observer.onFocusChanged = { [weak self] app, isCapturable, pid in
             self?.handleFocusChange(app: app, isCapturable: isCapturable, pid: pid)
         }
+        // Consent and per-app exclusion are checked on the main actor in
+        // `pollFocusedFieldTyping`/`recordTypingEvent` via `isActivityEligible`; the observer's
+        // own predicate is the pure denylist guard (plan Ruling 5).
+        typingObserver = TypingObserver(isEligible: { !Denylist.isSensitiveApp($0) })
+        observer.onAXNotification = { [weak self] isValueChange, bundleID, pid in
+            guard isValueChange else { return }
+            self?.handleValueChangeNotification(bundleID: bundleID, pid: pid)
+        }
         observer.start()
         self.observer = observer
         // Pipeline sweep every 30s: picks up idle/frozen versions and due retries (spec §3a sweeper).
@@ -1198,6 +1218,9 @@ final class AppWiring {
         meetingPreparationTask = nil
         observer?.stop()
         observer = nil
+        typingObserver = nil
+        typingThreadIDs.removeAll()
+        typingThreadIDOrder.removeAll()
         meetingDetector?.stop()
         meetingDetector = nil
 
@@ -1660,6 +1683,19 @@ final class AppWiring {
                     versionID: versionID, result: result, delta: delta, trigger: trigger,
                     browserURL: browserURL, previousURL: previousURL, nowMs: nowMs
                 )
+                // The capture's own focused element is the primary source: it was resolved from
+                // the tree we already walked. `focusedElementSnapshot` is the fallback for the
+                // shapes that carry no `GenericPage` (conversations, terminals, tasks).
+                let focusedForTyping: FocusedElement? = {
+                    if case .generic(let page) = envelope.structured, let focused = page.focused {
+                        return focused
+                    }
+                    return AXReader.focusedElementSnapshot(pid: pid).map(FocusedElement.init(node:))
+                }()
+                if let focusedForTyping {
+                    recordTypingEvent(app: appInfo, focused: focusedForTyping, trigger: trigger,
+                                      threadID: eventThreadID, versionID: versionID)
+                }
             }
 
             switch result {
@@ -1860,6 +1896,97 @@ final class AppWiring {
             SafeLogger.shared.log(
                 .error, subsystem: .capture, event: .captureHealthWriteFailed
             )
+        }
+    }
+
+    /// Decides whether this value change is allowed to cost an AX read, BEFORE taking one.
+    ///
+    /// A burst is coalesced into one trailing read rather than dropped, so the last value of the
+    /// burst is still seen — which is the value the user finished typing.
+    private func handleValueChangeNotification(bundleID: String, pid: pid_t) {
+        switch typingPollGate.admit(key: bundleID, nowMs: epochNowMs()) {
+        case .read:
+            pollFocusedFieldTyping(bundleID: bundleID, pid: pid)
+        case .alreadyScheduled:
+            return
+        case .schedule(let afterMs):
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(afterMs))
+                guard let self else { return }
+                self.typingPollGate.completeScheduled(key: bundleID, nowMs: epochNowMs())
+                self.pollFocusedFieldTyping(bundleID: bundleID, pid: pid)
+            }
+        }
+    }
+
+    /// The focused field changed value without a capture running. `focusedElementSnapshot` wakes
+    /// `AXManualAccessibility` itself, so this works for Electron apps that expose nothing until
+    /// an assistive client asks. Never called directly from the notification —
+    /// `handleValueChangeNotification` gates it first.
+    private func pollFocusedFieldTyping(bundleID: String, pid: pid_t) {
+        guard !isShuttingDown, !isLifecycleSuspended,
+              isActivityEligible(bundleID: bundleID),
+              let node = AXReader.focusedElementSnapshot(pid: pid) else { return }
+        let app = AppInfo(
+            bundleID: bundleID,
+            name: NSWorkspace.shared.frontmostApplication?.localizedName ?? bundleID,
+            // BOTH window inputs, exactly as the capture path supplies them.
+            // `AXReader.focusedWindowID(pid:)` returns nil for a window with no CGWindowID, and
+            // `FocusedFieldKey` then falls back to the title — so passing `windowTitle: nil` here
+            // would mint a DIFFERENT key from the capture path for the same field, make every
+            // notification a first sighting, and emit nothing for that app forever. Both calls
+            // read `kAXTitleAttribute` of the same focused window, so the titles agree.
+            windowTitle: AXReader.focusedWindowTitle(pid: pid),
+            windowID: AXReader.focusedWindowID(pid: pid)
+        )
+        recordTypingEvent(app: app, focused: FocusedElement(node: node),
+                          trigger: .accessibilityChanged, threadID: nil, versionID: nil)
+    }
+
+    /// One `typing` event, if the observer decides the value change was meaningful. The observer
+    /// owns the emit debounce, the diff and the secure-field refusal; this method owns the thread
+    /// attribution and the DB write.
+    private func recordTypingEvent(
+        app: AppInfo,
+        focused: FocusedElement,
+        trigger: CaptureTrigger,
+        threadID: String?,
+        versionID: String?
+    ) {
+        guard let typingObserver, !focused.isSecure,
+              isActivityEligible(bundleID: app.bundleID) else { return }
+        let key = FocusedFieldKey(app: app, focused: focused)
+        // The capture path knows the thread; the poll path does not, because no capture ran. Reuse
+        // the thread the last capture of this SAME field established, so typing between captures is
+        // still attributable. nil until there has been such a capture, which is one of the reasons
+        // capture_events.thread_id is nullable (spec 12 Q4).
+        if let threadID { rememberTypingThreadID(threadID, for: key) }
+        let resolvedThreadID = threadID ?? typingThreadIDs[key]
+        let nowMs = epochNowMs()
+        Task { @MainActor [weak self] in
+            guard let event = await typingObserver.observe(focused, key: key, nowMs: nowMs),
+                  let self else { return }
+            do {
+                try self.store.recordCaptureEvent(
+                    kind: .typing, appBundle: app.bundleID, threadID: resolvedThreadID,
+                    versionID: versionID, trigger: trigger, payload: event, nowMs: nowMs
+                )
+            } catch {
+                SafeLogger.shared.log(
+                    .error, subsystem: .capture, event: .captureEventWriteFailed, error: error
+                )
+            }
+        }
+    }
+
+    /// Most-recently-used last, bounded to the same 32 fields the observer tracks — the two maps
+    /// are keyed identically, so neither can outgrow the other.
+    private func rememberTypingThreadID(_ threadID: String, for key: FocusedFieldKey) {
+        typingThreadIDOrder.removeAll { $0 == key }
+        typingThreadIDOrder.append(key)
+        typingThreadIDs[key] = threadID
+        while typingThreadIDOrder.count > TypingObserver.maxTrackedFields {
+            typingThreadIDs[typingThreadIDOrder.removeFirst()] = nil
         }
     }
 
