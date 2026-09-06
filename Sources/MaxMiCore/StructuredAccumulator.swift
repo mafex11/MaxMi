@@ -79,8 +79,27 @@ extension CaptureAccumulator {
             }
             segments.append(contentsOf: new.segments.dropFirst(old.segments.count))
             return .terminal(TerminalSession(cwd: new.cwd, segments: segments))
+        case (.generic, .generic):
+            // Legacy bridge: a not-yet-migrated parser still hands us a rendered string that
+            // `LegacyContentAdapter` shapes into `.generic`, and its declared accumulation
+            // policy has to keep working, so the string accumulator runs on the rendered
+            // texts and the result is re-adapted. Structured pages from `GenericPageExtractor`
+            // are NOT legacy-shaped and keep the `.generic` = replace rule.
+            // Phase D removes this bridge once every parser emits structured content.
+            guard policy != .replace, previous.isLegacyShaped, incoming.isLegacyShaped else {
+                return incoming
+            }
+            // `Int.max` disables the string accumulator's own ellipsis truncation: bounding is
+            // `CaptureAccumulator.bound`'s job, and it trims whole lines instead of splitting one.
+            let merged = merge(
+                previous: ContentRenderer.render(previous, style: .full),
+                incoming: ContentRenderer.render(incoming, style: .full),
+                policy: policy,
+                maxCharacters: Int.max
+            )
+            return LegacyContentAdapter.adapt(renderedContent: merged.content, kind: .generic)
         default:
-            // .document / .generic / .tasks / .calendar all replace with incoming.
+            // .document / .tasks / .calendar all replace with incoming.
             return incoming
         }
     }

@@ -187,6 +187,36 @@ final class StructuredAccumulatorTests: XCTestCase {
         XCTAssertEqual(merged.messages.count, 1, "never trim below one whole item")
     }
 
+    func testLegacyShapedGenericStillAccumulatesForUnmigratedParsers() {
+        let previous = LegacyContentAdapter.adapt(renderedContent: "Alice: one\nBob: two",
+                                                  kind: .conversation)
+        let incoming = LegacyContentAdapter.adapt(renderedContent: "Bob: two\nCarol: three",
+                                                  kind: .conversation)
+        XCTAssertTrue(previous.isLegacyShaped)
+        let result = merge(previous, incoming)
+        XCTAssertEqual(result.rendered, "Alice: one\nBob: two\nCarol: three",
+                       "an unmigrated parser's declared policy still accumulates")
+        XCTAssertEqual(result.delta.addedBlocks.map(\.text), ["Carol: three"])
+        XCTAssertTrue(result.changed)
+        XCTAssertFalse(result.delta.isFirstCapture)
+    }
+
+    func testStructuredGenericPageStillReplaces() {
+        let previous = CapturedContent.generic(GenericPage(regions: [
+            Region(kind: .main, blocks: [Block(type: .heading(level: 1), text: "Docs"),
+                                         Block(type: .paragraph, text: "old line")]),
+        ], focused: nil, url: "https://example.com/docs"))
+        let incoming = CapturedContent.generic(GenericPage(regions: [
+            Region(kind: .main, blocks: [Block(type: .heading(level: 1), text: "Docs"),
+                                         Block(type: .paragraph, text: "new line")]),
+        ], focused: nil, url: "https://example.com/docs"))
+        XCTAssertFalse(previous.isLegacyShaped)
+        let result = merge(previous, incoming)
+        XCTAssertEqual(result.content, incoming, "a structured page replaces, it never accumulates")
+        XCTAssertEqual(result.delta.addedBlocks.map(\.text), ["new line"])
+        XCTAssertEqual(result.delta.removedCount, 1)
+    }
+
     func testCaptureDeltaEmptyAndCharCounts() {
         XCTAssertTrue(CaptureDelta.empty.isEmpty)
         XCTAssertFalse(CaptureDelta.empty.isFirstCapture)

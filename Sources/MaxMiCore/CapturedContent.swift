@@ -218,6 +218,17 @@ public enum CapturedContent: Codable, Sendable, Equatable {
     case terminal(TerminalSession)
     case generic(GenericPage)
 
+    /// True only for the exact shape `LegacyContentAdapter.adapt` produces: one `.main` region
+    /// of `.paragraph` blocks, no url, no focused element. Accumulation uses it to tell a
+    /// rendered-string capture from an unmigrated parser apart from a structured page.
+    public var isLegacyShaped: Bool {
+        guard case .generic(let page) = self,
+              page.url == nil, page.focused == nil,
+              page.regions.count == 1,
+              let region = page.regions.first, region.kind == .main else { return false }
+        return region.blocks.allSatisfy { $0.type == .paragraph }
+    }
+
     /// The DEFAULT `CaptureContentKind` for this shape. Parsers may override:
     /// `.email` and `.webpage` are not derivable from the shape.
     public var kind: CaptureContentKind {
