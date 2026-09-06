@@ -16,7 +16,8 @@ final class NativeConversationParserTests: XCTestCase {
         XCTAssertEqual(capture.sourceApp, "WhatsApp")
         XCTAssertEqual(capture.sourceKey, "whatsapp:project-group")
         XCTAssertEqual(capture.sourceTitle, "Project Group")
-        XCTAssertEqual(capture.content, "Alex: Morning update\nYou: I am reviewing it")
+        XCTAssertEqual(capture.content,
+                       "(From: Alex): Morning update\n(From: You): I am reviewing it")
         XCTAssertEqual(capture.contentKind, .conversation)
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
         XCTAssertEqual(capture.parserVersion, 2)
@@ -72,7 +73,7 @@ final class NativeConversationParserTests: XCTestCase {
         XCTAssertEqual(capture.sourceKey, "whatsapp:controlled-group")
         XCTAssertEqual(
             capture.content,
-            "Alex: First controlled message\nYou: Second controlled message"
+            "(From: Alex): First controlled message\n(From: You): Second controlled message"
         )
     }
 

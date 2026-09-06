@@ -4,8 +4,19 @@ import MaxMiCore
 public struct WhatsAppParser: SourceParser {
     public init() {}
 
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try NativeConversationExtraction.extract(
+            window: window,
+            app: app,
+            sourceApp: "WhatsApp",
+            keyPrefix: "whatsapp",
+            requiresConversationIdentity: true,
+            allowsFallback: false
+        ).content
+    }
+
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        try NativeConversationExtraction.parse(
+        try NativeConversationExtraction.capture(
             window: window,
             app: app,
             sourceApp: "WhatsApp",
@@ -19,8 +30,17 @@ public struct WhatsAppParser: SourceParser {
 public struct TeamsParser: SourceParser {
     public init() {}
 
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try NativeConversationExtraction.extract(
+            window: window,
+            app: app,
+            sourceApp: "Microsoft Teams",
+            keyPrefix: "teams"
+        ).content
+    }
+
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        try NativeConversationExtraction.parse(
+        try NativeConversationExtraction.capture(
             window: window,
             app: app,
             sourceApp: "Microsoft Teams",
@@ -40,18 +60,24 @@ enum NativeConversationExtraction {
         "activity", "chat", "teams", "calendar", "apps", "copilot",
     ]
 
+    struct Extracted {
+        let content: CapturedContent
+        let sourceKey: String
+        let sourceTitle: String?
+    }
+
     /// Throws `ParserRefusal` rather than returning nil when this window is a conversation
     /// surface it will not let through. Both parsers own apps whose windows are dominated by a
     /// sidebar chat list, so a generic fall-through would store the titles of conversations the
     /// user never opened — worse than storing nothing (spec 4f rule 3, refusal case).
-    static func parse(
+    static func extract(
         window: AXNode,
         app: AppInfo,
         sourceApp: String,
         keyPrefix: String,
         requiresConversationIdentity: Bool = false,
         allowsFallback: Bool = true
-    ) throws -> ParsedCapture {
+    ) throws -> Extracted {
         let boundary = mainPaneBoundary(window)
         let conversation = conversationTitle(
             in: window,
@@ -83,17 +109,64 @@ enum NativeConversationExtraction {
             throw ParserRefusal(reason: "unconfirmed-conversation-identity")
         }
 
-        let content = String(lines.joined(separator: "\n").suffix(contentCap))
         let identity = conversation ?? meaningfulWindowTitle(app.windowTitle, excluding: sourceApp) ?? "unknown"
+        let typed = Conversation(
+            channel: identity,
+            // WhatsApp and Teams headers expose no group marker; Phase D's anchored parsers
+            // read the participant list.
+            isGroup: false,
+            messages: lines.compactMap(message(fromLine:))
+        )
+        return Extracted(
+            content: CaptureAccumulator.bound(.conversation(typed), to: contentCap),
+            sourceKey: "\(keyPrefix):\(slug(identity))",
+            sourceTitle: conversation ?? app.windowTitle
+        )
+    }
+
+    static func capture(
+        window: AXNode,
+        app: AppInfo,
+        sourceApp: String,
+        keyPrefix: String,
+        requiresConversationIdentity: Bool = false,
+        allowsFallback: Bool = true
+    ) throws -> ParsedCapture {
+        let extracted = try extract(
+            window: window, app: app, sourceApp: sourceApp, keyPrefix: keyPrefix,
+            requiresConversationIdentity: requiresConversationIdentity,
+            allowsFallback: allowsFallback
+        )
         return ParsedCapture(
             sourceApp: sourceApp,
-            sourceKey: "\(keyPrefix):\(slug(identity))",
-            sourceTitle: conversation ?? app.windowTitle,
-            content: content,
+            sourceKey: extracted.sourceKey,
+            sourceTitle: extracted.sourceTitle,
+            content: ContentRenderer.render(extracted.content, style: .full),
             contentKind: .conversation,
             parserVersion: 2,
             accumulationPolicy: .appendItems,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
+            offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000),
+            structured: extracted.content
+        )
+    }
+
+    /// `atomicMessageLine` produced "sender: body" or a bare joined line. Split the same way.
+    static func message(fromLine line: String) -> Message? {
+        guard !line.isEmpty else { return nil }
+        var sender = "unknown"
+        var text = line
+        if let separator = line.range(of: ": "),
+           line.distance(from: line.startIndex, to: separator.lowerBound) <= 80 {
+            sender = String(line[..<separator.lowerBound])
+            text = String(line[separator.upperBound...])
+        }
+        return Message(
+            id: Message.makeID(sender: sender, timeString: nil, text: text),
+            sender: sender, text: text, timestamp: nil, timeString: nil,
+            // No outgoing/bubble-side signal survives this AX walk: `collectMessageContainers`
+            // keeps only each container's text, so the sender is whatever the app printed
+            // (WhatsApp prints "You" itself). Phase D's anchored parsers read bubble alignment.
+            isUser: false, isDraft: false
         )
     }
 
