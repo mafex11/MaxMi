@@ -41,6 +41,47 @@ public struct FocusedFieldKey: Hashable, Sendable {
     }
 }
 
+/// Thread attribution identity for typing: the app and focused window, deliberately excluding the
+/// focused field's role and identifier. A capture establishes the current thread for its window;
+/// later value notifications may come from a different field in that same window.
+public struct TypingThreadKey: Hashable, Sendable {
+    public let bundleID: String
+    public let window: String?
+
+    public init(fieldKey: FocusedFieldKey) {
+        bundleID = fieldKey.bundleID
+        window = fieldKey.window
+    }
+}
+
+/// Resolves a typing event's thread without coupling the executable's LRU storage to field
+/// identity. The capture's direct attribution wins; notification-only events use the most recent
+/// capture for the same app window.
+public enum TypingThreadAttribution {
+    public static func resolve(
+        explicitThreadID: String?,
+        rememberedThreadIDs: [TypingThreadKey: String],
+        for key: TypingThreadKey
+    ) -> String? {
+        explicitThreadID ?? rememberedThreadIDs[key]
+    }
+}
+
+/// Final write gate for a typing event after `TypingObserver.observe` resumes. The eligibility
+/// state may have changed while the actor was suspended, so an observed event is not persistable
+/// unless the activity gate and capture lifecycle are still active.
+public enum TypingEventPersistenceDecision {
+    public static func eventToPersist(
+        _ event: TypingEvent,
+        isActivityEligible: Bool,
+        isObserverActive: Bool,
+        isCaptureLifecycleActive: Bool
+    ) -> TypingEvent? {
+        guard isActivityEligible, isObserverActive, isCaptureLifecycleActive else { return nil }
+        return event
+    }
+}
+
 /// Pre-read time gate for `kAXValueChangedNotification`, keyed per app.
 ///
 /// `FocusObserver.onAXNotification` fires for EVERY notification the app-level `AXObserver`
@@ -141,7 +182,10 @@ public enum TypingDiff {
         let inserted = String(newChars[prefix..<(newChars.count - suffix)])
         let removed = String(oldChars[prefix..<(oldChars.count - suffix)])
         if removed.isEmpty {
-            return inserted.isEmpty ? nil : Change(insertedText: inserted, replaced: false)
+            return inserted.isEmpty ? nil : Change(
+                insertedText: String(inserted.suffix(max(0, maxReplacedTailChars))),
+                replaced: false
+            )
         }
         return Change(insertedText: String(newChars.suffix(max(0, maxReplacedTailChars))),
                       replaced: true)

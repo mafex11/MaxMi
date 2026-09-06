@@ -127,11 +127,11 @@ final class AppWiring {
     /// `FocusObserver`'s capture debounce and for every value change any element publishes, so
     /// without this a progress bar would buy a main-actor AX round trip per tick.
     var typingPollGate = TypingPollGate()
-    /// Thread id of the last capture that produced a typing event for a given field, so a value
-    /// change arriving BETWEEN captures is still attributable to a thread. In-memory only, bounded
-    /// to `TypingObserver.maxTrackedFields` entries, cleared on shutdown.
-    var typingThreadIDs: [FocusedFieldKey: String] = [:]
-    var typingThreadIDOrder: [FocusedFieldKey] = []
+    /// Thread id of the last capture for a given app window, so a value change arriving BETWEEN
+    /// captures is still attributable even when a different focused field emits it. In-memory
+    /// only, bounded to `TypingObserver.maxTrackedFields` entries, cleared on shutdown.
+    var typingThreadIDs: [TypingThreadKey: String] = [:]
+    var typingThreadIDOrder: [TypingThreadKey] = []
     let menuBar: MenuBarController
     var pipelineTimer: Timer?
     var captureSummaryTimer: Timer?
@@ -1953,19 +1953,35 @@ final class AppWiring {
         threadID: String?,
         versionID: String?
     ) {
-        guard let typingObserver, !focused.isSecure,
+        guard let typingObserver, !focused.isSecure, !isShuttingDown, !isLifecycleSuspended,
               isActivityEligible(bundleID: app.bundleID) else { return }
-        let key = FocusedFieldKey(app: app, focused: focused)
+        let fieldKey = FocusedFieldKey(app: app, focused: focused)
+        let threadKey = TypingThreadKey(fieldKey: fieldKey)
         // The capture path knows the thread; the poll path does not, because no capture ran. Reuse
-        // the thread the last capture of this SAME field established, so typing between captures is
-        // still attributable. nil until there has been such a capture, which is one of the reasons
-        // capture_events.thread_id is nullable (spec 12 Q4).
-        if let threadID { rememberTypingThreadID(threadID, for: key) }
-        let resolvedThreadID = threadID ?? typingThreadIDs[key]
+        // the thread the latest capture in this SAME app window established, so typing between
+        // captures is still attributable even if a different focused field emitted it. nil until
+        // there has been such a capture, which is one reason capture_events.thread_id is nullable.
+        if let threadID { rememberTypingThreadID(threadID, for: threadKey) }
+        let resolvedThreadID = TypingThreadAttribution.resolve(
+            explicitThreadID: threadID, rememberedThreadIDs: typingThreadIDs, for: threadKey
+        )
         let nowMs = epochNowMs()
         Task { @MainActor [weak self] in
-            guard let event = await typingObserver.observe(focused, key: key, nowMs: nowMs),
+            guard let observedEvent = await typingObserver.observe(
+                focused, key: fieldKey, nowMs: nowMs
+            ),
                   let self else { return }
+            guard let event = TypingEventPersistenceDecision.eventToPersist(
+                observedEvent,
+                isActivityEligible: self.isActivityEligible(bundleID: app.bundleID),
+                isObserverActive: self.typingObserver != nil,
+                isCaptureLifecycleActive: !self.isShuttingDown && !self.isLifecycleSuspended
+            ) else {
+                SafeLogger.shared.log(
+                    .info, subsystem: .capture, event: .typingEventDropped
+                )
+                return
+            }
             do {
                 try self.store.recordCaptureEvent(
                     kind: .typing, appBundle: app.bundleID, threadID: resolvedThreadID,
@@ -1979,9 +1995,9 @@ final class AppWiring {
         }
     }
 
-    /// Most-recently-used last, bounded to the same 32 fields the observer tracks — the two maps
-    /// are keyed identically, so neither can outgrow the other.
-    private func rememberTypingThreadID(_ threadID: String, for key: FocusedFieldKey) {
+    /// Most-recently-used last, bounded to the observer's field limit. Thread attribution keys
+    /// windows rather than fields, so several fields in one window share one remembered thread.
+    private func rememberTypingThreadID(_ threadID: String, for key: TypingThreadKey) {
         typingThreadIDOrder.removeAll { $0 == key }
         typingThreadIDOrder.append(key)
         typingThreadIDs[key] = threadID

@@ -43,8 +43,8 @@ public struct NavigationEventPayload: Codable, Sendable, Equatable {
 /// (`MaxMiCapture`), stored as a `typing` event, and read back by `TimelineBuilder`
 /// (`MaxMiActivity`) — which is why it lives here rather than next to the observer.
 public struct TypingEvent: Codable, Sendable, Equatable {
-    /// The inserted run when `replaced == false`; the new value's trailing
-    /// `TypingObserver.maxReplacedTailChars` characters when `replaced == true`.
+    /// The inserted run's trailing `TypingObserver.maxReplacedTailChars` characters when
+    /// `replaced == false`; the new value's trailing same-sized tail when `replaced == true`.
     public let insertedText: String
     public let fieldRole: String
     public let fieldIdentifier: String?

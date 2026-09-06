@@ -46,6 +46,16 @@ final class TypingObserverTests: XCTestCase {
         XCTAssertEqual(change.insertedText, String(new.suffix(500)))
     }
 
+    func testLongPureInsertionCarriesOnlyTheTail() throws {
+        let inserted = String(repeating: "a", count: 1_500) + String(repeating: "b", count: 500)
+        let change = try XCTUnwrap(
+            TypingDiff.diff(old: "", new: inserted, maxReplacedTailChars: 500)
+        )
+        XCTAssertEqual(change.insertedText.count, 500)
+        XCTAssertEqual(change.insertedText, String(inserted.suffix(500)))
+        XCTAssertFalse(change.replaced)
+    }
+
     func testClearingTheFieldIsAReplacementWithAnEmptyTail() throws {
         let change = try XCTUnwrap(TypingDiff.diff(old: "abc", new: "", maxReplacedTailChars: 500))
         XCTAssertTrue(change.replaced)
@@ -156,6 +166,25 @@ final class TypingObserverTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    func testPersistenceDecisionDropsObservedEventWhenConsentIsRevokedAfterAwait() async throws {
+        let observer = observer()
+        var consentGranted = true
+        _ = await observer.observe(field("a"), key: key(), nowMs: t0)
+        let result = await observer.observe(field("ab"), key: key(), nowMs: t0 + 1_000)
+        let observed = try XCTUnwrap(result)
+        XCTAssertTrue(consentGranted)
+        consentGranted = false
+
+        let persisted = TypingEventPersistenceDecision.eventToPersist(
+            observed,
+            isActivityEligible: consentGranted,
+            isObserverActive: true,
+            isCaptureLifecycleActive: true
+        )
+
+        XCTAssertNil(persisted)
+    }
+
     func testLRUEvictsBeyondThirtyTwoFields() async {
         let observer = observer()
         for index in 0..<(TypingObserver.maxTrackedFields + 8) {
@@ -213,6 +242,25 @@ final class TypingObserverTests: XCTestCase {
             FocusedFieldKey(bundleID: "com.example.chat", windowID: nil, windowTitle: nil,
                             role: "AXTextArea", identifier: "composer"),
             "a poll path that forgot the title must not silently agree")
+    }
+
+    func testTypingThreadAttributionFallsBackAcrossFieldsInTheSameWindow() {
+        let composerField = key(identifier: "composer")
+        let searchField = key(identifier: "search")
+        XCTAssertNotEqual(composerField, searchField)
+        let composer = TypingThreadKey(fieldKey: composerField)
+        let search = TypingThreadKey(fieldKey: searchField)
+        XCTAssertEqual(composer, search)
+        let remembered = [composer: "thread-general"]
+
+        XCTAssertEqual(
+            TypingThreadAttribution.resolve(
+                explicitThreadID: nil,
+                rememberedThreadIDs: remembered,
+                for: search
+            ),
+            "thread-general"
+        )
     }
 
     // MARK: - TypingPollGate
