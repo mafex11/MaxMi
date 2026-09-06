@@ -69,7 +69,7 @@ final class StructuredNativeParserTests: XCTestCase {
         XCTAssertTrue(capture.content.hasPrefix("- [x] "))
     }
 
-    func testPagesDocumentUsesStableTitleAndLargerRollingPolicy() throws {
+    func testPagesDocumentUsesStableTitleAndWholePagePolicy() throws {
         let app = AppInfo(
             bundleID: "com.apple.iWork.Pages", name: "Pages", windowTitle: "Project brief — Pages"
         )
@@ -78,9 +78,13 @@ final class StructuredNativeParserTests: XCTestCase {
         ))
         XCTAssertEqual(capture.sourceKey, "pages:project-brief")
         XCTAssertEqual(capture.contentKind, .document)
-        XCTAssertEqual(capture.accumulationPolicy, .rollingText)
+        // Generic v2 emits the whole window, so each extraction supersedes the previous one.
+        XCTAssertEqual(capture.accumulationPolicy, .replace)
         XCTAssertEqual(capture.offscreenPolicy.maxSteps, 6)
+        XCTAssertEqual(try XCTUnwrap(capture.structured).kind, .generic)
         XCTAssertTrue(capture.content.contains("Implementation notes"))
+        // v2 sees the heading level `DocumentExtraction.bodyText` discarded.
+        XCTAssertTrue(capture.content.contains("# Project brief"))
     }
 
     func testOutlookVisibleMessageUsesEmailProfile() throws {

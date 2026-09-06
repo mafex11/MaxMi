@@ -79,6 +79,9 @@ public struct WordParser: SourceParser {
             titleSuffixes: [" - Microsoft Word", " — Microsoft Word"]
         )
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.documentContent(window: window)
+    }
 }
 
 public struct PagesParser: SourceParser {
@@ -89,6 +92,9 @@ public struct PagesParser: SourceParser {
             titleSuffixes: [" - Pages", " — Pages"]
         )
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.documentContent(window: window)
+    }
 }
 
 public struct OutlookParser: SourceParser {
@@ -96,12 +102,18 @@ public struct OutlookParser: SourceParser {
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.email(window: window, app: app, sourceApp: "Outlook", prefix: "outlook")
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.emailContent(window: window)
+    }
 }
 
 public struct SparkParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.email(window: window, app: app, sourceApp: "Spark", prefix: "spark")
+    }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.emailContent(window: window)
     }
 }
 
@@ -231,6 +243,19 @@ enum StructuredEntityExtraction {
         )
     }
 
+    static let documentOffscreen: OffscreenCapturePolicy =
+        .accessibilityScroll(maxSteps: 6, maxCharacters: 96_000)
+    static let emailOffscreen: OffscreenCapturePolicy =
+        .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
+    /// Preserves the 32_000 cap `DocumentExtraction.bodyText` applied here.
+    static let pageBudget = 32_000
+
+    /// Generic v2 over the whole window. The anchored document parsers land in Phase D.
+    static func documentContent(window: AXNode) -> CapturedContent? {
+        GenericV2Content.page(window: window, budget: pageBudget,
+                              offscreenPolicy: documentOffscreen)
+    }
+
     static func document(
         window: AXNode,
         app: AppInfo,
@@ -238,8 +263,7 @@ enum StructuredEntityExtraction {
         prefix: String,
         titleSuffixes: [String]
     ) -> ParsedCapture? {
-        let content = DocumentExtraction.bodyText(in: window, maxCharacters: 32_000)
-        guard !content.isEmpty else { return nil }
+        guard let structured = documentContent(window: window) else { return nil }
         var title = app.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         for suffix in titleSuffixes where title.hasSuffix(suffix) {
             title.removeLast(suffix.count)
@@ -249,12 +273,19 @@ enum StructuredEntityExtraction {
             sourceApp: sourceApp,
             sourceKey: "\(prefix):\(docSlug(title))",
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(structured, style: .full),
             contentKind: .document,
             parserVersion: 2,
-            accumulationPolicy: .rollingText,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 6, maxCharacters: 96_000)
+            // Whole-page semantics (spec 4d): each extraction is the window's current state.
+            accumulationPolicy: .replace,
+            offscreenPolicy: documentOffscreen,
+            structured: structured
         )
+    }
+
+    static func emailContent(window: AXNode) -> CapturedContent? {
+        GenericV2Content.page(window: window, budget: pageBudget,
+                              offscreenPolicy: emailOffscreen)
     }
 
     static func email(
@@ -263,18 +294,20 @@ enum StructuredEntityExtraction {
         sourceApp: String,
         prefix: String
     ) -> ParsedCapture? {
-        let content = DocumentExtraction.bodyText(in: window, maxCharacters: 32_000)
-        guard !content.isEmpty else { return nil }
+        guard let structured = emailContent(window: window) else { return nil }
         let title = meaningfulWindowTitle(app.windowTitle, excluding: [sourceApp]) ?? "message"
         return ParsedCapture(
             sourceApp: sourceApp,
             sourceKey: "\(prefix):message:\(shortHash(title))",
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(structured, style: .full),
+            // Outlook and Spark expose no sender or date, so they stay a page — but the kind
+            // is still .email (spec 12 Q3).
             contentKind: .email,
             parserVersion: 2,
-            accumulationPolicy: .rollingText,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
+            accumulationPolicy: .replace,
+            offscreenPolicy: emailOffscreen,
+            structured: structured
         )
     }
 
@@ -354,10 +387,6 @@ enum StructuredEntityExtraction {
 
     private static func shortHash(_ value: String) -> String {
         String(ContentHash.sha256Hex(value).prefix(24))
-    }
-
-    private static func bounded(_ value: String) -> String {
-        String(value.suffix(32_000))
     }
 
     private static func isChrome(_ value: String) -> Bool {
