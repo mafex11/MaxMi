@@ -1,7 +1,7 @@
 # MaxMi — M8: Structured Capture (typed captures, deltas, action-grounded summaries)
 
 **Date:** 2026-09-06
-**Status:** Design, decided. All decisions in §3-§7 are architect-final; §12 is the decisions log for every place the code contradicted the design brief (nothing was silently redesigned, nothing left open). Next step is the Codex review pass in §13.
+**Status:** Design, decided. All decisions in §3-§7 are architect-final; §12 is the decisions log for every place the code contradicted the design brief (nothing was silently redesigned, nothing left open). **§14 holds three scope additions approved on 2026-09-07**, after Phase A shipped — raw-content embedding, five host-routed web-app parsers, and the daily check-in — with their contradictions logged as §12 Q16-Q22. Next step is the Codex review pass in §13.
 **Milestone:** M8 — the *quality* milestone. M1-M5 built capture, M6 built synthesis + UI, M7 (team sharing) is permanently dropped. M8 fixes the thing that makes the whole stack feel dumb: captures are unstructured AX text dumps, so summaries describe the dump instead of the user, and the hourly agent builds todos on top of those weak summaries.
 **North star:** exceed Minimi. Minimi has a typed four-shape parser contract and feeds its hourly review RAW versions with metadata; it does NOT do region detection, table-row joining, focused-element capture, or deltas. M8 adopts the typed contract and the raw-versions review shape, then adds the four things Minimi lacks.
 
@@ -50,10 +50,15 @@ Every claim below was read out of the tree at `5c627e8`.
 - **No system-wide keystroke tap.** No `CGEventTap`, no `NSEvent.addGlobalMonitorForEvents`, ever. Typing is only ever inferred from an accessibility field's value.
 - **No PII/email redaction inside captured content** beyond the existing app + domain denylist (`Denylist.isSensitiveApp`, `isBlockedWebURL`, `isBlockedByUser`, `isBlocked`). Minimi does not redact either; parity was chosen deliberately.
 - **The hourly todo agent's UI** and the future double-tap-Option todo panel are **M9**, out of scope here. M8 changes only what the agent is *fed*.
-- **No reminders and no reminder slots.** Reminder scheduling arrives with **M9** (the todo panel), which will add the `agent_action_items` columns and the slot legend together. M8 neither stores nor mentions slots.
+- **No reminders and no reminder slots.** Reminder scheduling arrives with **M9** (the todo panel), which will add the `agent_action_items` columns and the slot legend together. M8 neither stores nor mentions slots. **This is unchanged by the 2026-09-07 additions:** §14c's daily check-in schedules nothing and sends no slot vocabulary (§12 Q9 stands).
 - **Team sharing (M7) stays permanently dropped.**
 - **No OCR, no screenshots, no new capture modality.**
-- No change to the MCP tool surface (`search_memory`, `list_active_threads`, `get_latest_context` keep their shapes).
+- No change to the MCP tool **request** surface: `search_memory`, `list_active_threads` and `get_latest_context` keep their names, arguments and required fields. **Amended 2026-09-07:** `search_memory`'s *response text* now gains a `### Matching context` section (§14a); its request shape is still byte-identical and `structured` is still never exposed.
+
+**Formerly non-goals, now in scope (architect decisions, 2026-09-07 — see §14)**
+- **Raw-content embedding is no longer deferred.** §12 Q15's facts-only decision is reversed: M8 embeds one vector per committed version into a new `context_embeddings` `vec0` table and `search_memory` searches it alongside fact embeddings. Implemented in **Phase C** (§14a).
+- **The daily morning check-in moves from M9 into Phase C.** One short second-person briefing per day, stored in a new `checkins` table and surfaced as a Today card at the top of the menu-bar popover (§14c). Only the check-in moves; the rest of the M9 todo panel does not.
+- **Five web-app parsers by host** (Gmail, LinkedIn messaging, Outlook web, Slack web, Teams web) are added as **Phase D tasks 22-26** (§14b). This widens Phase D's parser table; it changes no contract.
 
 ## 4. Phase A — typed capture contract + generic flattener v2
 
@@ -429,6 +434,8 @@ Phase A migration table:
 ### 4g. MCP — unchanged
 
 `search_memory`, `list_active_threads`, `get_latest_context` keep their request and response shapes and keep reading `content` (`Sources/MaxMiMCP/Tools.swift:23,32,40`). Exposing `structured` over MCP is explicitly out of scope.
+
+**Amended 2026-09-07 (§14a):** still true for every *request* shape, and `structured` is still never exposed. The one exception is `search_memory`'s **response text**, which gains a `### Matching context` section listing raw-content hits. `MaxMiToolsDefinitions.all` is untouched.
 
 ## 5. Phase B — deltas, events, focused-field typing diff
 
@@ -882,6 +889,8 @@ public protocol StructuredParser: Sendable {
 | Calendar | `.calendar` | Existing `StructuredEntityExtraction.preferredDetailRoot` anchor, retyped. |
 | Reminders | `.tasks` | Existing `StructuredEntityExtraction.task` anchor, retyped; `status` from the row's `AXCheckBox` value. |
 
+**Amended 2026-09-07:** five more parsers, registered by **host** rather than bundle ID — Gmail, LinkedIn messaging, Outlook web, Slack web, Teams web — are specified in **§14b** and become Phase D tasks 22-26. They add no new contract; they extend this table over `ParserConfig.hosts`.
+
 ### 7d. Fixture tooling
 
 There is no tool today that records an AX snapshot as JSON — `tools/ax-structure-inventory.swift` prints role-count TSV and deliberately emits no attribute values (§12 Q11). Phase D adds `tools/ax-snapshot-record.swift <bundle-id> <out.json>`, which walks the focused window with the same budgets as `AXReader.snapshotFrontmostWindow` (`maxNodes: 20_000`, `maxDepth: 40`) and writes the `Codable` `AXNode` directly. Per `Tests/MaxMiCaptureTests/Fixtures/README.md`, recorded fixtures must be **hand-scrubbed** before commit — no real page text, messages, file contents, URLs, names, or tokens.
@@ -936,7 +945,7 @@ Conflict surface between B/C and D is small and known: both touch `ParserRegistr
 
 ## 12. Decisions log — where the code contradicted the brief
 
-Nothing below was silently redesigned. Each item states what the brief assumed, what the code actually is, and the decision that was taken. All fifteen are settled; none is still open.
+Nothing below was silently redesigned. Each item states what the brief assumed, what the code actually is, and the decision that was taken. All twenty-two are settled; none is still open. Q1-Q15 are from the 2026-09-06 design pass; Q16-Q22 are the contradictions the 2026-09-07 scope additions (§14) hit.
 
 **Q1 — `AXNode` has no `subrole` and no separate `description`.** The brief said to verify `AXSnapshot.swift` fields "role, subrole, title, description, value, identifier, url, frame, focused, children, label" and to add only the DOM attributes in Phase D. In fact `AXNode` (`AXSnapshot.swift:3-12`) has exactly `role, value, title, url, frame, focused, children, identifier, label`, and `AXReader.swift:75-76` folds `kAXDescriptionAttribute ?? kAXHelpAttribute` into `label` — so `description` is not separable today. **Decision:** since Phase A's region detection depends on `AXSubrole` (`AXLandmarkMain`, `AXDialog`, `AXSecureTextField`), the attribute additions `subrole`, `headingLevel`, `selected`, `placeholder`, `selectedText`, and `hidden` moved into **Phase A** (§4e); only `domClassList`/`domIdentifier` stay in Phase D; and the DSL's `description` is an explicit alias of `label`.
 
@@ -987,6 +996,187 @@ Nothing below was silently redesigned. Each item states what the brief assumed, 
 - §4d — clarified (no behaviour change) that conversation union by `Message.id` COLLAPSES an identical message repeated in one window: sender + time + text is the identity, so two indistinguishable bubbles are one message. A browser test asserting the opposite was rewritten to this contract.
 - §4f — `ParsedCapture.resolvedStructured` is internal: nothing outside `MaxMiCapture` resolves a nil `structured`.
 
+**Amendments (2026-09-07, scope additions — §14)**
+
+Three additions the architect approved on 2026-09-07. Each bullet below records what changed and where; the seven contradictions they hit are Q16-Q22 underneath.
+
+- §3 Non-goals / §12 Q15 — **raw-content embedding is no longer deferred.** Q15's facts-only decision is reversed. M8 embeds one vector per committed version into a new `context_embeddings` `vec0` table (migration `v11`) and `search_memory` runs KNN over it as well as over `derivative_embeddings`. Specified in §14a; implemented in **Phase C**. Q15's cost analysis still holds — embedding calls roughly double — and the architect accepted that cost on 2026-09-07 in exchange for the recall gap it closes.
+- §3 Non-goals / §4g — **the MCP non-goal is narrowed from "shapes" to "request shapes."** `search_memory`'s response text gains a `### Matching context` section (§14a); its name, arguments, required fields and the "`structured` is never exposed" rule are all unchanged. `MCPStructuredNoChangeTests` is updated deliberately for exactly that one section and for nothing else. §4g carries the same cross-reference.
+- §3 Non-goals — **the daily morning check-in moves from M9 into Phase C** (§14c): a new `checkins` table (migration `v12`, or folded into `v11` if Phase C ships both migrations together — the plan decides and says which), an `AgentPrompts.dailyCheckin` prompt, and a Today card at the top of the `MaxMiUI` popover. **Reminders and reminder slots stay in M9** — Q9 is unchanged, and §14c stores no `remind_at` and sends no slot legend.
+- §4c / §5b / §14a / §14c — **migration identifiers are now allocated in ship order, not per section.** The tree is at `v10` (`Migrations.currentIdentifier = "v10"`, Phase A merged). §5b already declares `v11` for Phase B's `capture_events`; §14a declares `v11` for `context_embeddings` and §14c declares `v12` for `checkins`. These are *relative* labels — Phase B and Phase C are independently shippable (§10) and either can land first, so whichever migration lands first takes `v11` and the rest follow in sequence. Each phase's implementation plan pins its absolute identifier and bumps `Migrations.currentIdentifier` to match. All three migrations are additive and mutually independent, so the ordering is free. `DatabaseRecovery` needs no edit in any ordering: its accept-set is `Set(Migrations.migrator.migrations)` and its head check reads `Migrations.currentIdentifier` (`DatabaseRecovery.swift:106,132`), both derived from the migrator.
+- §7c / Phase D plan — **five web-app parsers registered by host** (Gmail, LinkedIn messaging, Outlook web, Slack web, Teams web) are specified in §14b and appended to the Phase D plan as **tasks 22-26**, after its existing Task 21. They introduce no new type, table or migration; they use `ParserConfig.hosts`, which the Phase D plan already adds in Task 5 for exactly this purpose. Every DOM anchor in §14b is flagged as a **candidate** that must be verified against a live `tools/ax-snapshot-record.swift` dump before use, with the verified set recorded in each parser's header comment.
+
+**Q16 — a `vec0` virtual table cannot take a `REFERENCES … ON DELETE CASCADE` clause.** The §14a decision declares `context_embeddings(version_id TEXT PRIMARY KEY REFERENCES versions(id) ON DELETE CASCADE, embedding FLOAT[1536])`. `vec0` accepts neither foreign keys nor `ON DELETE`, which is exactly why the existing `derivative_embeddings` declaration (`Migrations.swift:57-62`) has no FK clause either. **Decision:** keep the cascade as *semantics* and drop it from the DDL — the table is declared in `derivative_embeddings`' style, and the deletes are done explicitly in the two places that already do this for `derivative_embeddings`: `MemoryDataControls.pruneMemory(olderThan:)` (which deletes from `derivative_embeddings` by subquery before deleting versions, `MemoryDataControls.swift:109-127`) and `deleteAllMemory()` (`:157`).
+
+**Q17 — `search_memory`'s cursor pagination is fact-shaped and stays fact-shaped.** `MemoryQueries.searchMemory` counts results, decides `hasMore`, and mints the next cursor from the `factHits` page alone. Making context hits paginate too would change the cursor's meaning and therefore the response contract for existing callers. **Decision:** context hits are supplementary — capped at 5, never paginated, excluded from the `_N results in this page_` count and from the cursor footer. The 0.75 floor is applied to them identically, after the same L2→cosine conversion `factHits` performs.
+
+**Q18 — `StructuredParser.parse(_:context:)` cannot throw, so a Phase D parser cannot raise `ParserRefusal` directly.** §14b's refusal rule (refuse only for a compose-only window with an empty draft) assumes a throwing parse. The Phase D protocol is `func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent?` (§7b, Phase D Task 5) — non-throwing by design, because `nil` is its NOT_HANDLED channel. `ParserRefusal` is thrown today only from the `SourceParser` path (`NativeConversationParser.swift:113,118`). **Decision:** the refusal stands but moves one layer out — the `StructuredParser` returns nil and the app's `SourceParser.parse(window:app:)` bridge throws `ParserRefusal` for the empty-compose case, which is where refusals already live and where `CaptureDispatch` already catches them (`ParserRegistry.swift:133`).
+
+**Q19 — `CapturePipeline` cannot reach `MaxMiActivity`, so the check-in cannot be triggered from inside it.** §14c specifies "first pipeline tick at or after 08:00". `CapturePipeline` is in `MaxMiCore`; `AgentPrompts` / `CheckinInputBuilder` are in `MaxMiActivity`, which depends on `MaxMiCore` (`Package.swift:51`) — the dependency cannot be inverted. **Decision:** the trigger is the `AppWiring` timer that *calls* `CapturePipeline.tick()`, not `CapturePipeline` itself. This is exactly how the hourly agent is already driven, so it adds no new wiring shape. §14a's embedding, by contrast, genuinely does live inside `CapturePipeline`, because it needs only `MemoryRelay.embed` and `MemoryStore`.
+
+**Q20 — `agent_action_items` has no `created_at` column.** §14c's input list asks for each open item's `created_at`. The column is **`detected_at`** (`Migrations.swift:138-146`); the table's other timestamps are `updated_at` and `resolved_at`. **Decision:** read `detected_at` and compute age from it — the same mapping §6d already makes when it exposes the field as `ReviewOpenItem.createdAt`. Items resolved yesterday are found by `resolved_at` bucketed with `Store.dayBucket(forMs:timeZone:)`.
+
+**Q21 — `activity_app_visits` has no `thread_id`, so "yesterday's top 5 threads by visit time" is not a query the table can answer.** §14c's no-timeline fallback asks for it. The table is `(id, app_bundle, app_label, started_at, ended_at, day_bucket)` (`Migrations.swift:96-98`) — visits are per app, not per thread. **Decision:** the fallback ranks the **top 5 apps** by summed visit time for yesterday's `day_bucket` and joins in the `source_title` of each app's most recent `latest_contexts` row, which is the closest honest reading of the intent. The fallback also disappears entirely once Phase B's `TimelineBuilder` is available, which is the normal case.
+
+**Q22 — `StoreAPI.pendingWork` neither selects `structured_ciphertext` nor re-qualifies a version whose only failure was the context embedding.** §14a needs a `.compact(maxChars: 6_000)` render, but `pendingWork` reads `v.content` only; and its gate is `v.extract_status = 'pending'` with a retry-deferral predicate hardcoded to `r.kind = 'extract'` (`StoreAPI.swift:250-273`), so once `markExtracted` sets `'completed'`, no `embed_version` retry row can bring that version back. **Decision:** two narrow additions rather than a new state machine — `pendingWork` selects `structured_ciphertext` and populates `PipelineVersion.compactContent` / `.sourceTitle` where it already decrypts (`CapturePipeline` never renders); and Phase C adds a separate "versions with no `context_embeddings` row" query, so the retry queue stays what its comment already calls it — a wake-up list — and the missing-embedding fact lives in the index, not in a status column.
+
 ## 13. Rollout
 
 Per the established M5/M6 workflow: **spec → Codex review → revise → implementation plan per phase → Codex review of the plan → revise → subagent-driven build → Codex review of the implementation → revise → live verify.** Phase A's plan lands first and must include the `AXNode`/`AXReader` attribute additions, because both B and D build on them. Phase D runs in its own worktree in parallel with B/C.
+
+## 14. Scope additions (2026-09-07)
+
+Three additions the architect approved on 2026-09-07, after §1-§13 was settled. They **expand** the design; nothing in §4-§7 is redesigned. §14a and §14c land in **Phase C**; §14b becomes **Phase D tasks 22-26**, appended to `docs/superpowers/plans/2026-09-06-maxmi-m8d-ax-query-dsl-and-parsers.md` (which ends at Task 21). Every place one of these additions contradicts the tree, or contradicts earlier spec text, is recorded in §12's 2026-09-07 amendments list — the decision stands and the code moves.
+
+### 14a. Raw-content embedding (Phase C)
+
+**Purpose.** §12 Q15 recorded that Minimi embeds both each extracted memory sentence *and* the full raw rendered content of every capture, and decided facts-only for M8. That decision is **reversed**: fact embeddings alone cannot retrieve a phrase the extractor never turned into a fact, which is the single largest recall gap against Minimi. M8 now embeds one vector per committed version alongside the existing per-derivative vectors, and `search_memory` searches both.
+
+**Data model.** A second `vec0` virtual table, declared in the same style as `derivative_embeddings` (`Migrations.swift:57-62`):
+
+```sql
+-- Migrations.swift: m.registerMigration("v11")
+CREATE VIRTUAL TABLE context_embeddings USING vec0(
+  version_id TEXT PRIMARY KEY,
+  embedding  FLOAT[1536]
+);
+```
+
+Additive; `Migrations.currentIdentifier` becomes `"v11"`. `DatabaseRecovery` needs **no** second edit: its accept-set is `Set(Migrations.migrator.migrations)` and its head check compares against `Migrations.currentIdentifier` (`DatabaseRecovery.swift:106,132`), both derived from the migrator. `1536` is `EnvConfig.embedDims`' default and the literal `derivative_embeddings` already uses; the column stays a literal in DDL exactly as it is today.
+
+`ON DELETE CASCADE` is **semantics, not DDL** — a `vec0` virtual table takes no `REFERENCES` clause (which is why `derivative_embeddings` has none either; §12 Q16). Cascade is done in code, in the two places that already do it for `derivative_embeddings`: `MemoryDataControls.pruneMemory(olderThan:)` gains `DELETE FROM context_embeddings WHERE version_id IN (SELECT id FROM maxmi_prune_versions)` **before** the `DELETE FROM versions` statements (`MemoryDataControls.swift:109-127`), plus the thread-pruned equivalent, and `deleteAllMemory()` gains `DELETE FROM context_embeddings` next to its `DELETE FROM derivative_embeddings` (`:157`). A new `VectorIndex` pair mirrors the existing one: `insertContextEmbedding(versionID:vector:)` and the KNN read used by §14a's retrieval.
+
+**Pipeline placement.** In `CapturePipeline.process`, on the **same tick** that extracts facts and **after** the fact/embedding loop, before `markExtracted`. Embed text per committed version:
+
+```
+"\(source_app) · \(source_title ?? "")\n" + ContentRenderer.render(structured, .compact(maxChars: 6_000))
+```
+
+One embedding per version. Same `relay.embed(text:)`, so the same shared `GeminiThrottle` (`GeminiClient` holds `GeminiThrottle.shared`), the same `MAXMI_EMBED_MODEL` (`gemini-embedding-001`) and the same 1536 dims — no new relay method, no new model, no new destination. `MemoryStore` gains `insertContextEmbedding(versionID:vector:)`; `PipelineVersion` gains `sourceTitle: String?` and `compactContent: String` (the `.compact(maxChars: 6_000)` render), produced by `StoreAPI.pendingWork` — which must start selecting `structured_ciphertext` to do it — so `CapturePipeline` never decrypts or renders (§12 Q22).
+
+**Skip rule.** A version whose `compactContent`, trimmed, is empty or **shorter than 40 characters** is not embedded and not retried — it is chrome, not memory.
+
+**Backoff / retry.** Failure enqueues `store.enqueueRetry(kind: "embed_version", versionID: v.id, derivativeID: nil, ...)` into the existing `retry_queue` (`kind` is a plain `TEXT` column with **no** CHECK constraint, so a new kind needs no migration) and reuses the existing `30_000 · 2^attempts` capped at `3_600_000` backoff in `StoreAPI.enqueueRetry`. A failed context embedding **never** fails the extract: facts already committed stay committed, and `markExtracted` still runs. Because `pendingWork` gates on `extract_status = 'pending'`, a version cannot re-qualify through the extract path once marked complete, so Phase C adds a separate "versions with no `context_embeddings` row" query to drive the retry (§12 Q22).
+
+**Backfill: none.** Only versions committed after v11 get a context embedding. Recorded as a decision, not an oversight — backfilling would re-embed the entire history in one burst and buys nothing the next capture of the same thread does not.
+
+**Retrieval.** `MemoryQueries.searchMemory` embeds the query once (unchanged, including the 32-entry LRU) and runs **two** KNN reads with that one vector: the existing `factHits` over `derivative_embeddings` (unchanged) and a new `contextHits` over `context_embeddings`. Both apply the same `MemoryQueries.similarityDistanceFloor = 0.75`. `vec0` returns **L2** on unit vectors, so `contextHits` converts at the read boundary exactly as `factHits` does — `cosineDistance = (l2 * l2) / 2.0` (`QueryAPI.swift:42-45`) — and the floor is compared against the converted value, never the raw distance.
+
+**Rendering.** The markdown keeps the existing fact list first and unchanged, then appends, only when there is at least one context hit above the floor:
+
+```
+### Matching context
+
+- <source_app> · <source_title ?? source_key> · <absolute (relative)> · thread `<thread_id>`
+  <= 300 chars of the .compact render
+```
+
+At most **5** version hits. The snippet is the **first 300 characters** of that version's `.compact` render — no per-line scoring, no highlighting, no reordering in this phase. The trailing `_N results in this page_` line and the cursor footer keep counting **facts only**; context hits are supplementary and are not paginated (see §12 Q17).
+
+**Request shape UNCHANGED.** `MaxMiToolsDefinitions.all` is not touched: `search_memory` keeps its name, its `query`/`limit` properties, the shared retrieval properties, and `required: ["query"]`. Only the response *text* gains a section. `MCPStructuredNoChangeTests` is therefore updated **deliberately**, not incidentally: its tool-name/argument assertions stay verbatim and it gains one assertion that the new section appears when a context hit exists and is absent when none does.
+
+**Cost and privacy.** Embedding calls roughly double (one per version on top of one per derivative), which is acceptable on `gemini-embedding-001` and is the whole point of the reversal. No new privacy surface: the raw content is already stored encrypted in `versions.content` / `structured_ciphertext`, the vector lands in the same database file under the same Keychain-held key, and the text is sent to the one destination captures already go to.
+
+**Error handling.** A missing `structured_ciphertext` resolves through `LegacyContentAdapter` exactly as everywhere else, so a pre-v10 row still renders and still embeds. A `relay.embed` failure routes to `embed_version` retry and is logged with `SafeLogger`, never with content interpolated. A `context_embeddings` insert failure is treated identically. `contextHits` throwing is caught inside `searchMemory` and degrades to the fact-only response — a broken second index must never take out memory search.
+
+**Tests.**
+- Migration `v11`: `context_embeddings` exists, accepts a 1536-float insert, and `Migrations.currentIdentifier == "v11"`; a `pruneMemory` / `deleteAllMemory` round-trip removes its rows.
+- Pipeline: exactly **one** context embedding per committed version (assert call count on a mock relay), and **zero** for a version whose render is empty or 39 characters.
+- Retry: a failing embed enqueues `kind == "embed_version"` and does **not** mark the version's extract failed.
+- Retrieval: a phrase present only in the raw rendered content and in **no** derivative returns a `### Matching context` hit; the L2→cosine conversion is asserted against a hand-computed value so the floor cannot silently invert; the section is absent when there are no context hits.
+- Guard test: `MCPStructuredNoChangeTests` asserts the request shape is byte-identical and the new section is the only response-text change.
+
+**Exit criterion.** A phrase visible on a captured page but absent from every extracted fact for that thread is findable via `search_memory` within one pipeline tick.
+
+### 14b. Web-app parsers by host (Phase D, tasks 22-26)
+
+**Purpose.** M8 already routes native Slack, Discord, Messages and WhatsApp through anchored parsers, and Phase D Task 5 already builds the host map. The five surfaces the user actually lives in on the web — Gmail, LinkedIn messaging, Outlook web, Slack web, Teams web — still land as generic v2 pages. These five parsers make a web tab of a chat or mail surface produce the same typed `.conversation` a native window does.
+
+**Data model.** None. No table, no column, no migration. Every parser produces existing Phase A types (`Conversation`, `Message`, `GenericPage`, `Block.tableRow`) and existing `CaptureContentKind` cases.
+
+**Pipeline placement.** Each is a `StructuredParser` (§7b) registered by **host** via `ParserConfig.hosts` — the field Phase D Task 5 adds precisely for this, where a leading-dot entry (`".slack.com"`) is a suffix match. Routing is `ParserRegistry.host(fromURL:)` → `structuredParser(forHost:)`, reached from the browser path, so no native-app claim is involved and `preferOverNative` stays `false` unless a native app shares the bundle. `AXQuery` is the only traversal API; DOM anchors are available because Task 1 reads `AXDOMClassList` / `AXDOMIdentifier` under an `AXWebArea`, gated per parser by `ParserConfig.attributeSet: ["AXDOMClassList", "AXDOMIdentifier"]`.
+
+**The anchors below are CANDIDATES from DOM knowledge, not verified reads.** Before relying on any of them the implementer MUST dump the live surface with `tools/ax-snapshot-record.swift <bundle-id> <out.json>` (Phase D Task 6) and confirm which selectors actually surface through AX; the **verified** anchors, and every candidate that did not survive, go in the parser's header comment. Web AX frequently drops `data-*` attributes entirely, so a candidate that is a `data-tid` is the most likely to need a fallback.
+
+**Task 22 — Gmail (`mail.google.com`).** `contentKind` `.email` on every path.
+- Open thread → `.conversation`. `channel` = the subject from the thread's `h2` heading, falling back to the window title. One `Message` per message container `div.adn`; sender name from `.gD`, address from `.go`; `timeString` from `.g3`; body from `.a3s`. **Expanded messages only** — a collapsed row carries no `.a3s` and is skipped rather than emitted with an empty body.
+- Inbox / list view → `.generic`, one `.tableRow(cells:selected:)` per row `tr.zA`, cells `[sender, subject + snippet, time]`.
+- Compose window → the draft as `Message(isUser: true, isDraft: true)` read from the `div[aria-label="Message Body"]` editor.
+
+**Task 23 — LinkedIn messaging (`linkedin.com/messaging`).** `.conversation`. Message list items `li.msg-s-message-list__event`; sender `.msg-s-message-group__name`; `timeString` `.msg-s-message-group__timestamp`; body `.msg-s-event-listitem__body`. `isUser` is true when the group name equals the signed-in user's name, read from the "Me" nav item or the profile card; when that name cannot be resolved the message is emitted with `isUser: false` and a header-comment note saying so — never guessed from geometry. `channel` from the conversation header `.msg-entity-lockup__entity-title`. Composer `.msg-form__contenteditable` → draft. **Every other LinkedIn page stays generic v2** — the parser returns nil off `/messaging`.
+
+**Task 24 — Outlook web (`outlook.office.com`, `outlook.live.com`).** `contentKind` `.email`.
+- Reading pane → `.conversation`, one `Message` per message card `div[aria-label^="Message"]` (or `role=document` when the aria-label shape differs). Sender and time come from the card header, where `AXDescription` commonly carries a `"From: X, Sent: T"` string — parse it, and fall back to the header's static texts in visual order.
+- Message list → `.generic` `.tableRow`s.
+- Compose → draft `Message(isUser: true, isDraft: true)`.
+
+**Task 25 — Slack web (`app.slack.com`).** `.conversation`, mirroring the native Slack anchors so both surfaces render identically: message items `div.c-virtual_list__item` / `.c-message_kit__background`; sender `.c-message__sender`; timestamp `.c-timestamp` (the time is in its `aria-label`, i.e. folded into `label`); text `.p-rich_text_section`; composer `.ql-editor` → draft. `channel` from the header `.p-view_header__channel_title`; `isGroup` is `true` for a channel (leading `#`), `false` for a DM. Registered with hosts `["app.slack.com", ".slack.com"]` — the same entries Phase D Task 10 already gives `SlackParser`, so Task 25 **extends `SlackParser`'s existing config and DOM path** rather than adding a second parser for the same host.
+
+**Task 26 — Teams web (`teams.microsoft.com`, `teams.cloud.microsoft`).** `.conversation`. Messages `div[data-tid="chat-pane-message"]`; sender `[data-tid="message-author-name"]`; time `[data-tid="message-timestamp"]`; body `[data-tid="chat-pane-message"] .fui-ChatMessage__body`. `data-tid` is the least likely candidate to surface in AX: if it does not, fall back to the `AXDescription` / `role=group` structure and record in the header comment exactly what did work. `channel` from the header; composer `[data-tid="ckeditor"]` → draft.
+
+**Refusal rule (explicit).** When a parser finds no message container on a page that *is* a chat surface it returns **nil (NOT_HANDLED)**, so §4f rule 3 routes the window to `GenericPageExtractor` and the page is still captured as generic v2 with the `"GenericPageExtractor.v2/fallback/<ParserTypeName>"` health marker. It **refuses** only for a compose-only window with an empty draft — there is genuinely nothing to store, and a refusal is how the health ledger records that. Because `StructuredParser.parse(_:context:)` is non-throwing, the refusal is raised from the app's `SourceParser.parse(window:app:)` bridge, which throws, exactly as `NativeConversationParser` does today (`NativeConversationParser.swift:113,118`); see §12 Q18.
+
+**Rendering / UI.** Nothing new. `ContentRenderer` already renders `.conversation` as `"(From: <sender>)(sent <time>): <text>"` with `"You"` for `isUser` and a `" (draft)"` suffix, and `.tableRow`s as `a | b | c`. No UI change; the win shows up in capture summaries, the timeline and `get_latest_context`.
+
+**Error handling.** `AXQuery` never throws and an unmatched path yields nil / `[]`, so a DOM rename degrades to nil → generic v2 → health marker, never to a crash or a lost capture. A parser that finds messages but cannot resolve a sender emits `Authorship`-neutral text rather than inventing a name. Secure fields are never read anywhere on these paths (§4e).
+
+**Tests.** Per parser: **≥2 recorded, hand-scrubbed AX fixtures** with a golden `CapturedContent` JSON, **at least one at a nonzero window origin**, loaded through the shared `fixture(_:)` / `goldenCapturedContent(_:)` helpers from Task 6 and registered in Task 21's `PhaseDCoverageTests.coverage` dictionary so the coverage assertion covers them machine-checked. Plus, per parser: the nil-not-refusal path when no message container matches; the refusal path for an empty compose-only window; the draft message carries `isUser: true, isDraft: true`; Gmail's collapsed-message skip; LinkedIn's off-`/messaging` nil; Slack web and native Slack render byte-identically from equivalent fixtures. Five new rows are added to Task 21's Step 5 live checklist (Gmail thread + compose, LinkedIn conversation, Outlook reading pane, Slack web channel, Teams chat), each read back with `get_latest_context` using `{"source": "Web", "content_kinds": ["conversation"|"email"], "limit": 1}` and each verified against a capture timestamped strictly after the `open MaxMi.app` in that ritual.
+
+**Exit criterion.** Each of the five hosts, opened in a browser tab, produces a typed capture with real senders, times and bodies — visible as `(From: <name>)(sent <time>): <text>` lines through `get_latest_context` — and the anchors that produced them are recorded, verified, in each parser's header comment.
+
+### 14c. Daily check-in (Phase C)
+
+**Purpose.** Minimi's morning check-in, which M8 previously left to M9: one short second-person briefing per day covering what you worked on yesterday, what is still open, and what is on today. **Reminders and time slots stay M9** — this addition schedules nothing, stores no `remind_at`, and sends no slot legend (§12 Q9 is unchanged).
+
+**Data model.**
+
+```sql
+-- Migrations.swift: m.registerMigration("v12")
+CREATE TABLE checkins (
+  day_bucket                INTEGER PRIMARY KEY,
+  generated_at_ms           INTEGER NOT NULL,
+  summary_ciphertext        TEXT NOT NULL,
+  open_item_ids             TEXT NOT NULL,   -- JSON array of agent_action_items.id
+  resolved_yesterday_count  INTEGER NOT NULL,
+  dismissed_at_ms           INTEGER NULL,
+  prompt_version            TEXT NOT NULL
+);
+```
+
+`day_bucket` is `Store.dayBucket(forMs:timeZone:)` (`ActivityStore.swift:429`), the same local-timezone bucket `activity_app_visits` and `activity_sessions` use — **not** `HourBucket`. `summary_ciphertext` is `TEXT` written through `AESGCMFieldCipher`, like every other ciphertext column (§12 Q2). The `PRIMARY KEY` on `day_bucket` is what makes "at most one row per day" a database fact rather than a code convention, and makes Regenerate an `INSERT … ON CONFLICT(day_bucket) DO UPDATE`.
+
+Migration identifier: **`v12`**, or folded into `v11` if Phase C ships §14a and §14c in one migration. The spec permits **either** — the Phase C plan decides and states which, and `Migrations.currentIdentifier` follows. `DatabaseRecovery` again needs no edit (derived from the migrator). `checkins` is added to `deleteAllMemory()`; `pruneMemory(olderThan:)` deletes rows whose `generated_at_ms < cutoffMs`.
+
+**Trigger.** The first pipeline tick at or after **08:00 local time** on a day for which no `checkins` row exists for today's `day_bucket`. At most **one** automatic generation per day: the `day_bucket` primary key plus an insert-if-absent check enforce it even across a relaunch. Plus a manual **"Check in now"** menu-bar item (the same `NSMenuItem` pattern as `"Start Voice Note"`, `MenuBarController.swift:60`) that regenerates and **overwrites** today's row. Failures retry on the existing backoff shape — `30s · 2^n` capped at 1h, the same curve as `StoreAPI.enqueueRetry` — and **never block capture**: generation is fire-and-forget off the tick, and a thrown error is logged and left for the next tick.
+
+The tick that drives it is the `AppWiring` timer that calls `CapturePipeline.tick()`, not `CapturePipeline` itself: `CapturePipeline` lives in `MaxMiCore` and cannot reach `MaxMiActivity` (§12 Q19). This is the same wiring the hourly agent already uses.
+
+**Input.** A new `CheckinInputBuilder` in `MaxMiActivity`, reading through a `CheckinRepository` protocol with the concrete adapter in `Sources/MaxMi/` — the established pattern (`ActivitySummaryRepository`, `AgentRepository`, and §5d's `TimelineRepository`), because `MaxMiActivity` depends only on `MaxMiCore` and must not touch GRDB. Every field below is untrusted captured content and is **nonce-fenced and sanitised** with the same mechanism as `AgentPrompts.hourlyReview` (`AgentPrompts.swift:10-13,19-41`): fence-marker stripping, control-character collapse, per-field cap.
+
+| Input | Source | Cap |
+|---|---|---|
+| Open items | `agent_action_items` where `status = 'open'`: title (from `title_ciphertext`), details (`details_ciphertext`), created-at (**the column is `detected_at`, not `created_at`** — §12 Q20), age in whole days | 15 items |
+| Resolved yesterday | `agent_action_items` where `status = 'resolved'` and `resolved_at` falls in yesterday's `day_bucket`: a count plus titles | count + 10 titles |
+| Yesterday's timeline | `TimelineBuilder.render` (§5d) over yesterday's local day | 2_500 chars |
+| — fallback | When Phase B's timeline is not available: yesterday's top 5 **apps** by summed visit time from `activity_app_visits`, each with the `source_title` of that app's most recent `latest_contexts` row (§12 Q21 — `activity_app_visits` carries `app_bundle`/`app_label`, not `thread_id`, so the ranking is per app and titles are joined in) | 5 rows |
+| Today's calendar | `latest_contexts` rows with `content_kind = 'calendar'` captured today, decoded to `.calendar` and read as `CalendarEvent.title` + `dateString` | 8 events |
+| Local date + weekday | the injected clock | — |
+
+**Prompt.** `AgentPrompts.dailyCheckin(input:)`, model = `EnvConfig.extractModel`, same shared `GeminiThrottle`, same nonce fences. Instruction:
+
+> Write the user's morning check-in as 3-6 short lines in second person. Line 1: what they mainly worked on yesterday (from the timeline). Then open items worth attention today (max 3, most recent first, never invent). Then today's calendar if provided. Plain text, no headers, ≤ 90 words. If there is nothing meaningful, write one line saying so.
+
+`prompt_version` is written as a named constant, `"checkin-v1"`, on every row — the same discipline §12 Q8 imposed on `activity_sessions.prompt_version`. A prompt-version bump does **not** retroactively regenerate past days; the check-in is a dated artefact, not a cache.
+
+**Surface.** A **"Today" card at the top of the menu-bar popover** — `TrayHomeView`, above `sectionRow` and the recent-captures list, inside the existing always-dark `Theme` (`.preferredColorScheme(.dark)`, `Theme.background`). It shows the check-in text, the generated time, a **Dismiss** button (sets `dismissed_at_ms` and hides the card until tomorrow's bucket) and a **Regenerate** button (overwrites today's row). A new `CheckinViewModel` + `CheckinDTO` in `MaxMiUI` follow the `TrayHomeViewModel` / `TrayHomeDTO` pattern and refresh on the same 2-second popover poll. States: **pending** (before 08:00, or generation in flight) → a one-line placeholder; **ready** → the text; **dismissed** → the card is absent; **empty** → the model's "nothing meaningful" line, rendered as-is. **No notifications in this phase.**
+
+**Error handling.** A relay failure leaves no row and logs through `SafeLogger` with no content interpolated; the next tick retries on the backoff curve; the card stays in **pending**. A decrypt failure on `summary_ciphertext` renders the card as **empty** rather than showing a marker string. A malformed `open_item_ids` JSON is treated as an empty array. Nothing here can throw into the capture path.
+
+**Tests.**
+- `CheckinInputBuilder`: every cap enforced (15 / 10 / 2_500 / 5 / 8); fence markers and control characters stripped from every interpolated field; yesterday/today bucketing correct **across midnight and across a timezone change**, with an injected clock and an injected `TimeZone`; the no-timeline fallback path produces the app-ranked rows.
+- Trigger: no generation before 08:00; exactly one generation on the first tick at or after 08:00; no second generation later the same day; a new day generates again; a relaunch mid-day does not regenerate; "Check in now" overwrites.
+- Store: `checkins` round-trip through `AESGCMFieldCipher` including `dismissed_at_ms` NULL → set; `ON CONFLICT(day_bucket)` overwrite; `deleteAllMemory` and `pruneMemory` remove rows.
+- Prompt: a golden string for a fixed input, asserting the instruction text, the fences, and that no reminder or slot vocabulary appears anywhere in it.
+- View model: pending / ready / dismissed / empty states, and that Dismiss hides the card for today only.
+
+**Exit criterion.** On the first tick after 08:00 a `checkins` row exists for today, its text appears as the Today card at the top of the popover, and Dismiss hides it for the rest of the day and not beyond.
