@@ -17,7 +17,8 @@ final class BrowserCapturePipelineTests: XCTestCase {
         XCTAssertEqual(result.capture.sourceKey, "https://app.slack.com/client/T123/C456")
         XCTAssertEqual(result.capture.contentKind, .conversation)
         XCTAssertEqual(result.capture.accumulationPolicy, .appendItems)
-        XCTAssertEqual(result.capture.content, "Alex: Morning update\nSam: Reviewing the browser parser")
+        XCTAssertEqual(result.capture.content,
+                       "(From: Alex): Morning update\n(From: Sam): Reviewing the browser parser")
         XCTAssertEqual(result.quality, .high)
         XCTAssertTrue(result.parserID.contains("gecko/slack/webArea/quality-high"))
     }
