@@ -8,15 +8,10 @@ public struct GenericAXParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        var options = GenericPageExtractor.Options()
-        options.offscreenPolicy = Self.profile(for: app).offscreen
-        // focusedElement is nil here: only AppWiring knows the pid that
+        // No url, default budget, and no focused element: only AppWiring knows the pid that
         // AXReader.focusedElementSnapshot needs, and Phase B's TypingObserver wires it.
-        let result = GenericPageExtractor.extract(
-            window: window, focusedElement: nil, url: nil, options: options
-        )
-        guard !result.page.regions.isEmpty else { return nil }   // no empty threads
-        return .generic(result.page)
+        // nil = no readable content, so no empty threads.
+        GenericV2Content.page(window: window, offscreenPolicy: Self.profile(for: app).offscreen)
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {

@@ -243,12 +243,16 @@ enum StructuredEntityExtraction {
         )
     }
 
-    static let documentOffscreen: OffscreenCapturePolicy =
-        .accessibilityScroll(maxSteps: 6, maxCharacters: 96_000)
-    static let emailOffscreen: OffscreenCapturePolicy =
-        .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
     /// Preserves the 32_000 cap `DocumentExtraction.bodyText` applied here.
     static let pageBudget = 32_000
+    // Whole-page `.replace` accumulation bounds ONE capture to `pageBudget`, so the scroll
+    // ceiling is `pageBudget` too — a larger one would be unreachable and its truncation branch
+    // dead. Unioning blocks across scrolls so a long document can exceed it is a Phase D
+    // candidate, alongside the anchored document parsers.
+    static let documentOffscreen: OffscreenCapturePolicy =
+        .accessibilityScroll(maxSteps: 6, maxCharacters: pageBudget)
+    static let emailOffscreen: OffscreenCapturePolicy =
+        .accessibilityScroll(maxSteps: 4, maxCharacters: pageBudget)
 
     /// Generic v2 over the whole window. The anchored document parsers land in Phase D.
     static func documentContent(window: AXNode) -> CapturedContent? {

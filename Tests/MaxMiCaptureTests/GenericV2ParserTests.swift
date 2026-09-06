@@ -80,6 +80,10 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(page.regions[0].blocks.map(\.type),
                        Array(repeating: BlockType.paragraph, count: page.regions[0].blocks.count))
         XCTAssertEqual(capture.content, ContentRenderer.render(capture.structured!, style: .full))
+        // Task 9's accumulation bridge keys on this pair, which is what keeps cross-window
+        // appending alive until the anchored parser lands in Phase D.
+        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
+        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 
     func testMessagesKeepsBubbleOrderWrappedInGenericBlocks() throws {
@@ -96,6 +100,9 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.contentKind, .conversation)
         XCTAssertEqual(capture.content, "hey are you free\ncall me")
         XCTAssertEqual(try XCTUnwrap(capture.structured).kind, .generic)
+        // Same Task 9 bridge precondition as Discord.
+        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
+        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 
     func testEmptyWindowsStillReturnNilEverywhere() throws {
