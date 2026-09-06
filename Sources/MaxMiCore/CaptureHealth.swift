@@ -3,6 +3,7 @@ import Foundation
 public enum CaptureTrigger: String, Sendable, Codable, CaseIterable {
     case appActivated
     case accessibilityChanged
+    case conversationChanged
     case browserNavigation
     case webContentChanged
     case periodic
@@ -29,6 +30,7 @@ public enum CaptureSkipReason: String, Sendable, Codable, CaseIterable {
     case parserNoContent
     case addressFieldFocused
     case permissionUnavailable
+    case focusChanged
 }
 
 public enum CaptureFailureReason: String, Sendable, Codable, CaseIterable {

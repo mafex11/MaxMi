@@ -80,8 +80,13 @@ public enum WebAppCaptureParser {
         var rows: [(y: CGFloat, line: String)] = []
         collectMessageContainers(root, into: &rows)
         let sorted = rows.sorted { $0.y < $1.y }.map(\.line)
-        var seen = Set<String>()
-        return sorted.filter { seen.insert($0.lowercased()).inserted }
+        // Repeated messages such as "yes" are real, distinct events. Only collapse
+        // accidental adjacent duplicate AX nodes from the same rendered message.
+        return sorted.reduce(into: []) { result, line in
+            if result.last?.caseInsensitiveCompare(line) != .orderedSame {
+                result.append(line)
+            }
+        }
     }
 
     private static func collectMessageContainers(

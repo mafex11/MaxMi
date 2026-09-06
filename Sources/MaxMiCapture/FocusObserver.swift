@@ -19,7 +19,21 @@ public struct Browser: RawRepresentable, Sendable, Equatable {
 
 /// Pure mapping kept separate from AXObserver so tab/SPA trigger behavior is testable.
 public enum CaptureNotificationClassifier {
-    public static func trigger(notification: String, isBrowser: Bool) -> CaptureTrigger {
+    public static func trigger(
+        notification: String,
+        isBrowser: Bool,
+        isConversationApp: Bool = false
+    ) -> CaptureTrigger {
+        if isConversationApp {
+            switch notification {
+            case kAXTitleChangedNotification,
+                 kAXSelectedChildrenChangedNotification,
+                 kAXSelectedRowsChangedNotification:
+                return .conversationChanged
+            default:
+                break
+            }
+        }
         guard isBrowser else { return .accessibilityChanged }
         switch notification {
         case kAXTitleChangedNotification,
@@ -32,6 +46,33 @@ public enum CaptureNotificationClassifier {
         default:
             return .accessibilityChanged
         }
+    }
+}
+
+/// Keeps activation captures on their own lane. AX notifications often arrive in a burst
+/// while an app is becoming frontmost; they must refine the follow-up capture, never keep
+/// postponing the first capture of the newly focused window.
+public enum CaptureSchedulingPolicy {
+    /// A short settle lets AppKit switch windows before AX is read, while remaining fast
+    /// enough to make an app switch feel immediate.
+    public static let activationDelayMs = 180
+    /// Native chat clients often report a selection before their message pane has
+    /// finished updating. This first pass is quick; the verification pass catches
+    /// the settled thread without waiting for the periodic sweep.
+    public static let conversationDelayMs = 500
+    public static let conversationVerificationDelayMs = 1_500
+
+    public static func retryAttempts(
+        trigger: CaptureTrigger,
+        needsAccessibilityWarmup: Bool
+    ) -> Int {
+        trigger == .appActivated || trigger == .conversationChanged || needsAccessibilityWarmup ? 3 : 1
+    }
+
+    /// Fast retries cover the normal AX-population race after a focus switch. They are
+    /// intentionally much shorter than the periodic recapture cadence.
+    public static func retryDelayMs(attemptsRemaining: Int) -> Int {
+        attemptsRemaining >= 3 ? 350 : 900
     }
 }
 
@@ -62,6 +103,8 @@ public final class FocusObserver {
     public var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?
 
     var debounceTask: Task<Void, Never>?
+    var activationCaptureTask: Task<Void, Never>?
+    var conversationCaptureTask: Task<Void, Never>?
     var recaptureTimer: Timer?
     var axObserver: AXObserver?
     var observedPid: pid_t?
@@ -98,6 +141,8 @@ public final class FocusObserver {
         workspaceObserver = nil
         recaptureTimer?.invalidate(); recaptureTimer = nil
         debounceTask?.cancel()
+        activationCaptureTask?.cancel()
+        conversationCaptureTask?.cancel()
         detachAXObserver()
         current = nil
     }
@@ -117,7 +162,8 @@ public final class FocusObserver {
             current = nil; return
         }
         if let cur = current, cur.bundleID == bid, cur.pid == newPid {
-            scheduleCapture(trigger: .appActivated); return   // same app/pid -> no observer churn
+            scheduleActivationCapture()
+            return   // same app/pid -> no observer churn
         }
         detachAXObserver()
         current = (bundleID: bid, pid: newPid)
@@ -131,17 +177,75 @@ public final class FocusObserver {
         recaptureTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.scheduleCapture(trigger: .periodic) }
         }
-        scheduleCapture(trigger: .appActivated)
+        scheduleActivationCapture()
+    }
+
+    /// The activation lane is deliberately independent of regular debounce work. Without
+    /// this, AX notifications from the new app repeatedly cancel the activation task and
+    /// MaxMi can miss the entire short visit.
+    func scheduleActivationCapture() {
+        activationCaptureTask?.cancel()
+        guard let expected = current else { return }
+        let appName = self.appName
+        activationCaptureTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(CaptureSchedulingPolicy.activationDelayMs))
+            guard !Task.isCancelled, let self,
+                  self.current?.bundleID == expected.bundleID,
+                  self.current?.pid == expected.pid else { return }
+            self.onCapture(
+                AppInfo(bundleID: expected.bundleID, name: appName, windowTitle: nil),
+                expected.pid,
+                .appActivated
+            )
+        }
     }
 
     func scheduleCapture(trigger: CaptureTrigger) {
         debounceTask?.cancel()
+        guard let expected = current else { return }
+        let appName = self.appName
         let ms = debounceMs
         debounceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(ms))
-            guard !Task.isCancelled, let self, let cur = self.current else { return }
-            let title: String? = nil
-            self.onCapture(AppInfo(bundleID: cur.bundleID, name: self.appName, windowTitle: title), cur.pid, trigger)
+            guard !Task.isCancelled, let self,
+                  self.current?.bundleID == expected.bundleID,
+                  self.current?.pid == expected.pid else { return }
+            self.onCapture(
+                AppInfo(bundleID: expected.bundleID, name: appName, windowTitle: nil),
+                expected.pid,
+                trigger
+            )
+        }
+    }
+
+    /// Chat switches happen within one process, so NSWorkspace never sees them.
+    /// Capture twice after the final AX selection/title notification: once fast,
+    /// then once after the conversation pane has settled.
+    func scheduleConversationCapture() {
+        debounceTask?.cancel()
+        conversationCaptureTask?.cancel()
+        guard let expected = current else { return }
+        let appName = self.appName
+        conversationCaptureTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(CaptureSchedulingPolicy.conversationDelayMs))
+            guard !Task.isCancelled, let self,
+                  self.current?.bundleID == expected.bundleID,
+                  self.current?.pid == expected.pid else { return }
+            self.onCapture(
+                AppInfo(bundleID: expected.bundleID, name: appName, windowTitle: nil),
+                expected.pid,
+                .conversationChanged
+            )
+
+            try? await Task.sleep(for: .milliseconds(CaptureSchedulingPolicy.conversationVerificationDelayMs))
+            guard !Task.isCancelled,
+                  self.current?.bundleID == expected.bundleID,
+                  self.current?.pid == expected.pid else { return }
+            self.onCapture(
+                AppInfo(bundleID: expected.bundleID, name: appName, windowTitle: nil),
+                expected.pid,
+                .conversationChanged
+            )
         }
     }
 
@@ -170,9 +274,14 @@ public final class FocusObserver {
         guard let current else { return }
         let trigger = CaptureNotificationClassifier.trigger(
             notification: notification,
-            isBrowser: ApplicationRegistry.isBrowser(current.bundleID)
+            isBrowser: ApplicationRegistry.isBrowser(current.bundleID),
+            isConversationApp: ApplicationRegistry.descriptor(for: current.bundleID)?.kind == .chat
         )
-        scheduleCapture(trigger: trigger)
+        if trigger == .conversationChanged {
+            scheduleConversationCapture()
+        } else {
+            scheduleCapture(trigger: trigger)
+        }
     }
 
     func detachAXObserver() {

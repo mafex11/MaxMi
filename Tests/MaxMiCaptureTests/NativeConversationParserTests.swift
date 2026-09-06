@@ -70,4 +70,55 @@ final class NativeConversationParserTests: XCTestCase {
             "Alex: First controlled message\nYou: Second controlled message"
         )
     }
+
+    func testWhatsAppRejectsMainPaneFallbackWithoutChatHeaderAndMessageSemantics() throws {
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+            children: [
+                AXNode(
+                    role: "AXStaticText", value: "Use WhatsApp on your phone to see older messages.",
+                    title: nil, url: nil,
+                    frame: CGRect(x: 400, y: 30, width: 400, height: 30), focused: false,
+                    children: []
+                ),
+                AXNode(
+                    role: "AXStaticText", value: "A stale pane must not be captured.",
+                    title: nil, url: nil,
+                    frame: CGRect(x: 400, y: 250, width: 400, height: 30), focused: false,
+                    children: []
+                ),
+            ]
+        )
+        let app = AppInfo(
+            bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp"
+        )
+
+        XCTAssertNil(try WhatsAppParser().parse(window: window, app: app))
+    }
+
+    func testWhatsAppRejectsPinnedHeadingWithoutExplicitChatHeaderSemantics() throws {
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+            children: [
+                AXNode(
+                    role: "AXHeading", value: "Pinned message", title: nil, url: nil,
+                    frame: CGRect(x: 400, y: 30, width: 300, height: 30), focused: false,
+                    children: []
+                ),
+                AXNode(
+                    role: "AXButton", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 400, y: 220, width: 400, height: 50), focused: false,
+                    children: [], identifier: "WAMessageBubbleTableViewCell",
+                    label: "A message that belongs to the pane"
+                ),
+            ]
+        )
+        let app = AppInfo(
+            bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp"
+        )
+
+        XCTAssertNil(try WhatsAppParser().parse(window: window, app: app))
+    }
 }

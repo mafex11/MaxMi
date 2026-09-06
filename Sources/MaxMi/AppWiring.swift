@@ -1349,10 +1349,15 @@ final class AppWiring {
         // Capture the current generation for this capture
         let gen = focusGeneration
 
-        // Chromium browsers and Slack need retry-shortly for post-kick empty trees (spec §10).
-        let needsRetry = ApplicationRegistry.needsAccessibilityWarmup(app.bundleID)
+        // Every activation gets a short retry window: cross-process AX trees commonly
+        // materialize just after the app becomes frontmost. Warmed Chromium/Slack gets
+        // the same protection on non-activation triggers.
+        let needsAccessibilityWarmup = ApplicationRegistry.needsAccessibilityWarmup(app.bundleID)
             || app.bundleID == ParserRegistry.slackBundleID
-        let attemptsLeft = needsRetry ? 3 : 1
+        let attemptsLeft = CaptureSchedulingPolicy.retryAttempts(
+            trigger: trigger,
+            needsAccessibilityWarmup: needsAccessibilityWarmup
+        )
         attemptCapture(
             app: app, pid: pid, attemptsLeft: attemptsLeft,
             captureGeneration: gen, trigger: trigger, startedAtMs: startedAtMs
@@ -1376,15 +1381,28 @@ final class AppWiring {
         // the actor boundary safely.
         Task.detached(priority: .utility) { [weak self] in
             let snapshot = AXReader.snapshotFrontmostWindow(pid: pid)
+            let confirmationSnapshot: (window: AXNode, title: String?)?
+            if ParserRegistry.whatsAppBundleIDs.contains(app.bundleID),
+               trigger == .appActivated || trigger == .conversationChanged {
+                // A chat selection can expose the new header before the message pane (or
+                // vice versa). Re-read once after a short settle and only commit a stable
+                // WhatsApp identity below.
+                try? await Task.sleep(for: .milliseconds(350))
+                confirmationSnapshot = AXReader.snapshotFrontmostWindow(pid: pid)
+            } else {
+                confirmationSnapshot = nil
+            }
             await self?.finishCapture(
                 app: app, pid: pid, attemptsLeft: attemptsLeft, snapshot: snapshot,
-                captureGeneration: captureGeneration, trigger: trigger, startedAtMs: startedAtMs
+                captureGeneration: captureGeneration, confirmationSnapshot: confirmationSnapshot,
+                trigger: trigger, startedAtMs: startedAtMs
             )
         }
     }
 
     private func finishCapture(app: AppInfo, pid: pid_t, attemptsLeft: Int,
                                snapshot: (window: AXNode, title: String?)?, captureGeneration: Int,
+                               confirmationSnapshot: (window: AXNode, title: String?)?,
                                trigger: CaptureTrigger, startedAtMs: EpochMs) {
         let parserName = captureParserName(for: app.bundleID)
         guard !isShuttingDown, !isLifecycleSuspended,
@@ -1392,6 +1410,15 @@ final class AppWiring {
             recordCaptureHealth(
                 app: app, trigger: trigger, parser: parserName,
                 outcome: .skipped(.globalPaused), startedAtMs: startedAtMs
+            )
+            return
+        }
+        // The AX snapshot happens off-main and may finish after the user has already
+        // switched away. Never commit that stale window under the new focus context.
+        guard isStillFrontmost(bundleID: app.bundleID, pid: pid) else {
+            recordCaptureHealth(
+                app: app, trigger: trigger, parser: parserName,
+                outcome: .skipped(.focusChanged), startedAtMs: startedAtMs
             )
             return
         }
@@ -1482,6 +1509,21 @@ final class AppWiring {
             // Central keying chokepoint: parsers propose a key; the deriver makes it clean+stable
             // (coarsen-don't-drop). No parser writes the final source_key directly (spec §3a).
             let cleanKey = ThreadKeyDeriver.derive(parsed)
+            if ParserRegistry.whatsAppBundleIDs.contains(app.bundleID),
+               (trigger == .appActivated || trigger == .conversationChanged),
+               !hasStableWhatsAppIdentity(
+                   cleanKey: cleanKey,
+                   app: app,
+                   pid: pid,
+                   confirmationSnapshot: confirmationSnapshot
+               ) {
+                retryOrGiveUp(
+                    app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
+                    captureGeneration: captureGeneration, trigger: trigger,
+                    startedAtMs: startedAtMs, terminalOutcome: .skipped(.parserNoContent)
+                )
+                return
+            }
 
             // Decision gate: denylist + per-thread pause. Fail closed on DB error.
             let pausedThreads: Set<String>
@@ -1611,6 +1653,31 @@ final class AppWiring {
         }
     }
 
+    /// Returns false unless the WhatsApp header/message snapshot is still the same
+    /// conversation after a short settle. This prevents a chat switch from being
+    /// committed under a stale neighboring chat's key.
+    private func hasStableWhatsAppIdentity(
+        cleanKey: String,
+        app: AppInfo,
+        pid: pid_t,
+        confirmationSnapshot: (window: AXNode, title: String?)?
+    ) -> Bool {
+        guard isStillFrontmost(bundleID: app.bundleID, pid: pid),
+              let (window, title) = confirmationSnapshot else { return false }
+        let confirmationApp = AppInfo(
+            bundleID: app.bundleID,
+            name: app.name,
+            windowTitle: title ?? app.windowTitle,
+            windowID: AXReader.focusedWindowID(pid: pid)
+        )
+        guard case .parsed(let confirmation) = CaptureDispatch.parseDetailed(
+            window: window,
+            app: confirmationApp,
+            registry: registry
+        ) else { return false }
+        return ThreadKeyDeriver.derive(confirmation) == cleanKey
+    }
+
     private func toggleGlobalPause() {
         let nowMs = epochNowMs()
         do {
@@ -1642,13 +1709,19 @@ final class AppWiring {
             )
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        let retryDelayMs = CaptureSchedulingPolicy.retryDelayMs(attemptsRemaining: attemptsLeft)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(retryDelayMs)) { [weak self] in
             self?.attemptCapture(
                 app: app, pid: pid, attemptsLeft: attemptsLeft - 1,
                 captureGeneration: captureGeneration, trigger: .retry,
                 startedAtMs: epochNowMs()
             )
         }
+    }
+
+    private func isStillFrontmost(bundleID: String, pid: pid_t) -> Bool {
+        guard let current = NSWorkspace.shared.frontmostApplication else { return false }
+        return current.bundleIdentifier == bundleID && current.processIdentifier == pid
     }
 
     private func captureParserName(for bundleID: String) -> String {

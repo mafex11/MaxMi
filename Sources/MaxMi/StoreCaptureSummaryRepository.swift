@@ -13,8 +13,11 @@ struct StoreCaptureSummaryRepository: CaptureDisplaySummaryRepository, @unchecke
                 CaptureSummaryCandidate(
                     threadID: capture.threadID,
                     appLabel: capture.appLabel,
+                    sourceTitle: capture.sourceTitle,
+                    contentKind: capture.contentKind,
                     content: capture.content,
-                    expectedSourceHash: capture.expectedSourceHash
+                    expectedSourceHash: capture.expectedSourceHash,
+                    promptVersion: capture.promptVersion
                 )
             }
         } catch {
@@ -26,6 +29,7 @@ struct StoreCaptureSummaryRepository: CaptureDisplaySummaryRepository, @unchecke
         threadID: String,
         summary: String,
         expectedSourceHash: String,
+        promptVersion: String,
         nowMs: EpochMs
     ) async {
         _ = try? store.saveCaptureDisplaySummary(
@@ -33,7 +37,7 @@ struct StoreCaptureSummaryRepository: CaptureDisplaySummaryRepository, @unchecke
             summary: summary,
             expectedSourceHash: expectedSourceHash,
             modelID: modelID,
-            promptVersion: "capture-display-v1",
+            promptVersion: promptVersion,
             nowMs: nowMs
         )
     }

@@ -9,7 +9,9 @@ public struct WhatsAppParser: SourceParser {
             window: window,
             app: app,
             sourceApp: "WhatsApp",
-            keyPrefix: "whatsapp"
+            keyPrefix: "whatsapp",
+            requiresConversationIdentity: true,
+            allowsFallback: false
         )
     }
 }
@@ -42,19 +44,32 @@ enum NativeConversationExtraction {
         window: AXNode,
         app: AppInfo,
         sourceApp: String,
-        keyPrefix: String
+        keyPrefix: String,
+        requiresConversationIdentity: Bool = false,
+        allowsFallback: Bool = true
     ) -> ParsedCapture? {
         let boundary = mainPaneBoundary(window)
-        let conversation = conversationTitle(in: window, app: app, mainBoundary: boundary)
+        let conversation = conversationTitle(
+            in: window,
+            app: app,
+            mainBoundary: boundary,
+            requiresHeaderSemantics: requiresConversationIdentity
+        )
         var messages: [(y: CGFloat, line: String)] = []
-        collectMessageContainers(window, mainBoundary: boundary, into: &messages)
+        collectMessageContainers(
+            window,
+            mainBoundary: boundary,
+            requiresMessageSemantics: requiresConversationIdentity,
+            into: &messages
+        )
 
         var lines = messages.sorted { $0.y < $1.y }.map(\.line)
-        if lines.isEmpty {
+        if lines.isEmpty, allowsFallback {
             lines = fallbackMainPaneLines(in: window, mainBoundary: boundary)
         }
         lines = uniqueAdjacent(lines).filter { !isChrome($0) }
-        guard !lines.isEmpty else { return nil }
+        guard !lines.isEmpty,
+              !requiresConversationIdentity || conversation != nil else { return nil }
 
         let content = String(lines.joined(separator: "\n").suffix(contentCap))
         let identity = conversation ?? meaningfulWindowTitle(app.windowTitle, excluding: sourceApp) ?? "unknown"
@@ -78,17 +93,24 @@ enum NativeConversationExtraction {
     private static func conversationTitle(
         in root: AXNode,
         app: AppInfo,
-        mainBoundary: CGFloat
+        mainBoundary: CGFloat,
+        requiresHeaderSemantics: Bool
     ) -> String? {
         let top = root.frame?.minY ?? 0
         let maxY = top + min(180, (root.frame?.height ?? 600) * 0.25)
         var candidates: [(score: Int, y: CGFloat, value: String)] = []
-        collectTitleCandidates(root, mainBoundary: mainBoundary, maxY: maxY, into: &candidates)
+        collectTitleCandidates(
+            root,
+            mainBoundary: mainBoundary,
+            maxY: maxY,
+            requiresHeaderSemantics: requiresHeaderSemantics,
+            into: &candidates
+        )
         let appNames = [app.name.lowercased(), "whatsapp", "microsoft teams", "teams"]
         return candidates
             .filter { candidate in
                 let lower = candidate.value.lowercased()
-                return !appNames.contains(lower) && !isChrome(lower)
+                return !appNames.contains(lower) && !isChrome(lower) && !isSystemNotice(lower)
             }
             .sorted { lhs, rhs in lhs.score != rhs.score ? lhs.score > rhs.score : lhs.y < rhs.y }
             .first?.value
@@ -98,6 +120,7 @@ enum NativeConversationExtraction {
         _ node: AXNode,
         mainBoundary: CGFloat,
         maxY: CGFloat,
+        requiresHeaderSemantics: Bool,
         into out: inout [(score: Int, y: CGFloat, value: String)]
     ) {
         if let raw = readableText(node) {
@@ -109,25 +132,41 @@ enum NativeConversationExtraction {
                 var score = node.role == "AXHeading" ? 30 : 10
                 let metadata = [node.identifier, node.label].compactMap { $0 }
                     .joined(separator: " ").lowercased()
-                if metadata.contains("title") || metadata.contains("header") { score += 20 }
-                out.append((score, y, value))
+                let hasHeaderSemantics = metadata.contains("conversation")
+                    || metadata.contains("chat")
+                    || metadata.contains("title")
+                    || metadata.contains("header")
+                if hasHeaderSemantics { score += 20 }
+                if !requiresHeaderSemantics || hasHeaderSemantics {
+                    out.append((score, y, value))
+                }
             }
         }
         for child in node.children {
-            collectTitleCandidates(child, mainBoundary: mainBoundary, maxY: maxY, into: &out)
+            collectTitleCandidates(
+                child,
+                mainBoundary: mainBoundary,
+                maxY: maxY,
+                requiresHeaderSemantics: requiresHeaderSemantics,
+                into: &out
+            )
         }
     }
 
     private static func collectMessageContainers(
         _ node: AXNode,
         mainBoundary: CGFloat,
+        requiresMessageSemantics: Bool,
         into out: inout [(y: CGFloat, line: String)]
     ) {
         let metadata = [node.identifier, node.label, node.title]
             .compactMap { $0 }.joined(separator: " ").lowercased()
-        let hasMessageHint = metadata.contains("message") || metadata.contains("bubble")
+        let hasMessageHint = metadata.contains("message")
+            || metadata.contains("bubble")
+            || metadata.contains("wamessage")
         let x = node.frame?.minX ?? mainBoundary
-        let candidate = x >= mainBoundary && (messageRoles.contains(node.role) || hasMessageHint)
+        let candidate = x >= mainBoundary
+            && (requiresMessageSemantics ? hasMessageHint : (messageRoles.contains(node.role) || hasMessageHint))
         if candidate {
             var values: [(y: CGFloat, x: CGFloat, value: String)] = []
             collectText(node, into: &values)
@@ -140,7 +179,12 @@ enum NativeConversationExtraction {
             }
         }
         for child in node.children {
-            collectMessageContainers(child, mainBoundary: mainBoundary, into: &out)
+            collectMessageContainers(
+                child,
+                mainBoundary: mainBoundary,
+                requiresMessageSemantics: requiresMessageSemantics,
+                into: &out
+            )
         }
     }
 
@@ -205,6 +249,22 @@ enum NativeConversationExtraction {
 
     private static func isChrome(_ value: String) -> Bool {
         chrome.contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    /// WhatsApp exposes connection/call banners near the top of the message pane.
+    /// They are not chat headers and must never become a durable thread key.
+    private static func isSystemNotice(_ value: String) -> Bool {
+        [
+            "use whatsapp on your phone",
+            "older messages",
+            "syncing",
+            "reconnecting",
+            "pinned message",
+            "tap to go to message",
+            "voice call",
+            "video call",
+            "is speaking",
+        ].contains { value.contains($0) }
     }
 
     private static func slug(_ value: String) -> String {

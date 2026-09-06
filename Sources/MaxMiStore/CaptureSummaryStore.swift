@@ -5,8 +5,11 @@ import MaxMiCore
 public struct PendingCaptureSummary: Sendable, Equatable {
     public let threadID: String
     public let appLabel: String
+    public let sourceTitle: String?
+    public let contentKind: CaptureContentKind
     public let content: String
     public let expectedSourceHash: String
+    public let promptVersion: String
 }
 
 extension Store {
@@ -21,23 +24,40 @@ extension Store {
         let reviewGateEnabled = try cloudReviewInitialized()
         return try db.dbQueue.read { d in
             try Row.fetchAll(d, sql: """
-                SELECT c.thread_id, c.content_ciphertext, c.content_hash, t.source_app
+                SELECT c.thread_id, c.content_ciphertext, c.content_hash, c.content_kind,
+                       t.source_app, t.source_title
                 FROM latest_contexts c JOIN threads t ON t.id=c.thread_id
                 WHERE c.captured_at <= ?
                   AND (
                     c.summary_status='pending'
                     OR (c.summary_status='failed' AND coalesce(c.summary_next_attempt_at, 0) <= ?)
+                    OR (
+                        t.source_app='WhatsApp'
+                        AND coalesce(c.summary_prompt_version, '') <> ?
+                    )
                 )
                 ORDER BY c.captured_at DESC, c.thread_id
-                """, arguments: [nowMs - settleMs, nowMs]).filter { row in
+                """, arguments: [
+                    nowMs - settleMs,
+                    nowMs,
+                    CaptureDisplaySummaryFormat.recentConversation,
+                ]).filter { row in
                     let sourceApp: String = row["source_app"]
                     return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
                 }.prefix(boundedLimit).map { row in
-                    PendingCaptureSummary(
+                    let contentKind = CaptureContentKind(rawValue: row["content_kind"]) ?? .generic
+                    let sourceApp: String = row["source_app"]
+                    return PendingCaptureSummary(
                         threadID: row["thread_id"],
-                        appLabel: row["source_app"],
+                        appLabel: sourceApp,
+                        sourceTitle: row["source_title"],
+                        contentKind: contentKind,
                         content: decryptOrMarker(row["content_ciphertext"]),
-                        expectedSourceHash: row["content_hash"]
+                        expectedSourceHash: row["content_hash"],
+                        promptVersion: CaptureDisplaySummaryFormat.promptVersion(
+                            sourceApp: sourceApp,
+                            contentKind: contentKind
+                        )
                     )
                 }
         }

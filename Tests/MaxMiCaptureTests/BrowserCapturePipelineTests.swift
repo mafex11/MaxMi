@@ -48,4 +48,30 @@ final class BrowserCapturePipelineTests: XCTestCase {
             XCTAssertEqual(WebAppCaptureParser.classify(url: url), expected, url)
         }
     }
+
+    func testConversationKeepsRepeatedMessagesAtDifferentPositions() {
+        func text(_ value: String, y: CGFloat) -> AXNode {
+            AXNode(
+                role: "AXStaticText", value: value, title: nil, url: nil,
+                frame: CGRect(x: 0, y: y, width: 100, height: 16),
+                focused: false, children: []
+            )
+        }
+        func row(_ y: CGFloat) -> AXNode {
+            AXNode(
+                role: "AXRow", value: nil, title: nil, url: nil,
+                frame: CGRect(x: 0, y: y, width: 400, height: 30),
+                focused: false, children: [text("Alex", y: y), text("yes", y: y + 1)]
+            )
+        }
+        let root = AXNode(
+            role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
+            focused: false, children: [row(100), row(200)]
+        )
+
+        XCTAssertEqual(
+            WebAppCaptureParser.messageLines(in: root),
+            ["Alex: yes", "Alex: yes"]
+        )
+    }
 }

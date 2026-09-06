@@ -4,14 +4,28 @@ import MaxMiCore
 public struct CaptureSummaryCandidate: Sendable, Equatable {
     public let threadID: String
     public let appLabel: String
+    public let sourceTitle: String?
+    public let contentKind: CaptureContentKind
     public let content: String
     public let expectedSourceHash: String
+    public let promptVersion: String
 
-    public init(threadID: String, appLabel: String, content: String, expectedSourceHash: String) {
+    public init(
+        threadID: String,
+        appLabel: String,
+        sourceTitle: String? = nil,
+        contentKind: CaptureContentKind = .generic,
+        content: String,
+        expectedSourceHash: String,
+        promptVersion: String = CaptureDisplaySummaryFormat.standard
+    ) {
         self.threadID = threadID
         self.appLabel = appLabel
+        self.sourceTitle = sourceTitle
+        self.contentKind = contentKind
         self.content = content
         self.expectedSourceHash = expectedSourceHash
+        self.promptVersion = promptVersion
     }
 }
 
@@ -21,6 +35,7 @@ public protocol CaptureDisplaySummaryRepository: Sendable {
         threadID: String,
         summary: String,
         expectedSourceHash: String,
+        promptVersion: String,
         nowMs: EpochMs
     ) async
     func markCaptureSummaryFailed(
@@ -31,7 +46,12 @@ public protocol CaptureDisplaySummaryRepository: Sendable {
 }
 
 public protocol CaptureDisplayGenerationRelay: Sendable {
-    func summarizeCapture(appLabel: String, content: String) async throws -> String
+    func summarizeCapture(
+        appLabel: String,
+        sourceTitle: String?,
+        contentKind: CaptureContentKind,
+        content: String
+    ) async throws -> String
 }
 
 public struct CaptureDisplaySummarizer: Sendable {
@@ -57,9 +77,12 @@ public struct CaptureDisplaySummarizer: Sendable {
                 continue
             }
             do {
+                let content = Self.summaryInput(for: capture)
                 let generated = try await relay.summarizeCapture(
                     appLabel: capture.appLabel,
-                    content: capture.content
+                    sourceTitle: capture.sourceTitle,
+                    contentKind: capture.contentKind,
+                    content: content
                 )
                 let summary = Self.clean(generated)
                 guard !summary.isEmpty else { throw EmptySummaryError() }
@@ -67,6 +90,7 @@ public struct CaptureDisplaySummarizer: Sendable {
                     threadID: capture.threadID,
                     summary: summary,
                     expectedSourceHash: capture.expectedSourceHash,
+                    promptVersion: capture.promptVersion,
                     nowMs: nowMs
                 )
             } catch {
@@ -92,6 +116,27 @@ public struct CaptureDisplaySummarizer: Sendable {
             result.removeLast()
         }
         return String(result.prefix(280))
+    }
+
+    /// A conversation summary must describe the newest exchange, not the beginning
+    /// of an accumulated thread. Keep complete trailing message lines so the prompt
+    /// never begins in the middle of a message.
+    static func summaryInput(for capture: CaptureSummaryCandidate) -> String {
+        guard capture.contentKind == .conversation else { return capture.content }
+        return trailingLines(in: capture.content, maxCharacters: 8_000)
+    }
+
+    private static func trailingLines(in content: String, maxCharacters: Int) -> String {
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
+        var retained: [Substring] = []
+        var count = 0
+        for line in lines.reversed() {
+            let added = line.count + 1
+            if count + added > maxCharacters, !retained.isEmpty { break }
+            retained.append(line)
+            count += added
+        }
+        return retained.reversed().joined(separator: "\n")
     }
 
     private struct EmptySummaryError: Error {}

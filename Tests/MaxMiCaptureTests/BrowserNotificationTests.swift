@@ -25,4 +25,12 @@ final class BrowserNotificationTests: XCTestCase {
             notification: "AXValueChanged", isBrowser: false
         ), .accessibilityChanged)
     }
+
+    func testConversationSelectionUsesDedicatedTrigger() {
+        XCTAssertEqual(CaptureNotificationClassifier.trigger(
+            notification: "AXSelectedChildrenChanged",
+            isBrowser: false,
+            isConversationApp: true
+        ), .conversationChanged)
+    }
 }
