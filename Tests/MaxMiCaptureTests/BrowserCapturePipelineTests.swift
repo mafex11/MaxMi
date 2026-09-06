@@ -68,7 +68,10 @@ final class BrowserCapturePipelineTests: XCTestCase {
         )) { XCTAssertEqual($0 as? ExtractionError, .emptyContent) }
     }
 
-    func testConversationKeepsRepeatedMessagesAtDifferentPositions() {
+    /// Spec §4d: a conversation is unioned by `Message.id` (sender + time + text), so two
+    /// indistinguishable bubbles are ONE message — a web row carries no timestamp to tell
+    /// them apart.
+    func testConversationCollapsesRepeatedIdenticalMessages() {
         func text(_ value: String, y: CGFloat) -> AXNode {
             AXNode(
                 role: "AXStaticText", value: value, title: nil, url: nil,
@@ -90,7 +93,9 @@ final class BrowserCapturePipelineTests: XCTestCase {
 
         XCTAssertEqual(
             WebAppCaptureParser.messageLines(in: root),
-            ["Alex: yes", "Alex: yes"]
+            ["Alex: yes"]
         )
+        XCTAssertEqual(WebAppCaptureParser.messages(in: root).count, 1,
+                       "the typed shape agrees with the rendered lines")
     }
 }

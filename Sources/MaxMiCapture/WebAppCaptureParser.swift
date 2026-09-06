@@ -170,8 +170,9 @@ public enum WebAppCaptureParser {
         var rows: [(y: CGFloat, values: [String])] = []
         collectMessageContainers(root, into: &rows)
         var result: [[String]] = []
-        // Repeated messages such as "yes" are real, distinct events. Only collapse
-        // accidental adjacent duplicate AX nodes from the same rendered message.
+        // Adjacent identical lines collapse. A web row carries no timestamp, so two
+        // indistinguishable bubbles share one `Message.id` and are one message under §4d's
+        // union anyway — collapsing here keeps the rendered lines saying the same thing.
         var previous: String?
         for values in rows.sorted(by: { $0.y < $1.y }).map(\.values) {
             guard let line = messageLine(values) else { continue }
