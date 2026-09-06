@@ -64,11 +64,14 @@ public enum GenericPageExtractor {
     }
 
     /// One region's worth of blocks plus the visual position of the node that claimed it, so
-    /// same-kind regions concatenate in (y, x) order.
+    /// same-kind regions concatenate in (y, x) order. `order` is the claim's index at creation
+    /// and breaks ties for the same reason `BlockEntry.order` does: `sorted` is not stable, and
+    /// two claims of one kind can share a frame origin, or have none.
     struct Claim {
         let kind: RegionKind
         let y: CGFloat
         let x: CGFloat
+        let order: Int
         var entries: [BlockEntry]
     }
 
@@ -83,13 +86,19 @@ public enum GenericPageExtractor {
         var claims = [Claim(kind: .main,
                             y: window.frame?.minY ?? 0,
                             x: window.frame?.minX ?? 0,
+                            order: 0,
                             entries: [])]
         var order = 0
         walk(window, window: window, claimIndex: 0, parentIsSplitGroup: false,
              listDepth: 0, options: options, order: &order, claims: &claims)
+        let budgeted = applyBudgets(assemble(claims), options: options)
         return Result(
-            page: GenericPage(regions: assemble(claims), focused: nil, url: url),
-            truncated: false
+            page: GenericPage(
+                regions: budgeted.regions,
+                focused: resolveFocusedElement(in: window, fallback: focusedElement),
+                url: url
+            ),
+            truncated: budgeted.truncated
         )
     }
 
@@ -105,8 +114,12 @@ public enum GenericPageExtractor {
         if let subrole = node.subrole, dialogSubroles.contains(subrole) { return .dialog }
         if node.role == "AXToolbar" { return .toolbar }
         if let subrole = node.subrole, let kind = landmarkRegions[subrole] { return kind }
-        let name = [node.identifier, node.label].compactMap { $0 }.joined(separator: " ").lowercased()
-        if sidebarNameHints.contains(where: { name.contains($0) }) { return .sidebar }
+        // Each name is tested on its own: concatenating them would invent a hint that neither
+        // carries, e.g. identifier "dataSource" + label "List of items" spanning "source list".
+        let names = [node.identifier, node.label].compactMap { $0?.lowercased() }
+        if names.contains(where: { name in sidebarNameHints.contains(where: name.contains) }) {
+            return .sidebar
+        }
         if parentIsSplitGroup, isSplitGroupSidebar(node, window: window) { return .sidebar }
         return nil
     }
@@ -150,6 +163,7 @@ public enum GenericPageExtractor {
             claims.append(Claim(kind: kind,
                                 y: node.frame?.minY ?? 0,
                                 x: node.frame?.minX ?? 0,
+                                order: claims.count,
                                 entries: []))
             currentClaim = claims.count - 1
         }
@@ -295,7 +309,11 @@ public enum GenericPageExtractor {
         for kind in ContentRenderer.regionOrder {
             let matching = claims
                 .filter { $0.kind == kind && !$0.entries.isEmpty }
-                .sorted { $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x }
+                .sorted {
+                    if $0.y != $1.y { return $0.y < $1.y }
+                    if $0.x != $1.x { return $0.x < $1.x }
+                    return $0.order < $1.order
+                }
             guard !matching.isEmpty else { continue }
             var seen = Set<String>()
             var blocks: [Block] = []
@@ -313,5 +331,123 @@ public enum GenericPageExtractor {
             regions.append(Region(kind: kind, blocks: blocks))
         }
         return regions
+    }
+
+    /// Preferred source is the deepest node in the window tree with `focused == true`; when the
+    /// tree has none, the caller's `AXReader.focusedElementSnapshot` result is used. Menu
+    /// subtrees are excluded here for the same reason they are excluded from the text walk.
+    static func resolveFocusedElement(in window: AXNode, fallback: AXNode?) -> FocusedElement? {
+        var best: (depth: Int, node: AXNode)?
+        func visit(_ node: AXNode, depth: Int) {
+            if menuRoles.contains(node.role) { return }
+            if node.focused, best == nil || depth > best!.depth {
+                best = (depth, node)
+            }
+            for child in node.children { visit(child, depth: depth + 1) }
+        }
+        visit(window, depth: 0)
+        guard let node = best?.node ?? fallback else { return nil }
+        let isSecure = node.subrole == secureSubrole
+        return FocusedElement(
+            role: node.role,
+            identifier: node.identifier,
+            value: isSecure ? nil : node.value,
+            selectedText: node.selectedText,
+            isSecure: isSecure
+        )
+    }
+
+    /// Rendered cost of a region's blocks. Sizing goes through the renderer so nothing has to
+    /// re-render a page, and so a block never costs less than it prints.
+    static func renderedSize(_ blocks: [Block]) -> Int {
+        ContentRenderer.renderBlocks(blocks).count
+    }
+
+    /// `main` gets `totalBudget × mainShare`, `dialog` gets `× dialogShare`, all other regions
+    /// share `× restShare` proportionally to their unbounded rendered size. Unused shares roll
+    /// over rather than being lost:
+    ///
+    /// - `.dialog` is sized first and may borrow `main`'s whole share — and `rest`'s too when
+    ///   there is no other region, so a bare alert window gets the full budget. A dialog is
+    ///   short and is usually the most important thing on screen, so it is trimmed last and
+    ///   only when even the rollover is not enough.
+    /// - whatever `.dialog` and the rest regions leave unspent rolls into `main`, which is
+    ///   therefore also what pays for a dialog that overflows its own share.
+    ///
+    /// Rest regions never grow past `restShare`: a long sidebar must not crowd out a short body.
+    static func applyBudgets(_ regions: [Region], options: Options) -> (regions: [Region], truncated: Bool) {
+        let total = max(1, options.totalBudget)
+        let mainShare = budgetShare(total, options.mainShare)
+        let dialogShare = budgetShare(total, options.dialogShare)
+        let restShare = budgetShare(total, options.restShare)
+        var truncated = false
+
+        let rest = regions.filter { $0.kind != .main && $0.kind != .dialog }
+        let dialogResult = trim(regions.first(where: { $0.kind == .dialog })?.blocks ?? [],
+                                to: dialogShare + mainShare + (rest.isEmpty ? restShare : 0))
+        truncated = truncated || dialogResult.truncated
+        var mainAllowance = mainShare + dialogShare - renderedSize(dialogResult.blocks)
+
+        let restSizes = rest.map { renderedSize($0.blocks) }
+        let restTotal = restSizes.reduce(0, +)
+        var trimmedRest: [Region] = []
+        var restUsed = 0
+        if restTotal <= restShare {
+            trimmedRest = rest
+            restUsed = restTotal
+        } else {
+            for (region, unbounded) in zip(rest, restSizes) {
+                // restTotal > restShare >= 0 here, but the guard keeps the division total.
+                let share = restTotal > 0
+                    ? Int(Double(restShare) * Double(unbounded) / Double(restTotal))
+                    : 0
+                let result = trim(region.blocks, to: share)
+                truncated = truncated || result.truncated
+                if !result.blocks.isEmpty {
+                    trimmedRest.append(Region(kind: region.kind, blocks: result.blocks))
+                }
+                restUsed += renderedSize(result.blocks)
+            }
+        }
+        mainAllowance = max(0, mainAllowance + restShare - restUsed)
+
+        let mainResult = trim(regions.first(where: { $0.kind == .main })?.blocks ?? [], to: mainAllowance)
+        truncated = truncated || mainResult.truncated
+
+        var out: [Region] = []
+        for kind in ContentRenderer.regionOrder {
+            switch kind {
+            case .main:
+                if !mainResult.blocks.isEmpty { out.append(Region(kind: .main, blocks: mainResult.blocks)) }
+            case .dialog:
+                if !dialogResult.blocks.isEmpty {
+                    out.append(Region(kind: .dialog, blocks: dialogResult.blocks))
+                }
+            default:
+                if let region = trimmedRest.first(where: { $0.kind == kind }) { out.append(region) }
+            }
+        }
+        return (out, truncated)
+    }
+
+    /// One share of the budget. `Options` is public and mutable, so a nonsensical fraction must
+    /// not be able to trap `Int(_:)` — `extract` is total.
+    static func budgetShare(_ total: Int, _ fraction: Double) -> Int {
+        guard fraction.isFinite, fraction > 0 else { return 0 }
+        return Int(Double(total) * min(fraction, 1))
+    }
+
+    /// Drops whole blocks from the END of the list, so what survives is the top of the page.
+    /// Never splits a block, so a single block larger than the allowance is kept whole.
+    static func trim(_ blocks: [Block], to allowance: Int) -> (blocks: [Block], truncated: Bool) {
+        var kept: [Block] = []
+        var used = 0
+        for block in blocks {
+            let cost = ContentRenderer.renderBlock(block).count + (kept.isEmpty ? 0 : 1)
+            if !kept.isEmpty, used + cost > allowance { break }
+            kept.append(block)
+            used += cost
+        }
+        return (kept, kept.count != blocks.count)
     }
 }

@@ -96,6 +96,18 @@ final class GenericPageRegionTests: XCTestCase {
         XCTAssertEqual(blocks(byLabel, .sidebar).map(\.text), ["source list text"])
     }
 
+    func testRule4SidebarNamingChecksIdentifierAndLabelIndependently() {
+        // Concatenating the two names invents a hint that neither carries: "dataSource" +
+        // "List of items" contains "source list" only across the join.
+        let result = regions([
+            node("AXGroup", label: "List of items", identifier: "dataSource",
+                 frame: CGRect(x: 500, y: 320, width: 400, height: 200),
+                 children: [body("row text", y: 330)]),
+        ])
+        XCTAssertTrue(blocks(result, .sidebar).isEmpty)
+        XCTAssertEqual(blocks(result, .main).map(\.text), ["row text"])
+    }
+
     func testRule5SplitGroupHeuristicUsesWindowRelativeCoordinates() {
         // Narrow (200 < 350), flush left in WINDOW coordinates (500 - 500 = 0 <= 50), holds an outline.
         let sidebar = node("AXGroup", frame: CGRect(x: 500, y: 340, width: 200, height: 700), children: [
