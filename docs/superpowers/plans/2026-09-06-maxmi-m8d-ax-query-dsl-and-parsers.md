@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace MaxMi's per-app geometry heuristics with an `AXQuery` path DSL, a `StructuredParser` v2 protocol that routes by bundle ID *and* by browser host, and eighteen anchored parsers each pinned by golden `CapturedContent` fixtures — fourteen claimed by bundle ID and four claimed by browser host (Slack web shares the native `SlackParser`).
+**Goal:** Replace MaxMi's per-app geometry heuristics with an `AXQuery` path DSL, a `StructuredParser` v2 protocol that routes by bundle ID *and* by browser host, and eighteen anchored parsers each pinned by golden `CapturedContent` fixtures — thirteen registered by bundle ID, four by browser host (Slack web shares the native `SlackParser`), plus the browser generic-web default, which is not in either map. Mail keeps its AppleScript source and gains only the compose-window draft.
 
-**Architecture:** `AXQuery` compiles a small XPath-like grammar (`//AXRow[domClass*="c-virtual_list__item"][0]`) into cached `[Step]` values and evaluates them over an `AXNode` tree — no throwing, no geometry unless a parser explicitly asks for it. `StructuredParser` adds a static `ParserConfig` (bundle IDs, hosts, forced AX attribute set, offscreen policy, `preferOverNative`) and a `parse(_:context:)` that returns Phase A's `CapturedContent?`, where `nil` means NOT_HANDLED and falls through to `GenericPageExtractor`. `ParserRegistry` gains a bundle-ID map and a host map so a Slack *web* tab and the Slack *app* reach the same anchored parser. Each existing parser keeps its `SourceParser` conformance (which owns the thread key and the accumulation/offscreen policies, per spec §4f rule 1) and gains a `StructuredParser` conformance that owns the content.
+**Architecture:** `AXQuery` compiles a small XPath-like grammar (`//AXRow[domClass*="c-virtual_list__item"][0]`) into cached `[Step]` values and evaluates them over an `AXNode` tree — total and non-throwing, and no geometry unless a parser explicitly asks for it. `StructuredParser` adds a static `ParserConfig` (bundle IDs, hosts, forced AX attribute set, offscreen policy, `preferOverNative`) and a `parse(_:context:) throws` that returns Phase A's `CapturedContent?`, where `nil` means NOT_HANDLED and falls through to `GenericPageExtractor` while a thrown `ParserRefusal` means store nothing. `ParserRegistry` gains a bundle-ID map and a host map so a Slack *web* tab and the Slack *app* reach the same anchored parser. Each existing parser keeps its `SourceParser` conformance (which owns the thread key and the accumulation/offscreen policies, per spec §4f rule 1) and gains a `StructuredParser` conformance that owns the content.
 
 **Tech Stack:** Swift 6 (`swift-tools-version: 6.0`), SwiftPM, macOS 14+, XCTest, ApplicationServices/AppKit accessibility APIs.
 
@@ -32,12 +32,14 @@ Every task's requirements implicitly include this section. Values are copied ver
 
 - **Execute only after the Phase A plan is merged.** Phase A lands the `AXNode` attribute additions first so Phase D only adds `domClassList`/`domIdentifier` on top (§10). If `Sources/MaxMiCore/CapturedContent.swift` does not exist, stop and merge Phase A.
 - **Never redefine a Phase A type.** Consume the names in the table above exactly. A task that needs a new type puts it in a Phase D file.
-- **XCTest only.** Zero `import Testing` anywhere; tests are `final class …: XCTestCase` with `func test…` methods (§2: "506 tests, all XCTest").
+- **XCTest only.** Zero `import Testing` anywhere; tests are `final class …: XCTestCase` with `func test…` methods (§2: "all XCTest"). The measured `import Testing` count on this branch is **0** and must stay 0.
+- **Baseline: 689 tests with exactly 3 known-red.** Measured on `main` after the Phase A merge (Phase A ledger, fix wave `d4a35de..0b844e8`). The three are `ActivityStoreTests.testNewSourceActivitySummaryWaitsForCloudReview`, `CaptureDisplaySummarizerTests.testConversationSummaryUsesTrailingMessages` and `PauseSettingsTests.testNewSourceIsHeldFromCloudUntilReviewed`. **The gate for every task and for Task 21 is zero NEW failures** — those three may still be red, nothing else may be. Spec §2's "506 tests" and §11 item 10's "506 existing tests" are pre-Phase-A figures; the numbers quoted in this plan are non-binding, the named three are binding (spec §12 amendment).
 - **The existing tests stay green.** Every signature change in this plan lists its exact existing call sites.
 - **`AXQuery` never throws and is total** (§7a). An invalid path is a programmer error: `preconditionFailure` in debug, `nil` / `[]` in release. Parsed paths are cached in a **lock-guarded LRU of capacity 128** keyed on the path string.
 - **`AXQuery` matching is case-sensitive except `domClass`, which is case-insensitive** (§7a). Predicates on one step are ANDed. `description` is an explicit **alias of `label`**, because `AXReader` folds `kAXDescriptionAttribute ?? kAXHelpAttribute` into `label` (§7a, §12 Q1).
 - **`domClassList`/`domIdentifier` are read only under an `AXWebArea` ancestor** (§7a, §8), or when a parser's `ParserConfig.attributeSet` forces them.
-- **`nil` from a `StructuredParser` means NOT_HANDLED and routes to `GenericPageExtractor`** (§7b, §4f rule 3). The fallback is **not silent**: `capture_health_events.parser` records `"GenericPageExtractor.v2/fallback/<ParserTypeName>"` (§8). `capture_health_events` gains no new column.
+- **`nil` from a `StructuredParser` means NOT_HANDLED and routes to `GenericPageExtractor`** (§7b, §4f rule 3). The fallback is **not silent**: `capture_health_events.parser` records `"GenericPageExtractor.v2/fallback/<ParserTypeName>"`, composed by the **existing** `CaptureDispatch.fallbackParserID(failedParser:)` (`Sources/MaxMiCapture/ParserRegistry.swift:167-169`) — this plan adds no second spelling (§8). `capture_health_events` gains no new column.
+- **A thrown `ParserRefusal` means STORE NOTHING, on both dispatch paths.** `StructuredParser.parse(_:context:)` is `throws` purely so a parser can refuse. On the native path the refusal travels up the `parseStructured` bridge and `CaptureDispatch.parseDetailed` maps it to `.noContent` exactly as it does today (`ParserRegistry.swift:132-147`). On the browser path `BrowserCapturePipeline.parse` rethrows it and `AppWiring` records `.skipped(.parserNoContent)`. A refusal is **never** reported as a `GenericPageExtractor.v2/fallback/...` degradation (spec §12 amendment, superseding Q18).
 - **Mail stays AppleScript-sourced** (§12 Q6). Mail's AX tree is ~80 ms/node. Phase D's only Mail change is the compose-window `Mail.subjectField` read (§7c).
 - **Discord must not use any geometric split** — its `AXFrame` values are unreliable (§7c, `DiscordParser.swift` header comment).
 - **Visual-order sorting is translation-invariant.** `AXFrame` is global screen coordinates, so every comparison against a window edge or midpoint is done relative to the window frame (§4e, and the `project_maxmi_ax_capture` regression).
@@ -59,14 +61,16 @@ Phase A migrated each parser's **output type** (`SlackParser` already returns a 
 - The type gains a `StructuredParser` conformance: `static var config: ParserConfig` and `parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent?`.
 - `parseStructured(window:app:)` (the `SourceParser` requirement Phase A added) becomes a four-line bridge to `parse(_:context:)`. It is written out explicitly in each parser, not provided by a constrained protocol extension — two competing default implementations of the same requirement is exactly the kind of overload-resolution subtlety that silently picks the wrong one.
 - Where Phase D's implementation supersedes an interim Phase A body inside `parseStructured`, **replace that body**; do not leave two content paths for one app. Concretely, Phase A Task 16 routes Notes, Notion, Obsidian, Discord and Messages through `GenericV2Content.page` / `GenericV2Content.lines`. In each of Tasks 11, 12, 15, 16 and 17 the new `parse(_:context:)` becomes the whole content path and the `parseStructured` bridge is exactly the four lines the task shows — the `GenericV2Content` call is **deleted**, not chained. Returning `nil` is the correct degradation: `CaptureDispatch` rule 3 (Phase A Task 10) already routes it to `GenericPageExtractor`, which is strictly better than `GenericV2Content.lines`, and it is what records the §8 fallback marker.
-- Two Phase A members are **superseded and replaced**, not shadowed: `TerminalParser.promptPatterns` / `TerminalParser.segments(fromScrollback:)` (Phase A Task 14) are replaced by Task 7's `PromptShape` + `promptShape(in:)` + `segments(fromScrollback:)`, and Phase A's `TerminalSegmentationTests.swift` is deleted in favour of `TerminalStructuredTests.swift` because Task 7's tests assert a superset of its behaviour plus the absolute `cwd` path Phase A explicitly deferred ("The richer absolute path is Phase D's anchored rewrite"). Nothing else in Phase A is deleted by this plan.
+- Two Phase A members are **superseded and replaced**, not shadowed: `TerminalParser.promptPatterns` / `TerminalParser.segments(fromScrollback:)` (Phase A Task 14) are replaced by Task 7's `PromptShape` + `promptShape(in:)` + `segments(fromScrollback:)`. Phase A's `TerminalSegmentationTests.swift` is **kept, not deleted**: two of its tests (`testOversizeScrollbackDropsOldestSegments`, `testCaptureRendersTheSegmentsAndKeepsKeyKindAndPolicy`) are the only coverage of the `contentCap` trim and of the key/kind/policy invariant, so Task 7 moves those two into `TerminalStructuredTests.swift` and updates the two `cwd` assertions in the seven that stay (Phase A asserted the slug `"maxmi"`; Phase D returns the absolute `"~/code/MaxMi"` it explicitly deferred: "The richer absolute path is Phase D's anchored rewrite"). No Phase A test file is deleted by this plan.
+- **Dead members are deleted by the task that removes their last caller** — Swift warns on unused `private` members and Task 21 requires a zero-warning build. Each parser task names the members it orphans and deletes them in the same step.
+- **`GenericV2Content` survives Phase D** at three of its eight call sites: `GenericAXParser.swift:14` (the dispatch default), `StructuredNativeParsers.swift:259` (Word/Pages) and `:291` (Outlook/Spark). Only the five call sites named above are deleted.
 
 ### Three reconciliations of spec text against the code
 
 Decided here so no task has to reopen them.
 
 1. **`ParserConfig` gains `hosts: [String]`.** §7b lists the fields `app`, `bundleIDs`, `attributeSet`, `offscreenPolicy`, `preferOverNative`, `minAppVersion`, and separately requires "a third [map] keyed by **host** so browsers route web-app hosts through the same mechanism". A host map needs the hosts to come from somewhere, and `ParserConfig` is the only per-parser declaration site. `hosts` is added, defaulting to `[]`. A leading-dot entry (`".slack.com"`) means suffix match, mirroring `WebAppCaptureParser.classify`'s existing `host.hasSuffix(".slack.com")`.
-2. **`ParserConfig.attributeSet` is implemented as forced AX attribute names, not a generic attribute bag.** §7b says it is "extra AX attributes `AXReader` must fetch for this app" and §8 says it is "what keeps the extra AX reads off apps that do not need them". Adding a `[String: String]` bag to `AXNode` would change the wire shape of eleven fixtures for no consumer. Instead `AXReader.snapshotFrontmostWindow(pid:maxNodes:maxDepth:forcedAttributes:)` takes a `Set<String>`; the only names it honours are `"AXDOMClassList"` and `"AXDOMIdentifier"`, and honouring them means bypassing the `AXWebArea`-ancestor gate for the whole tree. That is exactly what Electron apps (Slack, Notion, Obsidian) need, because they do not always expose an `AXWebArea` above their DOM.
+2. **`ParserConfig.attributeSet` is implemented as forced AX attribute names, not a generic attribute bag.** §7b says it is "extra AX attributes `AXReader` must fetch for this app" and §8 says it is "what keeps the extra AX reads off apps that do not need them". Adding a `[String: String]` bag to `AXNode` would change the wire shape of every fixture on disk for no consumer. Instead `AXReader.snapshotFrontmostWindow(pid:maxNodes:maxDepth:forcedAttributes:)` takes a `Set<String>`; the only names it honours are `"AXDOMClassList"` and `"AXDOMIdentifier"`, and honouring them means bypassing the `AXWebArea`-ancestor gate for the whole tree. That is exactly what Electron apps (Slack, Notion, Obsidian) need, because they do not always expose an `AXWebArea` above their DOM. **The forced set must be wired at the live snapshot site** (`Sources/MaxMi/AppWiring.swift:1383` and `:1391`, `AXReader.snapshotFrontmostWindow(pid: pid)`), not only in the tests — Task 5 Step 5 does exactly that with `registry.forcedAttributes(for: app.bundleID)`. Without that line Slack/Notion/Obsidian anchors are nil in production and only the hand-authored fixtures pass.
 3. **`StructuredParser` does not carry the thread key.** §7b's protocol returns only `CapturedContent?`, but `sourceKey` is load-bearing and heavily tested (`SlackParser.key(fromTitle:)`, `TerminalParser.terminalKey`, `ObsidianParser.key(fromTitle:)`, `DiscordParser.key(fromTitle:)`, `MessagesParser.key(fromTitle:)`). §4f rule 1 already resolves it: keys and policies come from `SourceParser.parse`. The protocol stays exactly as §7b writes it.
 
 ---
@@ -78,18 +82,20 @@ Decided here so no task has to reopen them.
 | File | Responsibility |
 |---|---|
 | `Sources/MaxMiCapture/AXQuery.swift` | The path grammar: `Axis`, `Attribute`, `Operator`, `Predicate`, `Step`, the parser, the capacity-128 LRU path cache, and `find`/`findAll` evaluation. Nothing app-specific. |
-| `Sources/MaxMiCapture/AXQueryHelpers.swift` | `AXQuery.Matchers`, `sortedByVisualOrder(_:relativeTo:)`, `collectStaticTexts(in:)`, `formatTable(_:)`. Split from `AXQuery.swift` so the grammar file stays readable. |
+| `Sources/MaxMiCapture/AXQueryHelpers.swift` | `AXQuery.Matchers`, `all(in:where:)`/`first(in:where:)`, `sortedByVisualOrder(_:relativeTo:)`, `collectStaticTexts(in:)`. Split from `AXQuery.swift` so the grammar file stays readable. No table formatter: rows reuse `GenericPageExtractor`'s row semantics (spec §12 amendment, ruling F15). |
 | `Sources/MaxMiCapture/StructuredParser.swift` | `ParserConfig`, `ParseContext`, the `StructuredParser` protocol. Types only — no routing, no parsers. |
-| `Sources/MaxMiCapture/StructuredParserRouting.swift` | `ParserRegistry`'s structured + host maps, host resolution, `CaptureDispatch.structuredCapture(window:context:registry:)`, `StructuredParseResult`, and the §8 fallback-marker helper. |
+| `Sources/MaxMiCapture/StructuredParserRouting.swift` | `ParserRegistry`'s structured + host maps, host resolution, and `CaptureDispatch.structuredCapture(window:context:registry:fallback:) throws -> StructuredParseResult` (the browser path's single entry point). The §8 marker helper is **not** re-added here — `CaptureDispatch.fallbackParserID(failedParser:)` already exists. |
 | `Sources/MaxMiCapture/EditorParser.swift` | Cursor + VS Code → `.document`. New parser; these two apps used `GenericAXParser` before. |
 | `Sources/MaxMiCapture/WebPageParser.swift` | The browser generic-web path: `GenericPageExtractor` over the active `AXWebArea` subtree with `url` set. |
 | `Sources/MaxMiCapture/FinderParser.swift` | Finder → `.generic` with sidebar/main/toolbar regions and joined table rows. New parser; Finder used `GenericAXParser` before. |
+| `Tests/MaxMiCaptureTests/Fixtures/dom-attributes.json` | Hand-authored web-area DOM shape at a nonzero window origin (Task 1). |
+| `Tests/MaxMiCaptureTests/Fixtures/generic-empty-golden.json` | The smallest possible golden — an empty `.generic` page — used by `FixtureLoadingTests` (Task 6). |
 | `tools/ax-snapshot-record.swift` | Records the focused window as a `Codable` `AXNode` JSON fixture. `tools/ax-structure-inventory.swift` deliberately emits no attribute values and cannot produce a loadable fixture (§12 Q11). |
-| `Tests/MaxMiCaptureTests/FixtureLoading.swift` | The one `fixture(_:)` loader (replacing six duplicates, §7d) plus `goldenCapturedContent(_:)` and `assertGolden(_:matches:)`. |
+| `Tests/MaxMiCaptureTests/FixtureLoading.swift` | The one `fixture(_:)` loader (replacing the **twelve** duplicates that exist on this branch plus Task 1's, §7d and spec §12 amendment) plus `goldenCapturedContent(_:)`, `assertGolden(_:matches:)` and `goldenJSON(_:)`. |
 | `Tests/MaxMiCaptureTests/AXQueryPathTests.swift` | Table-driven grammar tests + the LRU cache. |
 | `Tests/MaxMiCaptureTests/AXQueryEvaluationTests.swift` | `find`/`findAll` over synthetic trees; attribute aliases; `domClass` case-insensitivity. |
-| `Tests/MaxMiCaptureTests/AXQueryHelperTests.swift` | Matchers, translation-invariant visual order, `collectStaticTexts`, `formatTable`. |
-| `Tests/MaxMiCaptureTests/AXNodeDOMAttributeTests.swift` | `domClassList`/`domIdentifier` decode; the eleven pre-M8 fixtures still decode; the web-area read gate. |
+| `Tests/MaxMiCaptureTests/AXQueryHelperTests.swift` | Matchers, `all`/`first`, translation-invariant visual order (including a genuinely frameless node), `collectStaticTexts`. |
+| `Tests/MaxMiCaptureTests/AXNodeDOMAttributeTests.swift` | `domClassList`/`domIdentifier` decode; **every** fixture in `Fixtures/` still decodes (enumerated, not a hand-maintained list); the web-area read gate. |
 | `Tests/MaxMiCaptureTests/StructuredParserRoutingTests.swift` | Bundle-ID routing, host routing, `preferOverNative`, `nil` → `GenericPageExtractor` fall-through, the fallback marker string. |
 | `Tests/MaxMiCaptureTests/TerminalStructuredTests.swift` | Prompt-shape segmentation, `isRunning`, `cwd`, failure → one segment with `command: nil`, golden fixtures. |
 | `Tests/MaxMiCaptureTests/EditorParserTests.swift` | Editor anchor, active-tab title for both title orders, integrated terminal dropped, key derivation, golden fixtures. |
@@ -105,7 +111,7 @@ Decided here so no task has to reopen them.
 | `Tests/MaxMiCaptureTests/FinderStructuredTests.swift` | Sidebar/main/toolbar regions, `.tableRow` with `selected`, path, golden fixtures. |
 | `Tests/MaxMiCaptureTests/CalendarStructuredTests.swift` | `.calendar` events from the detail root, golden fixtures. |
 | `Tests/MaxMiCaptureTests/RemindersStructuredTests.swift` | `.tasks` with status from the row checkbox, golden fixtures. |
-| `Sources/MaxMiCapture/WebHostParsing.swift` | The `RefusingStructuredParser` protocol and the shared message/draft/anchor-text helpers the five §14b web-app parsers use. No DOM class lives here. |
+| `Sources/MaxMiCapture/WebHostParsing.swift` | The shared message/draft/anchor-text helpers the five §14b web-app parsers use. No DOM class lives here, and no refusal protocol: a host parser refuses by throwing `ParserRefusal` from `StructuredParser.parse` (spec §12 amendment, superseding Q18). |
 | `Sources/MaxMiCapture/GmailParser.swift` | Gmail (`mail.google.com`) → thread `.conversation`, inbox `.generic` rows, compose draft. |
 | `Sources/MaxMiCapture/LinkedInMessagingParser.swift` | LinkedIn `/messaging` → `.conversation`; nil on every other LinkedIn path. |
 | `Sources/MaxMiCapture/OutlookWebParser.swift` | Outlook web (`outlook.office.com`, `outlook.live.com`) → reading-pane `.conversation`, list `.generic` rows, compose draft. |
@@ -124,38 +130,47 @@ Decided here so no task has to reopen them.
 |---|---|
 | `Sources/MaxMiCapture/AXSnapshot.swift` | `AXNode` gains `domClassList: [String]?` and `domIdentifier: String?`, defaulted in `init` and decoded with `decodeIfPresent`. |
 | `Sources/MaxMiCapture/AXReader.swift` | `convert` threads an `inWebArea` flag and a `forcedAttributes` set; `snapshotFrontmostWindow` gains `forcedAttributes:`; new pure `readsDOMAttributes(role:inWebArea:forced:)`. |
-| `Sources/MaxMiCapture/ParserRegistry.swift` | New bundle-ID constants (`finderBundleID`, `cursorBundleID`, `vsCodeBundleID`); the structured and host maps are built here and consumed by `StructuredParserRouting.swift`. |
-| `Sources/MaxMiCapture/BrowserCapturePipeline.swift` | Routes a browser window through the host map first, then `WebPageParser`; carries the structured value on `BrowserCaptureResult`. |
+| `Sources/MaxMiCapture/ParserRegistry.swift` | New bundle-ID constants (`finderBundleID`, `cursorBundleID`, `vsCodeBundleID`, `editorBundleIDs`); the structured and host maps are built here from one registration list and consumed by `StructuredParserRouting.swift`; the Phase A test seam `init(parsers:)` (`:60-62`) initialises both new stored properties to `[:]`. |
+| `Sources/MaxMiCapture/BrowserCapturePipeline.swift` | Routes a browser window through the host map first, then `WebPageParser`. `parse(window:windowTitle:browser:contentBudget:)` **keeps** `contentBudget:` (used by `Tests/MaxMiCaptureTests/WebAppStructuredTests.swift:117`) and gains `registry:`. `BrowserCaptureResult` gains no field — consumers read `result.capture.structured`. |
 | `Sources/MaxMiCapture/WebAppCaptureParser.swift` | `classify` keeps its ten cases for the parser ID and `contentKind`, but no longer decides content shape — the host map does (§7b). |
 | `Sources/MaxMiCapture/TerminalParser.swift` | `StructuredParser` conformance; prompt-shape segmentation; `cwdPath`; `pathBodyPattern` promoted to a `static let`. |
-| `Sources/MaxMiCapture/SlackParser.swift` | `StructuredParser` conformance; DOM-class anchors with the existing x-band walk as fallback; `channelName(fromTitle:)`. |
+| `Sources/MaxMiCapture/SlackParser.swift` | `StructuredParser` conformance; DOM-class anchors with the existing x-band walk as fallback; the existing `channel(fromTitle:)`/`isGroup(fromTitle:)` reused; `messages(in:windowX:)`, `collectRows` and `collectStaticText` deleted. |
 | `Sources/MaxMiCapture/DiscordParser.swift` | `StructuredParser` conformance; "Messages in" list anchor; heading-based sender attribution. |
 | `Sources/MaxMiCapture/MessagesParser.swift` | `StructuredParser` conformance; bubble side → `isUser`. |
-| `Sources/MaxMiCapture/NativeConversationParser.swift` | `WhatsAppParser` gains `StructuredParser` conformance; `NativeConversationExtraction.conversationName(window:app:)` promoted to internal. |
+| `Sources/MaxMiCapture/NativeConversationParser.swift` | `WhatsAppParser` gains `StructuredParser` conformance; `NativeConversationExtraction.conversationTitle(in:app:mainBoundary:requiresHeaderSemantics:)` (`:210`) and `mainPaneBoundary(_:)` (`:205`) are promoted from `private` to internal, and the **new** `conversationName(window:app:)` wraps them. `split(_:byKnownParticipant:)` (`:179-182`) stays on the new path. |
 | `Sources/MaxMiCapture/MailParser.swift` | New `composeDraft(window:)`; `parseStructured` returns it first when a compose window is frontmost. |
 | `Sources/MaxMiCapture/NotesParser.swift` | `StructuredParser` conformance; `Note Body Text View` anchor. |
 | `Sources/MaxMiCapture/NotionParser.swift` | `StructuredParser` conformance; `notion-frame` anchor. |
 | `Sources/MaxMiCapture/ObsidianParser.swift` | `StructuredParser` conformance; `cm-editor` / `markdown-preview-view` anchors; `noteName(fromTitle:)`. |
 | `Sources/MaxMiCapture/StructuredNativeParsers.swift` | `CalendarParser`/`FantasticalParser`/`RemindersParser` gain `StructuredParser` conformance; `StructuredEntityExtraction.preferredDetailRoot` and `orderedFields` promoted to internal. |
 | `Sources/MaxMiCore/ApplicationRegistry.swift` | Cursor, VS Code and Finder move to `captureStrategy: .nativeParser`; Finder gains a descriptor. |
-| `Sources/MaxMi/AppWiring.swift` | The non-browser dispatch switch (`:1479`) and the browser branch (`:1446-1477`) pass a `ParseContext` and handle the structured fall-through result. |
+| `Sources/MaxMi/AppWiring.swift` | The snapshot calls (`:1383`, `:1391`) pass `forcedAttributes: registry.forcedAttributes(for: app.bundleID)`; the browser branch (`:1449-1481`) passes a `ParseContext` and a `registry` into `BrowserCapturePipeline.parse`. The non-browser switch (`:1483`) is **unchanged** — a v2 parser reaches it through the `parseStructured` bridge, so the window is parsed once (ruling F12). |
 | `Tests/MaxMiCoreTests/ApplicationRegistryTests.swift:66` | `cursor?.captureStrategy` expectation moves from `.genericAX` to `.nativeParser`. |
-| `Tests/MaxMiCaptureTests/ExtractorTests.swift:5`, `BrowserCapturePipelineTests.swift:6`, `NativeConversationParserTests.swift:5`, `GenericAXParserTests.swift:5`, `SlackParserTests.swift:5`, `StructuredNativeParserTests.swift:5` | The six duplicated `func fixture(_:)` helpers are deleted in favour of `FixtureLoading.swift` (§7d). |
+| `AXNodeAttributesTests.swift:5-10`, `BrowserCapturePipelineTests.swift:6-9`, `ExtractorTests.swift:5-8`, `GenericAXParserTests.swift:5-12`, `GenericPageBudgetTests.swift:6-11`, `GenericPageRegionTests.swift:6-11`, `NativeConversationParserTests.swift:6-9`, `SlackParserTests.swift:6-9`, `StructuredConversationParserTests.swift:6-11`, `StructuredEntityTypedTests.swift:6-11`, `StructuredNativeParserTests.swift:5-8`, `WebAppStructuredTests.swift:6-11` (all under `Tests/MaxMiCaptureTests/`) | The **twelve** duplicated `func fixture(_:)` helpers are deleted in favour of `FixtureLoading.swift` (§7d). Task 1's thirteenth copy goes with them. |
 | `Tests/MaxMiCaptureTests/Fixtures/README.md` | A row per new fixture, plus the recording + hand-scrub procedure. |
-| `Sources/MaxMiCapture/BrowserCapturePipeline.swift` (second change, Task 22) | The host parse is hoisted above `WebAppCaptureParser.parse`, a `RefusingStructuredParser` may throw `ParserRefusal` for an empty compose-only tab, and a host shape is bounded with `CaptureAccumulator.bound` to the browser budget. |
+| `Sources/MaxMiCapture/BrowserCapturePipeline.swift` (second change, Task 22) | The host parse is hoisted above `WebAppCaptureParser.parse`, a host `StructuredParser` may throw `ParserRefusal` for an empty compose-only tab (rethrown, not swallowed), and a host shape is bounded with `CaptureAccumulator.bound` to the browser budget. |
 | `Sources/MaxMiCapture/WebAppCaptureParser.swift` (second change, Task 26) | `classify` recognises `teams.cloud.microsoft`, so both Teams domains reach `contentKind` `.conversation` (§12 Q3). `URLKeyNormalizer` is deliberately untouched. |
-| `Sources/MaxMiCapture/SlackParser.swift` (second change, Task 25) | `domMessages`/`parse` replaced: alternate `c-message_kit__background` item class, timestamps read from `AXDescription`, header-driven `channel`/`isGroup`, `RefusingStructuredParser` conformance. |
+| `Sources/MaxMiCapture/SlackParser.swift` (second change, Task 25) | `domMessages`/`parse` replaced: alternate `c-message_kit__background` item class, timestamps read from `AXDescription`, header-driven `channel`/`isGroup`, and a `ParserRefusal` throw for a compose-only tab. |
 | `Sources/MaxMiCapture/ParserRegistry.swift` (second change, Tasks 22-26) | The four new host parsers are appended to Task 5's single `structured` registration list; each carries `hosts` and no bundle IDs, so the derived loop files them in the host map only. |
 | `Sources/MaxMi/AppWiring.swift` (second change, Task 22) | One new `catch let refusal as ParserRefusal` clause on the browser path: logs `.parserRefused` and records `.skipped(.parserNoContent)`; no retry, no new health enum case. |
+| `Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift` (Task 7) | Kept. Its two `cwd` assertions move from the Phase A slug (`"maxmi"`, `"shipcast"`) to Phase D's absolute path (`"~/code/MaxMi"`, `"~/code/ShipCast"`), and its two invariant tests move to `TerminalStructuredTests.swift`. |
+| `Tests/MaxMiCaptureTests/StructuredNativeParserTests.swift` (Tasks 19-20) | Existing Calendar/Reminders assertions keep passing; only the duplicated `fixture(_:)` helper is removed (Task 6). |
 | `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (created in Task 21) | Tasks 22-26 add `hostCoverage`, `testEveryHostRoutedParserIsReachableFromTheHostMap`, and five `coverage` entries. |
 | `Tests/MaxMiCaptureTests/SlackStructuredTests.swift` (Task 25) | One assertion message updated where Task 10's fixture now exercises the "no header anchor" `isGroup` default. |
+| `Tests/MaxMiCaptureTests/BrowserCapturePipelineTests.swift` (Task 9) | The assertions that read `result.capture.content` as flat visual-order text are rewritten against `ContentRenderer.render(structured, .full)` and the typed regions; URL, key, `contentKind`, `webApp` and `parserID` assertions are unchanged. Its duplicated `fixture(_:)` also goes in Task 6. |
+| `Sources/MaxMiCapture/StructuredNativeParsers.swift` (second change, Task 19) | `calendarContent`'s `hasConference` rule also fires on a field whose metadata contains `"conference"`. |
+| `Sources/MaxMiCapture/StructuredNativeParsers.swift` (third change, Task 20) | Five `StructuredEntityExtraction` members promoted from `private` to internal (`preferredDetailRoot`, `orderedFields`, `firstValue`, `looksLikeDateOrTime`, `isChrome`); `RemindersParser.parse(window:app:)` takes its content from `parseStructured`. |
+| `Sources/MaxMiCapture/NativeConversationParser.swift` (second change, Task 13) | `WhatsAppParser.parse(window:app:)` builds its capture from `parseStructured` instead of walking the tree a second time via `capture(...)`; `slug(_:)` promoted to internal. |
 
 ### Deleted
 
 | File | Why |
 |---|---|
-| `Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift` | Phase A Task 14's interim segmentation test. Task 7 replaces the segmentation with the shape-aware version Phase A explicitly deferred ("The richer absolute path is Phase D's anchored rewrite") and asserts a superset of its behaviour. |
-| The six duplicated `func fixture(_:)` methods (not whole files) | Consolidated into `Tests/MaxMiCaptureTests/FixtureLoading.swift` per spec §7d. |
+| `TerminalParser.promptPatterns`, `TerminalParser.segments(fromScrollback:)`'s Phase A body, `joinedOutput(_:)`, `sessionCwd(fromTitle:)`, `structured(fromScrollback:app:)` (members, not files) | Superseded by Task 7's `PromptShape` path. Deleted in Task 7 so no orphaned private member trips the zero-warning gate. |
+| The **twelve** duplicated `func fixture(_:)` methods plus Task 1's thirteenth (methods, not whole files) | Consolidated into `Tests/MaxMiCaptureTests/FixtureLoading.swift` per spec §7d. |
+| `SlackParser.messages(in:windowX:)` / `collectRows(_:into:windowX:)` / `collectStaticText(_:into:)`, `DiscordParser.messageLines(in:)`/`collect(_:into:)`, `MessagesParser.conversationLines(in:)`/`collect(_:into:)` (members, not files) | Orphaned when Tasks 10, 11 and 12 replace the content path; deleted in the same task (ruling F20). `SlackParser.channel(fromTitle:)` and `isGroup(fromTitle:)` are **kept** — the new path calls them and `StructuredConversationParserTests.swift:36-41` asserts them. |
+
+**No whole file is deleted by this plan.**
 
 ---
 
@@ -165,7 +180,7 @@ Decided here so no task has to reopen them.
 
 **Files:**
 - Modify: `Sources/MaxMiCapture/AXSnapshot.swift` (the whole `AXNode` struct)
-- Modify: `Sources/MaxMiCapture/AXReader.swift:20` (`snapshotFrontmostWindow`), `:57-91` (`convert`)
+- Modify: `Sources/MaxMiCapture/AXReader.swift:23` (`snapshotFrontmostWindow`), `:80-130` (`convert`)
 - Create: `Tests/MaxMiCaptureTests/Fixtures/dom-attributes.json`
 - Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
 - Test: `Tests/MaxMiCaptureTests/AXNodeDOMAttributeTests.swift`
@@ -218,11 +233,23 @@ import XCTest
 @testable import MaxMiCapture
 
 final class AXNodeDOMAttributeTests: XCTestCase {
+    /// The thirteenth copy of this loader on the branch. Task 6 deletes all thirteen in favour of
+    /// the free function in `FixtureLoading.swift`; this task runs before Task 6, so it carries
+    /// its own copy for exactly one task.
     func fixture(_ name: String) throws -> AXNode {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: name, withExtension: "json", subdirectory: "Fixtures"
         ))
         return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
+    }
+
+    /// Every fixture on disk, enumerated rather than listed by hand — a hand-maintained list
+    /// silently stops covering fixtures that later tasks add (16 exist on this branch, and this
+    /// task adds the 17th).
+    func everyFixtureName() throws -> [String] {
+        let urls = try XCTUnwrap(Bundle.module.urls(forResourcesWithExtension: "json",
+                                                    subdirectory: "Fixtures"))
+        return urls.map { $0.deletingPathExtension().lastPathComponent }.sorted()
     }
 
     func testDOMAttributesDecode() throws {
@@ -237,11 +264,18 @@ final class AXNodeDOMAttributeTests: XCTestCase {
         XCTAssertEqual(item.children[0].domClassList, ["c-message__sender"])
     }
 
-    func testAbsentDOMAttributesDefaultToNilInEveryPreM8Fixture() throws {
-        for name in ["calendar-event", "chrome-article", "chromium-gmail-thread", "cursor-editor",
-                     "gecko-slack-chat", "pages-document", "reminder-task", "safari-domain-only",
-                     "slack-window", "whatsapp-conversation", "zen-meet"] {
+    func testEveryFixtureOnDiskStillDecodesAndOnlyDomAttributesFixtureCarriesTheNewFields() throws {
+        let names = try everyFixtureName()
+        XCTAssertTrue(names.contains("dom-attributes"))
+        XCTAssertGreaterThanOrEqual(names.count, 16, "16 fixtures existed before this task")
+        for name in names {
+            // Goldens are CapturedContentEnvelope JSON, not AXNode JSON; skip them by suffix.
+            if name.hasSuffix("-golden") { continue }
             let node = try fixture(name)
+            if name == "dom-attributes" {
+                XCTAssertNotNil(node.children.first?.domIdentifier)
+                continue
+            }
             XCTAssertNil(node.domClassList, "\(name) has no domClassList and must decode as nil")
             XCTAssertNil(node.domIdentifier, "\(name) has no domIdentifier and must decode as nil")
         }
@@ -397,7 +431,7 @@ Run: `swift test --filter AXNodeDOMAttributeTests`
 Expected: PASS, 6 tests.
 
 Run: `swift test --filter MaxMiCaptureTests`
-Expected: PASS, unchanged — the eleven pre-M8 fixtures decode with both new fields nil.
+Expected: PASS, no NEW failures — every fixture already on disk decodes with both new fields nil.
 
 - [ ] **Step 5: Commit**
 
@@ -419,7 +453,7 @@ git commit -m "Read DOM class list and DOM identifier under web areas"
 
 **Interfaces:**
 - Consumes: nothing from Task 1 (the grammar knows attribute *names*, not `AXNode` fields).
-- Produces, all `internal` so `@testable import` can see them and the public surface stays the four functions §7a lists: `AXQuery.Axis` (`.child`, `.descendant`), `AXQuery.Attribute` (`.role`, `.subrole`, `.title`, `.description`, `.label`, `.value`, `.identifier`, `.domId`, `.domClass`), `AXQuery.Operator` (`.equals`, `.prefix`, `.contains`), `AXQuery.Predicate{attribute, op, expected}`, `AXQuery.Step{axis, role: String?, predicates: [Predicate], index: Int?}`, `AXQuery.parsePath(_:) -> [Step]?` (uncached), `AXQuery.steps(for:) -> [Step]?` (cached), `AXQuery.pathCacheCapacity = 128`, `AXQuery.cachedPathCount()`, `AXQuery.resetPathCache()`, and in DEBUG builds `AXQuery.trapsOnInvalidPath` (default `true`).
+- Produces, all `internal` so `@testable import` can see them and the public surface stays the four functions §7a lists: `AXQuery.Axis` (`.child`, `.descendant`), `AXQuery.Attribute` (`.role`, `.subrole`, `.title`, `.description`, `.label`, `.value`, `.identifier`, `.domId`, `.domClass`), `AXQuery.Operator` (`.equals`, `.prefix`, `.contains`), `AXQuery.Predicate{attribute, op, expected}`, `AXQuery.Step{axis, role: String?, predicates: [Predicate], index: Int?}`, `AXQuery.parsePath(_:) -> [Step]?` (uncached), `AXQuery.steps(for:) -> [Step]?` (cached), `AXQuery.pathCacheCapacity = 128`, `AXQuery.cachedPathCount()`, `AXQuery.resetPathCache()`, and `AXQuery.trapsOnInvalidPath` — declared in **both** build configurations (default `true` in debug, `false` in release) so the tests that flip it compile under `swift test -c release` (ruling F14).
 - `role == nil` means the `*` wildcard. `index` is zero-based and at most one per step.
 
 - [ ] **Step 1: Write the failing test**
@@ -435,12 +469,15 @@ final class AXQueryPathTests: XCTestCase {
         super.setUp()
         AXQuery.resetPathCache()
         // An invalid path is a programmer error and traps in debug builds. These tests assert the
-        // release behaviour (nil / []), so the trap is switched off for the duration.
+        // release behaviour (nil / []), so the trap is switched off for the duration. The property
+        // exists in release too, so this file compiles under `swift test -c release`.
         AXQuery.trapsOnInvalidPath = false
     }
 
     override func tearDown() {
+        #if DEBUG
         AXQuery.trapsOnInvalidPath = true
+        #endif
         AXQuery.resetPathCache()
         super.tearDown()
     }
@@ -521,7 +558,7 @@ final class AXQueryPathTests: XCTestCase {
         }
     }
 
-    func testWildcardRoleIsRepresentedAsNil() {
+    func testWildcardRoleIsRepresentedAsNil() throws {
         XCTAssertNil(try XCTUnwrap(AXQuery.parsePath("//*")).first?.role)
         XCTAssertEqual(try XCTUnwrap(AXQuery.parsePath("//AXRow")).first?.role, "AXRow")
     }
@@ -609,18 +646,19 @@ public enum AXQuery {
 
     // MARK: - Invalid-path policy
 
+    /// A malformed path is a programmer error, not input, so debug builds trap on it and release
+    /// builds degrade to nil / []. Declared in BOTH configurations — the grammar's own tests flip
+    /// it off to assert the release behaviour, and `swift test -c release` has to compile them.
     #if DEBUG
-    /// A malformed path is a programmer error, not input, so debug builds trap on it. The
-    /// grammar's own tests flip this off to assert the release behaviour (nil / []).
     nonisolated(unsafe) static var trapsOnInvalidPath = true
+    #else
+    nonisolated(unsafe) static var trapsOnInvalidPath = false
     #endif
 
     static func invalid(_ path: String, _ reason: String) -> [Step]? {
-        #if DEBUG
         if trapsOnInvalidPath {
             preconditionFailure("AXQuery: malformed path \"\(path)\" — \(reason)")
         }
-        #endif
         return nil
     }
 
@@ -775,7 +813,7 @@ git commit -m "Add AXQuery path grammar with a cached parser"
 
 **Interfaces:**
 - Consumes: `AXQuery.Step`/`Predicate`/`Attribute`/`Operator` and `AXQuery.steps(for:)` (Task 2); `AXNode` including `domClassList`/`domIdentifier` (Task 1).
-- Produces: `AXQuery.find(_ path: String, in node: AXNode) -> AXNode?`, `AXQuery.findAll(_ path: String, in node: AXNode) -> [AXNode]`, and the internal `AXQuery.attributeValues(_:_:) -> [String]` / `AXQuery.matches(_:_:) -> Bool` used by Task 4's `Matchers`.
+- Produces: `AXQuery.find(_ path: String, in node: AXNode) -> AXNode?`, `AXQuery.findAll(_ path: String, in node: AXNode) -> [AXNode]`, and the internal `AXQuery.satisfies(_:_:) -> Bool` / `AXQuery.matches(_:_:) -> Bool` / `AXQuery.attributeValues(_:_:) -> [String]`, all three used only inside `findAll` (Task 4's `Matchers` are independent closures — see Task 4's Interfaces).
 - Evaluation order is defined and tested: the current node set starts as `[node]`; a `.child` step expands to each current node's `children` in order; a `.descendant` step expands to each current node's descendants in pre-order **excluding itself**; the step's role and predicates filter the expansion; an `index` then selects one element of that step's filtered output. No de-duplication is performed, because `AXNode` has no identity.
 
 - [ ] **Step 1: Write the failing test**
@@ -794,7 +832,9 @@ final class AXQueryEvaluationTests: XCTestCase {
     }
 
     override func tearDown() {
+        #if DEBUG
         AXQuery.trapsOnInvalidPath = true
+        #endif
         AXQuery.resetPathCache()
         super.tearDown()
     }
@@ -1061,15 +1101,16 @@ git commit -m "Evaluate AXQuery paths over AX node trees"
 
 ---
 
-### Task 4: `Matchers`, visual-order helpers, `collectStaticTexts`, `formatTable`
+### Task 4: `Matchers`, visual-order helpers, `collectStaticTexts`
 
 **Files:**
 - Create: `Sources/MaxMiCapture/AXQueryHelpers.swift`
 - Test: `Tests/MaxMiCaptureTests/AXQueryHelperTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.attributeValues(_:_:)`, `AXQuery.findAll(_:in:)` (Task 3); `Block`, `BlockType` (Phase A `CapturedContent.swift`); `ContentRenderer.renderBlock(_:)` (Phase A).
-- Produces: `AXQuery.Matchers.hasRole(_:)`, `.hasIdentifierPrefix(_:)`, `.hasClass(_:)`, `.hasTitleContaining(_:)`, `.and(_:)`, `.or(_:)`, `.not(_:)` — each `(AXNode) -> Bool`; `AXQuery.sortedByVisualOrder(_ nodes: [AXNode], relativeTo origin: CGRect?) -> [AXNode]`; `AXQuery.collectStaticTexts(in: AXNode) -> [String]`; `AXQuery.formatTable(_ row: AXNode) -> Block`; and `AXQuery.first(in: AXNode, where: (AXNode) -> Bool) -> AXNode?` / `AXQuery.all(in: AXNode, where: (AXNode) -> Bool) -> [AXNode]` so a `Matchers` composition can actually be run against a tree.
+- Consumes: `AXNode` including `domClassList`/`hidden` (Task 1); `GenericPageExtractor.menuRoles` (Phase A, `Sources/MaxMiCapture/GenericPageExtractor.swift:29`). It deliberately does **not** call `AXQuery.attributeValues(_:_:)`: a `Matchers` value is a closure over `AXNode` fields, not a predicate evaluation. What the two share is the RULE — `hasClass` is case-insensitive exactly as the `domClass` predicate is — and both sides pin it with their own test.
+- Produces: `AXQuery.Matchers.hasRole(_:)`, `.hasIdentifierPrefix(_:)`, `.hasClass(_:)`, `.hasTitleContaining(_:)`, `.and(_:)`, `.or(_:)`, `.not(_:)` — each `(AXNode) -> Bool`; `AXQuery.sortedByVisualOrder(_ nodes: [AXNode], relativeTo origin: CGRect?) -> [AXNode]`; `AXQuery.collectStaticTexts(in: AXNode) -> [String]`; `AXQuery.menuRoles` (an alias of `GenericPageExtractor.menuRoles`, not a second literal set); and `AXQuery.first(in: AXNode, where: (AXNode) -> Bool) -> AXNode?` / `AXQuery.all(in: AXNode, where: (AXNode) -> Bool) -> [AXNode]` so a `Matchers` composition can actually be run against a tree.
+- **No table formatter.** Ruling F15: rows are `GenericPageExtractor`'s job — `block(for:)` (`GenericPageExtractor.swift:183-189`) already emits `.tableRow(cells:selected:)` with the project's empty-row semantics, and Task 18 is the only row consumer. A second implementation would be two behaviours for one shape.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1077,7 +1118,6 @@ Create `Tests/MaxMiCaptureTests/AXQueryHelperTests.swift`:
 
 ```swift
 import XCTest
-import MaxMiCore
 @testable import MaxMiCapture
 
 final class AXQueryHelperTests: XCTestCase {
@@ -1167,12 +1207,28 @@ final class AXQueryHelperTests: XCTestCase {
                        ["a", "b", "c"])
     }
 
-    func testNodesWithNoFrameSortAheadOfPositionedNodes() {
-        let unpositioned = node("AXStaticText", value: "z", frame: nil)
+    func testAFramelessNodeSortsAtTheWindowOriginNotAtGlobalZero() {
+        // The local `node(...)` helper substitutes a real frame when `frame:` is nil, so this
+        // genuinely frameless node is built directly — otherwise the nil branch of
+        // `sortedByVisualOrder` is never reached and the assertion degenerates to "0 < 10".
+        let frameless = AXNode(role: "AXStaticText", value: "z", title: nil, url: nil,
+                               frame: nil, focused: false, children: [])
+        let window = CGRect(x: 1_440, y: 220, width: 800, height: 600)
+        // 10pt ABOVE the window's top edge, i.e. window-relative y == -10. A frameless node
+        // treated as the WINDOW origin (relative 0) sorts after it; a frameless node wrongly
+        // treated as global (0, 0) would be relative -220 and sort before it.
+        let above = text("above", y: 210, x: 1_440)
         XCTAssertEqual(
-            AXQuery.sortedByVisualOrder([text("a", y: 10, x: 0), unpositioned], relativeTo: nil)
+            AXQuery.sortedByVisualOrder([above, frameless], relativeTo: window).map(\.value),
+            ["above", "z"])
+        XCTAssertEqual(
+            AXQuery.sortedByVisualOrder([frameless, above], relativeTo: window).map(\.value),
+            ["above", "z"], "the order comes from the frames, not from the input order")
+        // With no window frame the same node is the origin and sorts ahead of everything below it.
+        XCTAssertEqual(
+            AXQuery.sortedByVisualOrder([text("a", y: 10, x: 0), frameless], relativeTo: nil)
                 .map(\.value),
-            ["z", "a"], "a nil frame is treated as the origin, which sorts first and is stable")
+            ["z", "a"])
     }
 
     // MARK: - collectStaticTexts
@@ -1207,27 +1263,11 @@ final class AXQueryHelperTests: XCTestCase {
         XCTAssertEqual(AXQuery.collectStaticTexts(in: row), ["Report.pdf", "12 KB"])
     }
 
-    // MARK: - formatTable
+    // MARK: - Menu roles
 
-    func testFormatTableJoinsCellsInVisualOrderAndCarriesSelection() {
-        let row = node("AXRow", selected: true,
-                       frame: CGRect(x: 1440, y: 300, width: 600, height: 20), children: [
-            node("AXCell", frame: CGRect(x: 1740, y: 300, width: 100, height: 20),
-                 children: [text("12 KB", y: 300, x: 1740)]),
-            node("AXCell", frame: CGRect(x: 1440, y: 300, width: 200, height: 20),
-                 children: [text("Report.pdf", y: 300, x: 1440)]),
-        ])
-        let block = AXQuery.formatTable(row)
-        XCTAssertEqual(block.type, .tableRow(cells: ["Report.pdf", "12 KB"], selected: true))
-        XCTAssertEqual(block.text, "Report.pdf 12 KB")
-        XCTAssertFalse(block.authoredByUser)
-        XCTAssertEqual(ContentRenderer.renderBlock(block), "* Report.pdf | 12 KB")
-    }
-
-    func testFormatTableOnARowWithNoCellTextYieldsAnEmptyRow() {
-        let block = AXQuery.formatTable(node("AXRow"))
-        XCTAssertEqual(block.type, .tableRow(cells: [], selected: false))
-        XCTAssertEqual(block.text, "")
+    func testMenuRolesIsTheExtractorsSetAndNotASecondLiteral() {
+        XCTAssertEqual(AXQuery.menuRoles, GenericPageExtractor.menuRoles,
+                       "one menu-skip set for the whole capture layer")
     }
 }
 ```
@@ -1243,7 +1283,6 @@ Create `Sources/MaxMiCapture/AXQueryHelpers.swift`:
 
 ```swift
 import Foundation
-import MaxMiCore
 
 public extension AXQuery {
     /// Composable predicates for the cases a path literal cannot express — an OR across two
@@ -1330,43 +1369,16 @@ public extension AXQuery {
         }
     }
 
-    /// One AX row becomes ONE joined table row. `text` is the space-joined form, so delta and
-    /// dedup can compare rows as text while `ContentRenderer` renders from `cells`.
-    static func formatTable(_ row: AXNode) -> Block {
-        var cellNodes: [AXNode] = []
-        func visit(_ current: AXNode) {
-            if menuRoles.contains(current.role) || current.hidden { return }
-            if current.role == "AXCell" || current.role == "AXStaticText" {
-                cellNodes.append(current)
-                if current.role == "AXCell" { return }
-            }
-            for child in current.children { visit(child) }
-        }
-        for child in row.children { visit(child) }
-        let cells = sortedByVisualOrder(cellNodes, relativeTo: row.frame)
-            .map { cell -> String in
-                cell.role == "AXCell"
-                    ? collectStaticTexts(in: cell).joined(separator: " ")
-                    : (cell.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            .filter { !$0.isEmpty }
-            .reduce(into: [String]()) { result, value in
-                if result.last != value { result.append(value) }
-            }
-        return Block(type: .tableRow(cells: cells, selected: row.selected),
-                     text: cells.joined(separator: " "),
-                     authoredByUser: false)
-    }
-
-    /// Menu content is structurally excluded from every helper, not filtered by text.
-    static var menuRoles: Set<String> { ["AXMenuBar", "AXMenuBarItem", "AXMenu"] }
+    /// Menu content is structurally excluded from every helper, not filtered by text. Aliased to
+    /// the extractor's set rather than restated, so the capture layer has one menu-skip policy.
+    static var menuRoles: Set<String> { GenericPageExtractor.menuRoles }
 }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter AXQueryHelperTests`
-Expected: PASS, 12 tests.
+Expected: PASS, 12 tests (4 matcher tests, `all`/`first`, 3 visual-order tests, 3 `collectStaticTexts` tests, 1 menu-roles test).
 
 - [ ] **Step 5: Commit**
 
@@ -1390,13 +1402,38 @@ git commit -m "Add AXQuery matchers, visual order and table helpers"
 - Produces:
   - `ParserConfig(app:bundleIDs:hosts:attributeSet:offscreenPolicy:preferOverNative:minAppVersion:)` — `public`, `Sendable`, `Equatable`, with `hosts: [String] = []`, `attributeSet: [String] = []`, `offscreenPolicy: OffscreenCapturePolicy = .visibleOnly()`, `preferOverNative: Bool = false`, `minAppVersion: String? = nil`.
   - `ParseContext(app:windowTitle:url:previousStructured:now:)` — `public`, `Sendable`, plus the convenience `init(app: AppInfo, url: String? = nil, previousStructured: CapturedContent? = nil, now: EpochMs = EpochMs(Date().timeIntervalSince1970 * 1000))` that defaults `windowTitle` to `app.windowTitle`.
-  - `protocol StructuredParser: Sendable { static var config: ParserConfig { get }; func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? }`.
-  - `ParserRegistry.structuredParser(for bundleID: String) -> (any StructuredParser)?`, `.structuredParser(forHost host: String) -> (any StructuredParser)?`, `.structuredParser(bundleID: String, url: String?) -> (any StructuredParser)?`, `.forcedAttributes(for bundleID: String) -> Set<String>`, `.registeredStructuredHosts: [String]`.
+  - `protocol StructuredParser: Sendable { static var config: ParserConfig { get }; func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? }`. It **throws** for exactly one reason: a parser may throw `ParserRefusal` (`Sources/MaxMiCapture/ParserRegistry.swift:74-81`) to mean "store nothing for this window", which `CaptureDispatch.parseDetailed` already maps to `.noContent` (`:132-147`) and which the browser path rethrows (ruling F13; spec §12 amendment superseding Q18). `nil` still means NOT_HANDLED.
+  - `ParserRegistry.structuredParser(for bundleID: String) -> (any StructuredParser)?`, `.structuredParser(forHost host: String) -> (any StructuredParser)?`, `.structuredParser(bundleID: String, url: String?) -> (any StructuredParser)?`, `.forcedAttributes(for bundleID: String) -> Set<String>` (**wired into the live snapshot in Step 5** — ruling F3), `.registeredStructuredHosts: [String]`.
+  - The Phase A test seam `init(parsers:)` (`Sources/MaxMiCapture/ParserRegistry.swift:60-62`, used by `Tests/MaxMiCaptureTests/ParserFallthroughTests.swift:78`) initialises both new stored properties to `[:]`; without that line the file does not compile (ruling F2).
   - `ParserRegistry.host(fromURL: String?) -> String?`.
-  - `CaptureDispatch.StructuredParseResult` (`.parsed(CapturedContent, parserName: String)`, `.fellThrough(CapturedContent, notHandledBy: String?)`) and `CaptureDispatch.structuredCapture(window:context:registry:) -> StructuredParseResult`.
-  - `CaptureDispatch.fallbackParserID(notHandledBy: String?) -> String` producing exactly `"GenericPageExtractor.v2/fallback/<ParserTypeName>"`, or `"GenericPageExtractor.v2"` when no parser claimed the window (§8). If the Phase A plan already added a helper producing this same literal, call that one instead of adding a second.
+  - `CaptureDispatch.StructuredParseResult` (`.parsed(CapturedContent, parserName: String)`, `.fellThrough(CapturedContent, notHandledBy: String?)`) and `CaptureDispatch.structuredCapture(window:context:registry:fallback:) throws -> StructuredParseResult`, where `fallback` is `(AXNode, ParseContext, GenericPageExtractor.Options) -> CapturedContent` and defaults to a `GenericPageExtractor` walk. This is the **browser** path's entry point — Task 9 calls it with `WebPageParser.parse` as the fallback, which is what gives it a production caller; the non-browser path keeps `CaptureDispatch.parseDetailed`, so no window is ever parsed twice (ruling F12).
+  - **No new fallback-marker helper.** `CaptureDispatch.fallbackParserID(failedParser: String) -> String` already exists (`Sources/MaxMiCapture/ParserRegistry.swift:167-169`) and already returns exactly `"GenericPageExtractor.v2/fallback/\(failedParser)"`; every call site in this plan uses it (ruling F4). When no parser claimed the window there is no marker at all — the health row keeps the registry's own parser name.
   - `ParserRegistry.finderBundleID = "com.apple.finder"`, `.cursorBundleID = "com.todesktop.230313mzl4w4u92"`, `.vsCodeBundleID = "com.microsoft.VSCode"`, `.editorBundleIDs = [cursorBundleID, vsCodeBundleID]`.
-- Later tasks register their parser by adding it to `structuredParsers` / `hostParsers` in `ParserRegistry.init`; the maps are built there so there is one registration site, exactly as the existing `parsers` map is.
+- Later tasks register their parser by appending to the single `structured` list in `ParserRegistry.init()`; the two maps are derived from each parser's own `config`, so there is one registration site, exactly as the existing `parsers` map is. **The list is complete after Task 26 and reads exactly:**
+
+```swift
+        let structured: [any StructuredParser] = [
+            TerminalParser(),        // Task 7  — Warp, Terminal.app, iTerm2 (4 bundle IDs)
+            EditorParser(),          // Task 8  — Cursor, VS Code
+            SlackParser(),           // Task 10 (+ Task 25 adds app.slack.com to its hosts)
+            DiscordParser(),         // Task 11
+            MessagesParser(),        // Task 12
+            WhatsAppParser(),        // Task 13
+            NotesParser(),           // Task 15
+            NotionParser(),          // Task 16
+            ObsidianParser(),        // Task 17
+            FinderParser(),          // Task 18
+            CalendarParser(),        // Task 19
+            FantasticalParser(),     // Task 19
+            RemindersParser(),       // Task 20
+            GmailParser(),           // Task 22 — hosts only
+            LinkedInMessagingParser(),// Task 23 — hosts only
+            OutlookWebParser(),      // Task 24 — hosts only
+            TeamsWebParser(),        // Task 26 — hosts only
+        ]
+```
+
+  **Seventeen entries**: thirteen claimed by bundle ID (`SlackParser` claims both a bundle ID and a host) and four claimed by host only. Two parsers are deliberately absent: `MailParser`, because Mail stays AppleScript-sourced (§12 Q6) and Task 14 only adds its compose-window draft; and `WebPageParser` (Task 9), because it is the browser **default** reached when no host parser claims the URL, so it has no `ParserConfig` and is never in a map. Task 21's `PhaseDCoverageTests` re-asserts this exact list.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1410,8 +1447,8 @@ import MaxMiCore
 /// Claims the fake native app and always answers.
 struct StubNativeParser: StructuredParser {
     static let config = ParserConfig(app: "StubNative", bundleIDs: ["com.example.native"],
-                                     attributeSet: ["AXDOMClassList"])
-    func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+                                     attributeSet: ["AXDOMClassList", "AXDOMIdentifier"])
+    func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         .document(Document(title: "native", blocks: [], author: .unknown, url: nil))
     }
 }
@@ -1420,7 +1457,15 @@ struct StubNativeParser: StructuredParser {
 struct StubSilentHostParser: StructuredParser {
     static let config = ParserConfig(app: "StubSilent", bundleIDs: [],
                                      hosts: ["silent.example.com"])
-    func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? { nil }
+    func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? { nil }
+}
+
+/// Refuses instead of answering, which must mean "store nothing" — never a fallback capture.
+struct StubRefusingParser: StructuredParser {
+    static let config = ParserConfig(app: "StubRefusing", bundleIDs: ["com.example.refusing"])
+    func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        throw ParserRefusal(reason: "no-header")
+    }
 }
 
 final class StructuredParserRoutingTests: XCTestCase {
@@ -1437,6 +1482,17 @@ final class StructuredParserRoutingTests: XCTestCase {
     }
 
     // MARK: - Config defaults
+
+    func testStructuredParserParseIsThrowingSoARefusalCanTravel() throws {
+        // A refusal is not a fall-through: nothing is stored for this window, exactly as
+        // `CaptureDispatch.parseDetailed` already does for a refusing SourceParser.
+        let registry = ParserRegistry(structuredParsers: [StubRefusingParser()], hostParsers: [])
+        XCTAssertThrowsError(try CaptureDispatch.structuredCapture(
+            window: window(), context: context(bundleID: "com.example.refusing"),
+            registry: registry)) { error in
+            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "no-header"))
+        }
+    }
 
     func testParserConfigDefaults() {
         let config = ParserConfig(app: "X", bundleIDs: ["a"])
@@ -1474,7 +1530,7 @@ final class StructuredParserRoutingTests: XCTestCase {
         struct SuffixHostParser: StructuredParser {
             static let config = ParserConfig(app: "Suffix", bundleIDs: [],
                                              hosts: ["app.slack.com", ".slack.com"])
-            func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+            func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
                 .generic(GenericPage(regions: [], focused: nil, url: nil))
             }
         }
@@ -1489,14 +1545,14 @@ final class StructuredParserRoutingTests: XCTestCase {
         struct EagerHostParser: StructuredParser {
             static let config = ParserConfig(app: "Eager", bundleIDs: [],
                                              hosts: ["eager.example.com"], preferOverNative: true)
-            func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+            func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
                 .document(Document(title: "host", blocks: [], author: .unknown, url: nil))
             }
         }
         struct PoliteHostParser: StructuredParser {
             static let config = ParserConfig(app: "Polite", bundleIDs: [],
                                              hosts: ["polite.example.com"], preferOverNative: false)
-            func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+            func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
                 .document(Document(title: "host", blocks: [], author: .unknown, url: nil))
             }
         }
@@ -1512,10 +1568,16 @@ final class StructuredParserRoutingTests: XCTestCase {
             "with no native claim the host parser is used regardless")
     }
 
-    func testForcedAttributesComeFromTheClaimingParsersConfig() {
+    func testForcedAttributesAreTheUnionOfTheClaimingParsersAttributeSet() {
         let registry = ParserRegistry(structuredParsers: [StubNativeParser()], hostParsers: [])
-        XCTAssertEqual(registry.forcedAttributes(for: "com.example.native"), ["AXDOMClassList"])
-        XCTAssertEqual(registry.forcedAttributes(for: "com.example.unknown"), [])
+        XCTAssertEqual(registry.forcedAttributes(for: "com.example.native"),
+                       ["AXDOMClassList", "AXDOMIdentifier"],
+                       "the whole declared set is forced, not just the first entry")
+        XCTAssertEqual(registry.forcedAttributes(for: "com.example.unknown"), [],
+                       "an app with no v2 parser pays nothing for DOM attributes")
+        XCTAssertTrue(registry.forcedAttributes(for: "com.example.native")
+                        .isSubset(of: AXReader.domAttributeNames),
+                      "only names AXReader honours may be forced")
     }
 
     func testTheRealRegistryExposesItsStructuredHosts() {
@@ -1527,9 +1589,9 @@ final class StructuredParserRoutingTests: XCTestCase {
 
     // MARK: - Dispatch
 
-    func testAClaimingParserReturnsItsContentAndItsTypeName() {
+    func testAClaimingParserReturnsItsContentAndItsTypeName() throws {
         let registry = ParserRegistry(structuredParsers: [StubNativeParser()], hostParsers: [])
-        let result = CaptureDispatch.structuredCapture(
+        let result = try CaptureDispatch.structuredCapture(
             window: window(), context: context(bundleID: "com.example.native"), registry: registry)
         guard case .parsed(let content, let parserName) = result else {
             return XCTFail("expected .parsed, got \(result)")
@@ -1539,9 +1601,9 @@ final class StructuredParserRoutingTests: XCTestCase {
         XCTAssertEqual(parserName, "StubNativeParser")
     }
 
-    func testAParserReturningNilFallsThroughToGenericPageExtractorAndNamesItself() {
+    func testAParserReturningNilFallsThroughToGenericPageExtractorAndNamesItself() throws {
         let registry = ParserRegistry(structuredParsers: [], hostParsers: [StubSilentHostParser()])
-        let result = CaptureDispatch.structuredCapture(
+        let result = try CaptureDispatch.structuredCapture(
             window: window("real body"),
             context: context(bundleID: "com.example.browser", url: "https://silent.example.com/x"),
             registry: registry)
@@ -1552,28 +1614,35 @@ final class StructuredParserRoutingTests: XCTestCase {
         guard case .generic(let page) = content else { return XCTFail("expected .generic") }
         XCTAssertEqual(page.url, "https://silent.example.com/x")
         XCTAssertEqual(page.regions.first?.blocks.map(\.text), ["real body"])
-        XCTAssertEqual(CaptureDispatch.fallbackParserID(notHandledBy: notHandledBy),
+        // Phase A's helper is the ONE spelling of the §8 marker; Phase D adds no overload.
+        XCTAssertEqual(CaptureDispatch.fallbackParserID(failedParser: try XCTUnwrap(notHandledBy)),
                        "GenericPageExtractor.v2/fallback/StubSilentHostParser")
     }
 
-    func testNoRegisteredParserAlsoFallsThroughButNamesNoParser() {
+    func testNoRegisteredParserAlsoFallsThroughButNamesNoParser() throws {
         let registry = ParserRegistry(structuredParsers: [], hostParsers: [])
-        let result = CaptureDispatch.structuredCapture(
+        let result = try CaptureDispatch.structuredCapture(
             window: window("plain"), context: context(bundleID: "com.example.nothing"),
             registry: registry)
         guard case .fellThrough(_, let notHandledBy) = result else {
             return XCTFail("expected .fellThrough, got \(result)")
         }
-        XCTAssertNil(notHandledBy)
-        XCTAssertEqual(CaptureDispatch.fallbackParserID(notHandledBy: nil),
-                       "GenericPageExtractor.v2")
+        XCTAssertNil(notHandledBy, "with nobody to blame there is no fallback marker at all")
     }
 
-    func testFallThroughUsesTheClaimingParsersOffscreenPolicyBudget() {
+    func testTheTestSeamRegistryStillCompilesWithAnExplicitParserTable() {
+        // Phase A's seam (ParserRegistry.init(parsers:), used by ParserFallthroughTests) gains two
+        // stored properties and must still initialise them.
+        let registry = ParserRegistry(parsers: [:])
+        XCTAssertNil(registry.structuredParser(for: "com.example.native"))
+        XCTAssertTrue(registry.registeredStructuredHosts.isEmpty)
+    }
+
+    func testFallThroughUsesTheClaimingParsersOffscreenPolicyBudget() throws {
         struct BoundedSilentParser: StructuredParser {
             static let config = ParserConfig(app: "Bounded", bundleIDs: ["com.example.bounded"],
                                              offscreenPolicy: .accessibilityScroll(maxSteps: 3))
-            func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? { nil }
+            func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? { nil }
         }
         let registry = ParserRegistry(structuredParsers: [BoundedSilentParser()], hostParsers: [])
         // A node far below the window is only collected under an accessibilityScroll policy.
@@ -1583,7 +1652,7 @@ final class StructuredParserRoutingTests: XCTestCase {
                                            url: nil,
                                            frame: CGRect(x: 0, y: 9_000, width: 100, height: 16),
                                            focused: false, children: [])])
-        let result = CaptureDispatch.structuredCapture(
+        let result = try CaptureDispatch.structuredCapture(
             window: win, context: context(bundleID: "com.example.bounded"), registry: registry)
         guard case .fellThrough(.generic(let page), _) = result else {
             return XCTFail("expected a generic fall-through, got \(result)")
@@ -1669,9 +1738,14 @@ public struct ParseContext: Sendable {
 /// Parser protocol v2. `nil` means NOT_HANDLED and routes to `GenericPageExtractor` (spec §4f
 /// rule 3) — it is never an error and never a lost capture. Thread keys and accumulation
 /// policies stay on `SourceParser.parse` (spec §4f rule 1), so this protocol owns content only.
+///
+/// `parse` throws for exactly one purpose: `ParserRefusal` means "store NOTHING for this window",
+/// which is different from nil. `CaptureDispatch.parseDetailed` already maps a refusal to
+/// `.noContent`, and the browser pipeline rethrows it, so a refusing parser is never reported as
+/// a `GenericPageExtractor.v2/fallback/...` degradation.
 public protocol StructuredParser: Sendable {
     static var config: ParserConfig { get }
-    func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent?
+    func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent?
 }
 ```
 
@@ -1728,29 +1802,35 @@ public extension CaptureDispatch {
         case fellThrough(CapturedContent, notHandledBy: String?)
     }
 
-    /// Spec §8: the fall-through is not silent — `capture_health_events.parser` carries the
-    /// marker, so the Capture Health window shows which parsers are degrading.
-    static func fallbackParserID(notHandledBy: String?) -> String {
-        guard let notHandledBy else { return "GenericPageExtractor.v2" }
-        return "GenericPageExtractor.v2/fallback/\(notHandledBy)"
-    }
-
+    /// The §8 marker for a fall-through is composed by the existing
+    /// `CaptureDispatch.fallbackParserID(failedParser:)`. No second helper is added here.
+    ///
+    /// A thrown `ParserRefusal` is deliberately NOT caught: refusing means store nothing, and
+    /// both call paths already handle that (native: `parseDetailed` returns `.noContent`;
+    /// browser: `BrowserCapturePipeline.parse` rethrows and `AppWiring` records
+    /// `.skipped(.parserNoContent)`).
+    /// `fallback` is what NOT_HANDLED degrades to. It defaults to a `GenericPageExtractor` walk
+    /// (spec §4f rule 3); the browser pipeline passes `WebPageParser`, because a web tab's
+    /// degradation is the landmark page rooted at its `AXWebArea`, not the whole browser window.
+    /// The claiming parser's `offscreenPolicy` is resolved here so both fallbacks honour it.
     static func structuredCapture(
         window: AXNode,
         context: ParseContext,
-        registry: ParserRegistry
-    ) -> StructuredParseResult {
+        registry: ParserRegistry,
+        fallback: (AXNode, ParseContext, GenericPageExtractor.Options) -> CapturedContent = {
+            window, context, options in
+            .generic(GenericPageExtractor.extract(
+                window: window, focusedElement: nil, url: context.url, options: options).page)
+        }
+    ) throws -> StructuredParseResult {
         let parser = registry.structuredParser(bundleID: context.app.bundleID, url: context.url)
         let parserName = parser.map { String(describing: type(of: $0)) }
-        if let parser, let content = parser.parse(window, context: context) {
+        if let parser, let content = try parser.parse(window, context: context) {
             return .parsed(content, parserName: parserName ?? "unknown")
         }
         var options = GenericPageExtractor.Options()
         if let parser { options.offscreenPolicy = type(of: parser).config.offscreenPolicy }
-        let extracted = GenericPageExtractor.extract(
-            window: window, focusedElement: nil, url: context.url, options: options
-        )
-        return .fellThrough(.generic(extracted.page), notHandledBy: parserName)
+        return .fellThrough(fallback(window, context, options), notHandledBy: parserName)
     }
 }
 ```
@@ -1775,7 +1855,9 @@ At the end of the existing `init()`, before `parsers = p`, build them from each 
 
 ```swift
         // Structured (v2) parsers. Each one declares the bundle IDs and hosts it claims, so the
-        // two maps below are derived, never hand-maintained in parallel with the list.
+        // two maps below are derived, never hand-maintained in parallel with the list. Tasks 7-26
+        // append to this ONE list; by the end of Phase D it holds the seventeen entries written
+        // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
         let structured: [any StructuredParser] = []
         var byBundle: [String: any StructuredParser] = [:]
         var byHost: [String: any StructuredParser] = [:]
@@ -1786,6 +1868,17 @@ At the end of the existing `init()`, before `parsers = p`, build them from each 
         }
         structuredParsers = byBundle
         hostParsers = byHost
+```
+
+**Also update the Phase A test seam** `init(parsers:)` (`Sources/MaxMiCapture/ParserRegistry.swift:60-62`) — two new non-optional stored `let`s mean it no longer initialises every property, and `Tests/MaxMiCaptureTests/ParserFallthroughTests.swift:78` uses it:
+
+```swift
+    init(parsers: [String: any SourceParser]) {
+        self.parsers = parsers
+        // A seam registry exercises the v1 dispatch branches only; it registers no v2 parser.
+        self.structuredParsers = [:]
+        self.hostParsers = [:]
+    }
 ```
 
 and add the test-only initializer immediately after `init()`:
@@ -1811,37 +1904,40 @@ and add the test-only initializer immediately after `init()`:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter StructuredParserRoutingTests`
-Expected: PASS, 12 tests.
+Expected: PASS, 14 tests.
 
 Run: `swift test --filter ParserRegistryTests`
 Expected: PASS, unchanged — the existing `SourceParser` map is untouched.
 
-- [ ] **Step 5: Wire the dispatch into `AppWiring`**
+Run: `swift test --filter ParserFallthroughTests`
+Expected: PASS — the `init(parsers:)` seam now initialises the two new stored properties.
 
-In `Sources/MaxMi/AppWiring.swift`, the non-browser branch at `:1479` currently switches on `CaptureDispatch.parseDetailed(window:app:registry:)`. Build the context once above the `do` block, right after `appInfo` is constructed at `:1436-1438`:
+- [ ] **Step 5: Wire `forcedAttributes` into the live snapshot**
+
+This is the only `AppWiring` change this task makes, and it is the one that decides whether the DOM anchors exist in production at all. `attributeSet` is declarative until something passes it to `AXReader`; without this step Slack/Notion/Obsidian read `domClassList == nil` in the live app and only the hand-authored fixtures pass (ruling F3).
+
+In `Sources/MaxMi/AppWiring.swift`, inside `attemptCapture(app:pid:attemptsLeft:captureGeneration:trigger:startedAtMs:)`, resolve the set on the main actor **before** the detached read (`registry` is a main-actor property; the detached closure must not touch it), immediately above `Task.detached(priority: .utility) { [weak self] in` at `:1382`:
 
 ```swift
-            let parseContext = ParseContext(app: appInfo, url: nil)
+        // Electron trees (Slack, Notion, Obsidian) do not reliably expose an AXWebArea above
+        // their DOM, so the claiming v2 parser's ParserConfig.attributeSet forces the two DOM
+        // reads for the whole tree. Every other app forces nothing and pays nothing (spec §8).
+        let forcedAttributes = registry.forcedAttributes(for: app.bundleID)
 ```
 
-and add a structured attempt ahead of the existing switch, so a v2 parser claims the window before the v1 path runs:
+then thread it through both snapshot calls (`:1383` and `:1391`):
 
 ```swift
-                // Structured (v2) routing first: a v2 parser owns the content, the v1 parser
-                // still owns the thread key and the policies (spec §4f rule 1).
-                switch CaptureDispatch.structuredCapture(
-                    window: window, context: parseContext, registry: registry
-                ) {
-                case .parsed(_, let parserName):
-                    effectiveParserName = parserName
-                case .fellThrough(_, let notHandledBy) where notHandledBy != nil:
-                    effectiveParserName = CaptureDispatch.fallbackParserID(notHandledBy: notHandledBy)
-                case .fellThrough:
-                    break
-                }
+            let snapshot = AXReader.snapshotFrontmostWindow(pid: pid,
+                                                            forcedAttributes: forcedAttributes)
 ```
 
-`parsed` (the `ParsedCapture`) still comes from `CaptureDispatch.parseDetailed`, whose Phase A implementation already attaches `structured` from `parseStructured`. This step only makes the **parser name** in the health ledger reflect v2 routing, which is what §8 asks for.
+```swift
+                confirmationSnapshot = AXReader.snapshotFrontmostWindow(
+                    pid: pid, forcedAttributes: forcedAttributes)
+```
+
+**The non-browser dispatch switch at `:1483` is deliberately left alone.** A v2 parser reaches it through the `parseStructured` bridge every parser task writes, so `parseDetailed` already returns the v2 content on `ParsedCapture.structured`; a v2 parser that returns nil makes `parse(window:app:)` return nil, which `parseDetailed` already turns into `.parsedByFallback(_, failedParser:)`, which the existing line at `:1492` already renders as `CaptureDispatch.fallbackParserID(failedParser:)`. Calling `structuredCapture` here as well would parse every non-browser window twice and run a wasted full-tree `GenericPageExtractor` walk for the ~14 apps that have no v2 parser (ruling F12). `structuredCapture` exists for the **browser** path, which has no `SourceParser` to route through, and is called from `BrowserCapturePipeline` in Task 9.
 
 - [ ] **Step 6: Run the capture and store suites**
 
@@ -1870,13 +1966,14 @@ git commit -m "Route captures through structured parsers by bundle id and host"
 - Create: `Tests/MaxMiCaptureTests/FixtureLoading.swift`
 - Create: `Tests/MaxMiCaptureTests/FixtureLoadingTests.swift`
 - Create: `Tests/MaxMiCaptureTests/Fixtures/generic-empty-golden.json`
-- Modify: `Tests/MaxMiCaptureTests/ExtractorTests.swift:5-8`, `BrowserCapturePipelineTests.swift:6-9`, `NativeConversationParserTests.swift:5-8`, `GenericAXParserTests.swift:5-8`, `SlackParserTests.swift:5-8`, `StructuredNativeParserTests.swift:5-8` (delete each duplicated `func fixture(_:)`)
+- Modify (delete the duplicated `func fixture(_:)` from each — **twelve** copies exist on this branch, not the six spec §7d names; see the §12 repair amendment): `Tests/MaxMiCaptureTests/AXNodeAttributesTests.swift:5-10`, `BrowserCapturePipelineTests.swift:6-9`, `ExtractorTests.swift:5-8`, `GenericAXParserTests.swift:5-12`, `GenericPageBudgetTests.swift:6-11`, `GenericPageRegionTests.swift:6-11`, `NativeConversationParserTests.swift:6-9`, `SlackParserTests.swift:6-9`, `StructuredConversationParserTests.swift:6-11`, `StructuredEntityTypedTests.swift:6-11`, `StructuredNativeParserTests.swift:5-8`, `WebAppStructuredTests.swift:6-11`
+- Modify: `Tests/MaxMiCaptureTests/AXNodeDOMAttributeTests.swift` (delete Task 1's thirteenth copy of the same helper; its `everyFixtureName()` stays)
 - Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md` (recording + scrubbing procedure)
 
 **Interfaces:**
 - Consumes: `AXNode` with `domClassList`/`domIdentifier` (Task 1); `CapturedContent` and `CapturedContentEnvelope` (Phase A).
 - Produces, all at file scope in `MaxMiCaptureTests` so every test file sees them without inheritance: `func fixture(_ name: String) throws -> AXNode`, `func goldenCapturedContent(_ name: String) throws -> CapturedContent`, `func assertGolden(_ content: CapturedContent, matches name: String, file: StaticString, line: UInt)`, and `func goldenJSON(_ content: CapturedContent) throws -> String` (used to *write* a golden the first time).
-- The six existing test classes keep calling `try fixture("slack-window")` unchanged — the free function shadows nothing and resolves identically at each call site once the methods are deleted.
+- The **thirteen** existing call-site classes keep calling `try fixture("slack-window")` unchanged — the free function shadows nothing and resolves identically at each call site once the methods are deleted. Two body variants exist in the tree (one force-unwraps `Bundle.module.url`, one wraps it in `XCTUnwrap`); both are replaced by the single `XCTUnwrap` form below, which is why a missing fixture now fails with a message instead of a crash.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1892,7 +1989,7 @@ final class FixtureLoadingTests: XCTestCase {
         XCTAssertEqual(try fixture("slack-window").role, "AXWindow")
     }
 
-    func testMissingFixtureFailsLoudly() {
+    func testMissingFixtureFailsLoudly() throws {
         XCTAssertThrowsError(try fixture("definitely-not-a-fixture"))
     }
 
@@ -1929,7 +2026,9 @@ import XCTest
 import MaxMiCore
 @testable import MaxMiCapture
 
-/// The one AX fixture loader (spec §7d: six duplicated copies consolidated into this file).
+/// The one AX fixture loader. Spec §7d names six duplicates; twelve exist on this branch, plus
+/// Task 1's thirteenth — all thirteen are deleted in favour of this function (§12 repair
+/// amendment).
 func fixture(_ name: String) throws -> AXNode {
     let url = try XCTUnwrap(
         Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures"),
@@ -1975,18 +2074,57 @@ func assertGolden(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Write the golden file, then run the test**
 
 Run: `swift test --filter FixtureLoadingTests`
-Expected: PASS, 4 tests. `testAssertGoldenPassesForAMatchingGolden` fails first with "missing golden Fixtures/generic-empty-golden.json"; print `try goldenJSON(.generic(GenericPage(regions: [], focused: nil, url: nil)))`, save the printed string as that file, and re-run.
+Expected: 3 of the 4 pass; `testAssertGoldenPassesForAMatchingGolden` fails with "golden generic-empty-golden unavailable" because the file does not exist yet.
 
-- [ ] **Step 5: Delete the six duplicated loaders**
+Print the bytes and save them:
 
-Delete this exact method from each of `Tests/MaxMiCaptureTests/ExtractorTests.swift`, `BrowserCapturePipelineTests.swift`, `NativeConversationParserTests.swift`, `GenericAXParserTests.swift`, `SlackParserTests.swift`, `StructuredNativeParserTests.swift`:
+```swift
+// Temporarily at the top of testAssertGoldenPassesForAMatchingGolden:
+print(try goldenJSON(.generic(GenericPage(regions: [], focused: nil, url: nil))))
+```
+
+Save the printed string as `Tests/MaxMiCaptureTests/Fixtures/generic-empty-golden.json`, remove the `print`, and re-run:
+
+Run: `swift test --filter FixtureLoadingTests`
+Expected: PASS, 4 tests.
+
+- [ ] **Step 5: Delete the twelve duplicated loaders, plus Task 1's**
+
+Delete the `func fixture(_:)` method from each of these thirteen files (line ranges as they stand on this branch; **twelve**, not the six spec §7d names — ruling F17):
+
+| File (`Tests/MaxMiCaptureTests/`) | Lines | Body variant |
+|---|---|---|
+| `AXNodeAttributesTests.swift` | 5-10 | `XCTUnwrap` |
+| `BrowserCapturePipelineTests.swift` | 6-9 | force-unwrap |
+| `ExtractorTests.swift` | 5-8 | force-unwrap |
+| `GenericAXParserTests.swift` | 5-12 | `XCTUnwrap` |
+| `GenericPageBudgetTests.swift` | 6-11 | `XCTUnwrap` |
+| `GenericPageRegionTests.swift` | 6-11 | `XCTUnwrap` |
+| `NativeConversationParserTests.swift` | 6-9 | force-unwrap |
+| `SlackParserTests.swift` | 6-9 | force-unwrap |
+| `StructuredConversationParserTests.swift` | 6-11 | `XCTUnwrap` |
+| `StructuredEntityTypedTests.swift` | 6-11 | `XCTUnwrap` |
+| `StructuredNativeParserTests.swift` | 5-8 | force-unwrap |
+| `WebAppStructuredTests.swift` | 6-11 | `XCTUnwrap` |
+| `AXNodeDOMAttributeTests.swift` (Task 1's copy) | the `fixture(_:)` method only — keep `everyFixtureName()` | `XCTUnwrap` |
+
+The two body variants are:
 
 ```swift
     func fixture(_ name: String) throws -> AXNode {
         let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!
+        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
+    }
+```
+
+```swift
+    func fixture(_ name: String) throws -> AXNode {
+        let url = try XCTUnwrap(Bundle.module.url(
+            forResource: name, withExtension: "json", subdirectory: "Fixtures"
+        ))
         return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
     }
 ```
@@ -2167,7 +2305,10 @@ conversion.
 - [ ] **Step 8: Run the suite**
 
 Run: `swift test --filter MaxMiCaptureTests`
-Expected: PASS, including `FixtureLoadingTests` (4 tests) and the six modified classes.
+Expected: PASS, no NEW failures, including `FixtureLoadingTests` (4 tests) and all thirteen modified classes.
+
+Run: `grep -rn "func fixture(" Tests/ | wc -l`
+Expected: `1` — the free function in `FixtureLoading.swift` and nothing else.
 
 - [ ] **Step 9: Commit**
 
@@ -2175,12 +2316,19 @@ Expected: PASS, including `FixtureLoadingTests` (4 tests) and the six modified c
 git add tools/ax-snapshot-record.swift Tests/MaxMiCaptureTests/FixtureLoading.swift \
         Tests/MaxMiCaptureTests/FixtureLoadingTests.swift \
         Tests/MaxMiCaptureTests/Fixtures/generic-empty-golden.json \
-        Tests/MaxMiCaptureTests/ExtractorTests.swift \
+        Tests/MaxMiCaptureTests/AXNodeAttributesTests.swift \
+        Tests/MaxMiCaptureTests/AXNodeDOMAttributeTests.swift \
         Tests/MaxMiCaptureTests/BrowserCapturePipelineTests.swift \
-        Tests/MaxMiCaptureTests/NativeConversationParserTests.swift \
+        Tests/MaxMiCaptureTests/ExtractorTests.swift \
         Tests/MaxMiCaptureTests/GenericAXParserTests.swift \
+        Tests/MaxMiCaptureTests/GenericPageBudgetTests.swift \
+        Tests/MaxMiCaptureTests/GenericPageRegionTests.swift \
+        Tests/MaxMiCaptureTests/NativeConversationParserTests.swift \
         Tests/MaxMiCaptureTests/SlackParserTests.swift \
+        Tests/MaxMiCaptureTests/StructuredConversationParserTests.swift \
+        Tests/MaxMiCaptureTests/StructuredEntityTypedTests.swift \
         Tests/MaxMiCaptureTests/StructuredNativeParserTests.swift \
+        Tests/MaxMiCaptureTests/WebAppStructuredTests.swift \
         Tests/MaxMiCaptureTests/Fixtures/README.md
 git commit -m "Add AX snapshot recorder and one shared fixture loader"
 ```
@@ -2190,8 +2338,8 @@ git commit -m "Add AX snapshot recorder and one shared fixture loader"
 ### Task 7: Terminal (Warp, Terminal.app, iTerm2) → `.terminal`
 
 **Files:**
-- Modify: `Sources/MaxMiCapture/TerminalParser.swift` (**replace** Phase A Task 14's `promptPatterns` and `segments(fromScrollback:)`)
-- Delete: `Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift` (Phase A Task 14; superseded — `TerminalStructuredTests` asserts a superset)
+- Modify: `Sources/MaxMiCapture/TerminalParser.swift` (**replace** Phase A Task 14's `promptPatterns`, `segments(fromScrollback:)`, `joinedOutput(_:)`, `sessionCwd(fromTitle:)` and `structured(fromScrollback:app:)`; edit the existing `parseStructured` body in place)
+- Modify: `Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift` (**kept, not deleted** — ruling F8: move its two invariant tests into the new file and update its two `cwd` expectations from the Phase A slug to Phase D's absolute path)
 - Modify: `Sources/MaxMiCapture/ParserRegistry.swift` (add `TerminalParser()` to `structured`)
 - Create: `Tests/MaxMiCaptureTests/Fixtures/warp-session.json`, `warp-session-golden.json`, `iterm-offset-session.json`, `iterm-offset-session-golden.json`
 - Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
@@ -2199,7 +2347,10 @@ git commit -m "Add AX snapshot recorder and one shared fixture loader"
 
 **Interfaces:**
 - Consumes: `AXQuery.findAll(_:in:)` (Task 3); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `TerminalSegment`, `TerminalSession`, `CapturedContent` (Phase A).
-- Produces: `TerminalParser: StructuredParser` with `static let config`; `TerminalParser.PromptShape` (`.userHost`, `.path`) with `pattern`; `TerminalParser.promptShape(in lines: [String]) -> PromptShape?`; `TerminalParser.commandText(in line: String, shape: PromptShape) -> String?`; `TerminalParser.segments(fromScrollback: String) -> [TerminalSegment]`; `TerminalParser.cwdPath(windowTitle: String?, scrollback: String) -> String?`; `TerminalParser.pathBodyPattern` (a `static let`, promoted from the local string in `lastPathComponent`); `TerminalParser.parseStructured(window:app:)`. Phase A Task 14's `promptPatterns: [String]` is **deleted** — `PromptShape.pattern` replaces it, because segmentation has to know WHICH shape matched in order to strip the cwd from a `user@host` prompt.
+- Produces: `TerminalParser: StructuredParser` with `static let config`; `TerminalParser.PromptShape` (`.userHost`, `.path`) with `pattern`; `TerminalParser.promptShape(in lines: [String]) -> PromptShape?`; `TerminalParser.commandText(in line: String, shape: PromptShape) -> String?`; `TerminalParser.segments(fromScrollback: String) -> [TerminalSegment]`; `TerminalParser.cwdPath(windowTitle: String?, scrollback: String) -> String?`; `TerminalParser.session(fromScrollback: String, windowTitle: String?) -> CapturedContent` (the ONE content path, bounded by `CaptureAccumulator.bound(_:to: contentCap)`); `TerminalParser.pathBodyPattern` (a `static let`, promoted from the local string in `lastPathComponent`).
+- **Deleted in this task** (ruling F20 — an orphaned `private`/`static` member is a build warning and Task 21 requires none): Phase A Task 14's `promptPatterns: [String]`, its `segments(fromScrollback:)` body, `joinedOutput(_:)` (only the old segmenter called it), `sessionCwd(fromTitle:)` and `structured(fromScrollback:app:)` (both only reachable from the old content path). Nothing outside `TerminalParser.swift` references any of them — verified by grep across `Sources/` and `Tests/`.
+- **`parseStructured(window:app:)` already exists** at `Sources/MaxMiCapture/TerminalParser.swift:30`. Its **body is edited**; it is NOT redeclared in the extension, which would be an invalid redeclaration (ruling F1). The same rule holds for every parser task in this plan.
+- `parse(window:app:)` keeps `sourceApp`, `sourceKey` (`terminalKey`), `sourceTitle`, `contentKind: .terminal` and `accumulationPolicy: .appendItems`, and becomes a pure render wrapper over the same `session(fromScrollback:windowTitle:)` value — one scrollback read, one segmentation, one content path (ruling F9).
 - `sourceApp`, `sourceKey` (`terminalKey`), `contentKind: .terminal`, `accumulationPolicy: .appendItems` stay exactly where they are, on `parse(window:app:)`.
 
 - [ ] **Step 1: Write the failing test**
@@ -2212,8 +2363,9 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class TerminalStructuredTests: XCTestCase {
-    func window(_ scrollback: String, origin: CGPoint = .zero) -> AXNode {
-        AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
+    func window(_ scrollback: String, origin: CGPoint = .zero,
+                title: String? = "~/code/MaxMi") -> AXNode {
+        AXNode(role: "AXWindow", value: nil, title: title, url: nil,
                frame: CGRect(origin: origin, size: CGSize(width: 900, height: 600)),
                focused: false,
                children: [AXNode(role: "AXTextArea", value: scrollback, title: nil, url: nil,
@@ -2236,9 +2388,11 @@ final class TerminalStructuredTests: XCTestCase {
 
     // MARK: - Config
 
-    func testConfigClaimsAllThreeTerminalBundleIDs() {
+    func testConfigClaimsEveryTerminalBundleID() {
+        // Four today: dev.warp.Warp-Stable, dev.warp.Warp, com.apple.Terminal, com.googlecode.iterm2.
         XCTAssertEqual(Set(TerminalParser.config.bundleIDs),
                        Set(ParserRegistry.terminalBundleIDs))
+        XCTAssertEqual(TerminalParser.config.bundleIDs.count, 4)
         XCTAssertEqual(TerminalParser.config.app, "Terminal")
         XCTAssertEqual(TerminalParser.config.offscreenPolicy,
                        .visibleOnly(maxCharacters: 64_000))
@@ -2286,13 +2440,13 @@ final class TerminalStructuredTests: XCTestCase {
         Compiling MaxMi
         Build complete
         ada@mac ~/code/MaxMi % swift test
-        Executed 506 tests, with 2 failures
+        Executed 689 tests, with 3 failures
         ada@mac ~/code/MaxMi %
         """
         let segments = TerminalParser.segments(fromScrollback: scrollback)
         XCTAssertEqual(segments.map(\.command), ["swift build", "swift test"])
         XCTAssertEqual(segments[0].output, "Compiling MaxMi\nBuild complete")
-        XCTAssertEqual(segments[1].output, "Executed 506 tests, with 2 failures")
+        XCTAssertEqual(segments[1].output, "Executed 689 tests, with 3 failures")
         XCTAssertFalse(segments[1].isRunning, "a trailing idle prompt means nothing is running")
     }
 
@@ -2357,7 +2511,7 @@ final class TerminalStructuredTests: XCTestCase {
         Build complete
         ada@mac ~/code/MaxMi %
         """
-        let content = TerminalParser().parse(window(scrollback), context: context("~/code/MaxMi"))
+        let content = try TerminalParser().parse(window(scrollback), context: context("~/code/MaxMi"))
         let terminal = try session(content)
         XCTAssertEqual(terminal.cwd, "~/code/MaxMi")
         XCTAssertEqual(terminal.segments.map(\.command), ["swift build"])
@@ -2367,17 +2521,17 @@ final class TerminalStructuredTests: XCTestCase {
 
     func testSegmentationIsIdenticalAtANonzeroWindowOrigin() throws {
         let scrollback = "ada@mac ~/code % ls\nPackage.swift\nada@mac ~/code %"
-        let flush = TerminalParser().parse(window(scrollback), context: context("~/code"))
-        let offset = TerminalParser().parse(window(scrollback, origin: CGPoint(x: 1440, y: 220)),
-                                            context: context("~/code"))
+        let flush = try TerminalParser().parse(window(scrollback), context: context("~/code"))
+        let offset = try TerminalParser().parse(window(scrollback, origin: CGPoint(x: 1440, y: 220)),
+                                                context: context("~/code"))
         XCTAssertEqual(flush, offset, "a terminal is text; its origin must not matter")
     }
 
-    func testEmptyTerminalIsNotHandled() {
+    func testEmptyTerminalIsNotHandled() throws {
         let bare = AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
                           frame: CGRect(x: 0, y: 0, width: 10, height: 10), focused: false,
                           children: [])
-        XCTAssertNil(TerminalParser().parse(bare, context: context(nil)),
+        XCTAssertNil(try TerminalParser().parse(bare, context: context(nil)),
                      "nil is NOT_HANDLED and routes to GenericPageExtractor")
     }
 
@@ -2385,21 +2539,59 @@ final class TerminalStructuredTests: XCTestCase {
         let scrollback = "ada@mac ~/code % ls\nPackage.swift\nada@mac ~/code %"
         let app = AppInfo(bundleID: "dev.warp.Warp-Stable", name: "Warp", windowTitle: "~/code")
         XCTAssertEqual(try TerminalParser().parseStructured(window: window(scrollback), app: app),
-                       TerminalParser().parse(window(scrollback), context: context("~/code")))
+                       try TerminalParser().parse(window(scrollback), context: context("~/code")))
+    }
+
+    // MARK: - Invariants moved here from TerminalSegmentationTests (ruling F8)
+
+    /// Moved verbatim in intent from `TerminalSegmentationTests`: the ONLY coverage that the
+    /// rendered capture is the render of the typed value and that the key/kind/policy trio is
+    /// untouched by the anchored rewrite.
+    func testCaptureRendersTheSegmentsAndKeepsKeyKindAndPolicy() throws {
+        let blob = "dev@mac ~/code/MaxMi % swift test\n2 failures"
+        let app = AppInfo(bundleID: "dev.warp.Warp-Stable", name: "Warp",
+                          windowTitle: "~/code/MaxMi")
+        let capture = try XCTUnwrap(try TerminalParser().parse(window: window(blob), app: app))
+        XCTAssertEqual(capture.sourceApp, "Warp")
+        XCTAssertEqual(capture.sourceKey, "terminal:warp/maxmi",
+                       "the key is still derived from the RAW scrollback, not from the typed value")
+        XCTAssertEqual(capture.contentKind, .terminal)
+        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
+        XCTAssertEqual(capture.content, "$ swift test\n2 failures\n… (running)")
+        XCTAssertEqual(capture.content, ContentRenderer.render(
+            try XCTUnwrap(capture.structured), style: .full),
+                       "one content path: `parse` renders exactly what `parseStructured` returned")
+    }
+
+    /// Moved from `TerminalSegmentationTests`: the ONLY coverage of the `contentCap` trim.
+    func testOversizeScrollbackDropsOldestSegments() throws {
+        var lines: [String] = []
+        for index in 0..<400 {
+            lines.append("dev@mac ~/code/MaxMi % echo \(index)")
+            lines.append(String(repeating: "y", count: 40))
+        }
+        let blob = lines.joined(separator: "\n")
+        let app = AppInfo(bundleID: "dev.warp.Warp-Stable", name: "Warp",
+                          windowTitle: "~/code/MaxMi")
+        let session = try session(try TerminalParser().parseStructured(window: window(blob), app: app))
+        XCTAssertEqual(session.segments.last?.command, "echo 399", "newest-anchored")
+        XCTAssertLessThan(session.segments.count, 400, "oldest segments are dropped")
+        let capture = try XCTUnwrap(try TerminalParser().parse(window: window(blob), app: app))
+        XCTAssertLessThanOrEqual(capture.content.count, TerminalParser.contentCap)
     }
 
     // MARK: - Golden fixtures
 
     func testWarpSessionFixtureMatchesItsGolden() throws {
-        let content = TerminalParser().parse(try fixture("warp-session"),
-                                             context: context("~/code/sample"))
+        let content = try TerminalParser().parse(try fixture("warp-session"),
+                                                 context: context("~/code/sample"))
         assertGolden(try XCTUnwrap(content), matches: "warp-session-golden")
     }
 
     func testOffsetITermSessionFixtureMatchesItsGolden() throws {
         let iterm = ParseContext(app: AppInfo(bundleID: "com.googlecode.iterm2", name: "iTerm2",
                                               windowTitle: "~/code/sample"))
-        let content = TerminalParser().parse(try fixture("iterm-offset-session"), context: iterm)
+        let content = try TerminalParser().parse(try fixture("iterm-offset-session"), context: iterm)
         assertGolden(try XCTUnwrap(content), matches: "iterm-offset-session-golden")
     }
 }
@@ -2412,7 +2604,17 @@ Expected: FAIL to compile — "type 'TerminalParser' does not conform to protoco
 
 - [ ] **Step 3: Write minimal implementation**
 
-First delete Phase A Task 14's two members from `Sources/MaxMiCapture/TerminalParser.swift` — `static let promptPatterns: [String]` and `static func segments(fromScrollback:)` — and delete `Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift`. Then promote the path pattern to a `static let` next to `contentCap`:
+First delete these five Phase A members from `Sources/MaxMiCapture/TerminalParser.swift`, all of them unreachable once the new path lands (ruling F20; no caller exists outside this file):
+
+- `static let promptPatterns: [String]` (`:25-28`)
+- `static func segments(fromScrollback:)` (`:66`) — the name is reused below, the body is replaced
+- `static func joinedOutput(_:)` — called only by the old segmenter
+- `func sessionCwd(fromTitle:)` — called only by `structured(fromScrollback:app:)`
+- `func structured(fromScrollback:app:)` (`:54-61`) — the second content path; ruling F9 leaves exactly one
+
+`TerminalSegmentationTests.swift` is **not** deleted (ruling F8) — Step 4b edits it instead. Also update the class doc comment, which still says "Phase D replaces this with an anchored parser that reads the emulator's own command boundaries": that is now this task.
+
+Then promote the path pattern to a `static let` next to `contentCap`:
 
 ```swift
     /// A home-or-absolute path with no prompt terminator inside it.
@@ -2425,7 +2627,37 @@ and replace the local `let pathBody = …` in `lastPathComponent(in:requirePromp
         let pattern = requirePrompt ? "\(Self.pathBodyPattern)\\s*[%$#>❯]" : Self.pathBodyPattern
 ```
 
-Then append this extension to the same file:
+Then **edit the existing `parseStructured` body** at `:30` (it is already declared in the struct; declaring it again in the extension below is an invalid redeclaration — ruling F1):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+and rewrite `parse(window:app:)` so the render is the only thing it adds — one scrollback read, one segmentation:
+
+```swift
+    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        // One AX walk per capture: the thread key needs the RAW prompt lines, so the blob is read
+        // here and the typed session is built from that same blob.
+        guard let blob = largestTextArea(in: window), !blob.isEmpty else { return nil }
+        let session = Self.session(fromScrollback: blob, windowTitle: app.windowTitle)
+        return ParsedCapture(
+            sourceApp: app.name,                 // "Warp", "Terminal", "iTerm2"
+            sourceKey: terminalKey(app: app, content: blob),
+            sourceTitle: app.windowTitle,
+            content: ContentRenderer.render(session, style: .full),
+            contentKind: .terminal,
+            parserVersion: 3,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: Self.config.offscreenPolicy,
+            structured: session
+        )
+    }
+```
+
+Then append this extension to the same file — `config`, the shape machinery, the one content path, and `parse(_:context:)`, and **no** `parseStructured`:
 
 ```swift
 extension TerminalParser: StructuredParser {
@@ -2531,20 +2763,23 @@ extension TerminalParser: StructuredParser {
         return nil
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    /// The ONE content path for a terminal. Newest-anchored hard cap on the STRUCTURED value,
+    /// because the rendered text is derived from it — capping the string afterwards would just be
+    /// undone by the renderer, and it is what keeps `capture.content <= contentCap`.
+    static func session(fromScrollback blob: String, windowTitle: String?) -> CapturedContent {
+        let session = TerminalSession(
+            cwd: cwdPath(windowTitle: windowTitle, scrollback: blob),
+            segments: segments(fromScrollback: blob)
+        )
+        return CaptureAccumulator.bound(.terminal(session), to: contentCap)
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let areas = AXQuery.findAll("//AXTextArea", in: snapshot)
         // Warp exposes one; some emulators expose several — take the richest.
         guard let blob = areas.compactMap(\.value).filter({ !$0.isEmpty })
                 .max(by: { $0.count < $1.count }) else { return nil }
-        let bounded = String(blob.suffix(Self.contentCap))
-        return .terminal(TerminalSession(
-            cwd: Self.cwdPath(windowTitle: context.windowTitle, scrollback: bounded),
-            segments: Self.segments(fromScrollback: bounded)
-        ))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        return Self.session(fromScrollback: blob, windowTitle: context.windowTitle)
     }
 }
 ```
@@ -2561,10 +2796,22 @@ Run: `swift test --filter TerminalStructuredTests`
 Expected: PASS for every test except the two golden tests, which fail with "missing golden Fixtures/warp-session-golden.json".
 
 Run: `swift test --filter TerminalParserTests`
-Expected: PASS, unchanged — `terminalKey`, `workingDirectory` and `parse(window:app:)` are untouched.
+Expected: PASS, unchanged — `terminalKey` and `workingDirectory(from…)` are untouched, and `parse(window:app:)` still returns the same key, kind and policy.
+
+- [ ] **Step 4b: Update the two `cwd` expectations in `TerminalSegmentationTests`**
+
+The file stays (ruling F8). Two of its assertions measured Phase A's deliberately narrow slug cwd; Phase D returns the absolute path Phase A deferred, so update exactly these two lines in `Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift` and delete the two tests that moved into `TerminalStructuredTests` in Step 1 (`testCaptureRendersTheSegmentsAndKeepsKeyKindAndPolicy`, `testOversizeScrollbackDropsOldestSegments`):
+
+```swift
+        XCTAssertEqual(session.cwd, "~/code/MaxMi")
+```
+
+```swift
+        XCTAssertEqual(session.cwd, "~/code/ShipCast")
+```
 
 Run: `swift test --filter TerminalSegmentationTests`
-Expected: no tests run — that Phase A file was deleted in Step 3.
+Expected: PASS, 7 tests — the seven that stay assert the segmentation contract (both prompt shapes, the bare trailing prompt, the prompt-prefix strip, the leading commandless segment, the unrecognised-prompt fallback, and the empty-scrollback nil), all of which the new segmenter preserves.
 
 - [ ] **Step 5: Record the two fixtures and their goldens**
 
@@ -2607,14 +2854,14 @@ Save the printed strings as `Tests/MaxMiCaptureTests/Fixtures/warp-session-golde
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `swift test --filter TerminalStructuredTests`
-Expected: PASS, 16 tests.
+Expected: PASS, 19 tests (17 written in Step 1 plus the two moved in from `TerminalSegmentationTests`).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git rm Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift
 git add Sources/MaxMiCapture/TerminalParser.swift Sources/MaxMiCapture/ParserRegistry.swift \
         Tests/MaxMiCaptureTests/TerminalStructuredTests.swift \
+        Tests/MaxMiCaptureTests/TerminalSegmentationTests.swift \
         Tests/MaxMiCaptureTests/Fixtures/warp-session.json \
         Tests/MaxMiCaptureTests/Fixtures/warp-session-golden.json \
         Tests/MaxMiCaptureTests/Fixtures/iterm-offset-session.json \
@@ -2698,6 +2945,9 @@ final class EditorParserTests: XCTestCase {
     func testConfigAndRegistration() {
         XCTAssertEqual(Set(EditorParser.config.bundleIDs), Set(ParserRegistry.editorBundleIDs))
         XCTAssertEqual(EditorParser.config.app, "Editor")
+        XCTAssertEqual(EditorParser.config.offscreenPolicy,
+                       .accessibilityScroll(maxSteps: 6, maxCharacters: 32_000),
+                       "the scroll ceiling equals the render cap — no unreachable ceiling (F11)")
         let registry = ParserRegistry()
         XCTAssertTrue(registry.structuredParser(for: ParserRegistry.cursorBundleID) is EditorParser)
         XCTAssertTrue(registry.structuredParser(for: ParserRegistry.vsCodeBundleID) is EditorParser)
@@ -2732,9 +2982,9 @@ final class EditorParserTests: XCTestCase {
     }
 
     func testEditorLinesBecomeParagraphBlocksAndTheTitleIsTheActiveTab() throws {
-        let content = EditorParser().parse(window(editor: "let a = 1\nlet b = 2", panel: nil),
-                                           context: context(ParserRegistry.vsCodeBundleID,
-                                                            "app.swift — sample"))
+        let content = try EditorParser().parse(window(editor: "let a = 1\nlet b = 2", panel: nil),
+                                               context: context(ParserRegistry.vsCodeBundleID,
+                                                                "app.swift — sample"))
         let doc = try document(content)
         XCTAssertEqual(doc.title, "app.swift")
         XCTAssertEqual(doc.blocks.map(\.type), [.paragraph, .paragraph])
@@ -2744,7 +2994,7 @@ final class EditorParserTests: XCTestCase {
     }
 
     func testIntegratedTerminalPanelIsDroppedWhenTheEditorAnchorResolves() throws {
-        let content = EditorParser().parse(
+        let content = try EditorParser().parse(
             window(editor: "let a = 1", panel: "ada@mac ~/code % swift test"),
             context: context(ParserRegistry.cursorBundleID, "sample — app.swift"))
         let doc = try document(content)
@@ -2754,26 +3004,28 @@ final class EditorParserTests: XCTestCase {
                        "the panel is not the document the user is editing")
     }
 
-    func testNoEditorAnchorIsNotHandledSoGenericPageExtractorTakesOver() {
+    func testNoEditorAnchorIsNotHandledSoGenericPageExtractorTakesOver() throws {
         let welcome = node("AXWindow", title: "Welcome",
                            frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
                            children: [node("AXGroup", identifier: "workbench.panel.terminal",
                                            children: [node("AXTextArea", value: "shell only")])])
-        XCTAssertNil(EditorParser().parse(welcome,
-                                          context: context(ParserRegistry.cursorBundleID, "Welcome")),
+        XCTAssertNil(try EditorParser().parse(welcome,
+                                              context: context(ParserRegistry.cursorBundleID,
+                                                               "Welcome")),
                      "nil routes to GenericPageExtractor, which will pick the panel up")
     }
 
-    func testEmptyEditorIsNotHandled() {
-        XCTAssertNil(EditorParser().parse(window(editor: "   ", panel: nil),
-                                          context: context(ParserRegistry.vsCodeBundleID, "a.swift")))
+    func testEmptyEditorIsNotHandled() throws {
+        XCTAssertNil(try EditorParser().parse(window(editor: "   ", panel: nil),
+                                              context: context(ParserRegistry.vsCodeBundleID,
+                                                               "a.swift")))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
-        let flush = EditorParser().parse(window(editor: "let a = 1", panel: nil),
-                                         context: context(ParserRegistry.vsCodeBundleID,
-                                                          "app.swift — sample"))
-        let offset = EditorParser().parse(
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        let flush = try EditorParser().parse(window(editor: "let a = 1", panel: nil),
+                                             context: context(ParserRegistry.vsCodeBundleID,
+                                                              "app.swift — sample"))
+        let offset = try EditorParser().parse(
             window(editor: "let a = 1", panel: nil, origin: CGPoint(x: 1440, y: 220)),
             context: context(ParserRegistry.vsCodeBundleID, "app.swift — sample"))
         XCTAssertEqual(flush, offset)
@@ -2791,16 +3043,16 @@ final class EditorParserTests: XCTestCase {
     }
 
     func testVSCodeFixtureMatchesItsGolden() throws {
-        let content = EditorParser().parse(try fixture("vscode-editor"),
-                                           context: context(ParserRegistry.vsCodeBundleID,
-                                                            "sample.swift — sample"))
+        let content = try EditorParser().parse(try fixture("vscode-editor"),
+                                               context: context(ParserRegistry.vsCodeBundleID,
+                                                                "sample.swift — sample"))
         assertGolden(try XCTUnwrap(content), matches: "vscode-editor-golden")
     }
 
     func testOffsetCursorFixtureMatchesItsGolden() throws {
-        let content = EditorParser().parse(try fixture("cursor-offset-editor"),
-                                           context: context(ParserRegistry.cursorBundleID,
-                                                            "sample — sample.swift"))
+        let content = try EditorParser().parse(try fixture("cursor-offset-editor"),
+                                               context: context(ParserRegistry.cursorBundleID,
+                                                                "sample — sample.swift"))
         assertGolden(try XCTUnwrap(content), matches: "cursor-offset-editor-golden")
     }
 }
@@ -2824,13 +3076,17 @@ import MaxMiCore
 /// sibling group whose identifier contains "panel" or "terminal". Anchoring on the identifier
 /// instead of geometry is what stops the terminal panel being captured as the document.
 public struct EditorParser: SourceParser, StructuredParser {
-    static let contentCap = 32_000
     public init() {}
 
+    /// The render cap and the scroll ceiling are the SAME number on purpose: a ceiling above the
+    /// cap is unreachable, and Phase A's final review removed exactly that pattern
+    /// (`StructuredNativeParsers.pageBudget = 32_000`, `:247`). Ruling F11 — 96_000 appears
+    /// nowhere in `Sources/MaxMiCapture` and this task does not introduce it.
+    static let contentCap = StructuredEntityExtraction.pageBudget   // 32_000
     public static let config = ParserConfig(
         app: "Editor",
         bundleIDs: ParserRegistry.editorBundleIDs,
-        offscreenPolicy: .accessibilityScroll(maxSteps: 6, maxCharacters: 96_000)
+        offscreenPolicy: .accessibilityScroll(maxSteps: 6, maxCharacters: contentCap)
     )
 
     // MARK: - Titles and keys
@@ -2886,7 +3142,7 @@ public struct EditorParser: SourceParser, StructuredParser {
 
     // MARK: - StructuredParser
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         guard let area = Self.editorTextArea(in: snapshot),
               let raw = area.value else { return nil }
         let bounded = String(raw.suffix(Self.contentCap))
@@ -2905,7 +3161,7 @@ public struct EditorParser: SourceParser, StructuredParser {
     // MARK: - SourceParser (keys and policies, spec §4f rule 1)
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = parse(window, context: ParseContext(app: app)) else { return nil }
+        guard let structured = try parse(window, context: ParseContext(app: app)) else { return nil }
         return ParsedCapture(
             sourceApp: ApplicationRegistry.descriptor(for: app.bundleID)?.displayName ?? app.name,
             sourceKey: Self.key(fromTitle: app.windowTitle),
@@ -2921,10 +3177,13 @@ public struct EditorParser: SourceParser, StructuredParser {
     }
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        try parse(window, context: ParseContext(app: app))
     }
 }
 ```
+
+`EditorParser` is a new type, so both conformances are declared in the struct body and there is no
+redeclaration hazard here (ruling F1 concerns the eight existing parsers).
 
 In `Sources/MaxMiCapture/ParserRegistry.swift`, register in both maps:
 
@@ -2975,7 +3234,7 @@ Hand-scrub, move into `Tests/MaxMiCaptureTests/Fixtures/`, print the goldens wit
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `swift test --filter EditorParserTests`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 7: Commit**
 
@@ -3007,7 +3266,7 @@ git commit -m "Capture the active editor buffer in Cursor and VS Code"
 
 **Interfaces:**
 - Consumes: `GenericPageExtractor.extract(window:focusedElement:url:options:)` and its `Options` (Phase A); `GenericPage`, `Region`, `RegionKind`, `CapturedContent` (Phase A); `TabCapture`, `BrowserEngine`, `BrowserCaptureQuality`, `ExtractionError` and `BrowserTabExtractor.primaryWebArea(in:windowTitle:engine:)` (the latter added by Phase A Task 15 — do **not** add a second web-area resolver); `ParserRegistry.host(fromURL:)` and `structuredParser(forHost:)` (Task 5).
-- Produces: `WebPageParser.extract(window: AXNode, webArea: AXNode, url: String?, options: GenericPageExtractor.Options) -> GenericPageExtractor.Result`; `WebPageParser.parse(window: AXNode, tab: TabCapture) -> CapturedContent`; `BrowserCaptureResult.structured: CapturedContent` (new non-optional field, last in `init`).
+- Produces: `WebPageParser.extract(window: AXNode, webArea: AXNode, url: String?, options: GenericPageExtractor.Options) -> GenericPageExtractor.Result`; `WebPageParser.parse(window: AXNode, tab: TabCapture) -> CapturedContent`; `BrowserCapturePipeline.parse(window:windowTitle:browser:contentBudget:registry:) throws -> BrowserCaptureResult` — `contentBudget:` is **kept** (ruling F5; `Tests/MaxMiCaptureTests/WebAppStructuredTests.swift:117` passes `contentBudget: 60`) and `registry:` is added with a default. `BrowserCaptureResult` gains **no** field: the structured value is already on `result.capture.structured` and a second copy would be two sources of truth (ruling F30).
 - `WebPageParser` is not in the registry maps — it is the browser **default**, reached when no host parser claims the URL. It therefore has no `ParserConfig`.
 
 - [ ] **Step 1: Write the failing test**
@@ -3149,12 +3408,13 @@ final class WebPageParserTests: XCTestCase {
         XCTAssertEqual(result.url, "https://sqlite.org/arch.html")
         XCTAssertEqual(result.webApp, .generic)
         XCTAssertTrue(result.parserID.hasPrefix("BrowserWeb.v2/chromium/generic/"))
+        XCTAssertFalse(result.parserID.contains("fallback"),
+                       "no host parser claimed this tab, so there is nothing to degrade from")
         XCTAssertEqual(result.capture.contentKind, .webpage, "spec §12 Q3: browsers keep .webpage")
-        XCTAssertEqual(result.capture.structured, result.structured)
-        XCTAssertEqual(result.capture.content,
-                       ContentRenderer.render(result.structured, style: .full))
-        XCTAssertEqual(try page(result.structured).regions.map(\.kind),
-                       [.main, .sidebar, .navigation])
+        let structured = try XCTUnwrap(result.capture.structured,
+                                       "the browser path always attaches a typed shape")
+        XCTAssertEqual(result.capture.content, ContentRenderer.render(structured, style: .full))
+        XCTAssertEqual(try page(structured).regions.map(\.kind), [.main, .sidebar, .navigation])
     }
 
     func testChromeLandmarksFixtureMatchesItsGolden() throws {
@@ -3232,20 +3492,7 @@ public enum WebPageParser {
 
 `BrowserTabExtractor.primaryWebArea(in:windowTitle:engine:)` already exists — Phase A Task 15 added it with exactly this signature and scoring. Do not add a second resolver.
 
-In `Sources/MaxMiCapture/BrowserCapturePipeline.swift`, add the field and the routing:
-
-```swift
-public struct BrowserCaptureResult: Sendable, Equatable {
-    public let url: String
-    public let capture: ParsedCapture
-    public let parserID: String
-    public let quality: BrowserCaptureQuality
-    public let truncated: Bool
-    public let webApp: WebAppKind
-    /// Always present: a host parser's shape, or the generic web page.
-    public let structured: CapturedContent
-}
-```
+In `Sources/MaxMiCapture/BrowserCapturePipeline.swift`, `BrowserCaptureResult` is **unchanged** — every consumer reads `result.capture.structured`, which already carries exactly this value (ruling F30). Only `parse` changes. Replace the body's first two statements with:
 
 ```swift
         let tab = try BrowserTabExtractor.extract(
@@ -3253,27 +3500,59 @@ public struct BrowserCaptureResult: Sendable, Equatable {
             windowTitle: windowTitle,
             engine: browser.browserEngine
         )
-        let web = WebAppCaptureParser.parse(tab: tab, window: window)
+        // `WebAppCaptureParser.parse` THROWS (ExtractionError.emptyContent on an empty page) and
+        // takes the budget — both are load-bearing and neither may be dropped.
+        let web = try WebAppCaptureParser.parse(tab: tab, window: window,
+                                                contentBudget: contentBudget)
         // Host routing (spec §7b): a registered host parser claims the tab; otherwise the tab is
         // a generic web page. Either way `contentKind` stays whatever `classify` decided (§12 Q3).
-        let hostParser = ParserRegistry.host(fromURL: tab.url)
-            .flatMap { registry.structuredParser(forHost: $0) }
         let hostContext = ParseContext(
             app: AppInfo(bundleID: browser.bundleID, name: browser.displayName,
                          windowTitle: windowTitle),
             url: tab.url
         )
-        let structured = hostParser?.parse(window, context: hostContext)
-            ?? WebPageParser.parse(window: window, tab: tab)
+        // One routing call, one parse. `try` is not optional politeness: a host parser may throw
+        // `ParserRefusal` for a tab it will not let be stored (a compose-only Gmail window, Task
+        // 22). The refusal propagates out of this function and `AppWiring` records
+        // `.skipped(.parserNoContent)` — it is never swallowed into a generic capture (F13).
+        let routed = try CaptureDispatch.structuredCapture(
+            window: window, context: hostContext, registry: registry,
+            fallback: { window, _, _ in WebPageParser.parse(window: window, tab: tab) }
+        )
+        let structured: CapturedContent
+        var hostParserMarker: String? = nil
+        switch routed {
+        case .parsed(let content, let parserName):
+            structured = content
+            hostParserMarker = parserName
+        case .fellThrough(let content, let notHandledBy):
+            structured = content
+            // Spec §8: a registered host parser that returned nil is a non-silent degradation.
+            hostParserMarker = notHandledBy.map { CaptureDispatch.fallbackParserID(failedParser: $0) }
+        }
 ```
 
-`BrowserCapturePipeline.parse` therefore needs the registry. Change its signature and pass the structured value through:
+and append the marker to the parser ID, so the Capture Health window names the host parser that
+claimed (or degraded on) the tab:
+
+```swift
+        let parserID = ([
+            "BrowserWeb.v2",
+            browser.browserEngine?.rawValue ?? "unknown",
+            web.app.rawValue,
+            tab.urlSource.rawValue,
+            "quality-\(quality.rawValue)",
+        ] + (hostParserMarker.map { [$0] } ?? [])).joined(separator: "/")
+```
+
+`BrowserCapturePipeline.parse` therefore needs the registry. Add it **after** `contentBudget:`, which stays exactly as it is:
 
 ```swift
     public static func parse(
         window: AXNode,
         windowTitle: String?,
         browser: ApplicationDescriptor,
+        contentBudget: Int = WebAppCaptureParser.contentCap,
         registry: ParserRegistry = ParserRegistry()
     ) throws -> BrowserCaptureResult {
 ```
@@ -3294,13 +3573,16 @@ public struct BrowserCaptureResult: Sendable, Equatable {
             ),
             parserID: parserID,
             quality: quality,
-            truncated: tab.truncated,
-            webApp: web.app,
-            structured: structured
+            // The same three independent ways content can have been dropped Phase A recorded,
+            // measured against the rendered form of the typed shape this path now produces.
+            truncated: tab.truncated || web.truncated
+                || ContentRenderer.render(structured, style: .full).count
+                    >= WebAppCaptureParser.contentCap,
+            webApp: web.app
         )
 ```
 
-The `registry` default keeps the existing call site in `Sources/MaxMi/AppWiring.swift:1447` compiling; change it to pass the app's own registry so the two share one instance:
+The `registry` default keeps the existing call sites compiling (including `Tests/MaxMiCaptureTests/WebAppStructuredTests.swift:117`, which passes `contentBudget: 60` and no registry). Change the production call site at `Sources/MaxMi/AppWiring.swift:1450` to pass the app's own registry so the two share one instance:
 
 ```swift
                 let result = try BrowserCapturePipeline.parse(
@@ -3381,8 +3663,12 @@ git commit -m "Capture web pages as landmark regions with their URL"
 
 **Interfaces:**
 - Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)`, `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `Message`, `Message.makeID(sender:timeString:text:)`, `Conversation`, `CapturedContent` (Phase A).
-- Produces: `SlackParser: StructuredParser`; `SlackParser.config` (bundle ID `ParserRegistry.slackBundleID`, hosts `["app.slack.com", ".slack.com"]`, `attributeSet: ["AXDOMClassList"]`, `preferOverNative: true`); `SlackParser.channelName(fromTitle:) -> String`; `SlackParser.domMessages(in:) -> [Message]`; `SlackParser.draftMessage(in:) -> Message?`; `SlackParser.geometryMessages(in:) -> [Message]`; `SlackParser.parseStructured(window:app:)`.
-- `key(fromTitle:)`, `messageLines`, `parse(window:app:)` are untouched — `SlackParserTests` keeps passing verbatim.
+- Produces: `SlackParser: StructuredParser`; `SlackParser.config` (bundle ID `ParserRegistry.slackBundleID`, hosts `["app.slack.com", ".slack.com"]`, `attributeSet: ["AXDOMClassList"]`, `preferOverNative: true`); `SlackParser.domMessages(in:) -> [Message]`; `SlackParser.draftMessage(in:) -> Message?`; `SlackParser.geometryMessages(in:) -> [Message]`; `SlackParser.parse(_:context:)`.
+- **Reuses, does not re-implement, the existing title helpers.** `channel(fromTitle:)` (`Sources/MaxMiCapture/SlackParser.swift:42`) and `isGroup(fromTitle:)` (`:52`) stay and are called by the new path — `Tests/MaxMiCaptureTests/StructuredConversationParserTests.swift:36-41` asserts them directly, and a third title parser on one type is exactly the duplication Phase A already flagged. There is **no** `channelName(fromTitle:)`.
+- `key(fromTitle:)` and `parse(window:app:)` are untouched: `parse` already delegates to `parseStructured` (`:26`), so replacing that body replaces the content path with no second path.
+- **Deleted in this task** (ruling F20 — orphaned once the content path is replaced, and nothing outside `SlackParser.swift` calls them): `messages(in:windowX:)` (`:74`), `collectRows(_:into:windowX:)` (`:96`), `collectStaticText(_:into:)` (`:112`).
+- **`parseStructured(window:app:)` already exists at `:12` — its body is edited, it is not redeclared** (ruling F1).
+- The cap survives: `CaptureAccumulator.boundHard(_:to: contentCap)` still wraps the conversation, because `StructuredConversationParserTests.swift:80` and `SlackParserTests.swift:14` assert `capture.content.count <= SlackParser.contentCap`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3478,9 +3764,12 @@ final class SlackStructuredTests: XCTestCase {
     }
 
     func testChannelNameIsTheFirstTitleComponent() {
-        XCTAssertEqual(SlackParser.channelName(fromTitle: "general - Acme - Slack"), "general")
-        XCTAssertEqual(SlackParser.channelName(fromTitle: "Huddle"), "Huddle")
-        XCTAssertEqual(SlackParser.channelName(fromTitle: nil), "unknown")
+        // The EXISTING helpers, reused rather than duplicated (there is no `channelName`).
+        XCTAssertEqual(SlackParser().channel(fromTitle: "general - Acme - Slack"), "general")
+        XCTAssertEqual(SlackParser().channel(fromTitle: "Huddle"), "Huddle")
+        XCTAssertEqual(SlackParser().channel(fromTitle: nil), "unknown")
+        XCTAssertTrue(SlackParser().isGroup(fromTitle: "general - Acme - Slack"))
+        XCTAssertFalse(SlackParser().isGroup(fromTitle: "Huddle"))
     }
 
     func testDOMAnchorsProduceSenderAttributedTimestampedMessages() throws {
@@ -3533,15 +3822,15 @@ final class SlackStructuredTests: XCTestCase {
                        "a floated window must not turn every row into a sidebar row")
     }
 
-    func testDOMResultIsIdenticalAtANonzeroWindowOrigin() {
-        XCTAssertEqual(SlackParser().parse(domWindow(), context: context("general - Acme - Slack")),
-                       SlackParser().parse(domWindow(origin: CGPoint(x: 1440, y: 220)),
+    func testDOMResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        XCTAssertEqual(try SlackParser().parse(domWindow(), context: context("general - Acme - Slack")),
+                       try SlackParser().parse(domWindow(origin: CGPoint(x: 1440, y: 220)),
                                            context: context("general - Acme - Slack")))
     }
 
-    func testAWindowWithNeitherAnchorIsNotHandled() {
+    func testAWindowWithNeitherAnchorIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        XCTAssertNil(SlackParser().parse(bare, context: context("x - y - Slack")))
+        XCTAssertNil(try SlackParser().parse(bare, context: context("x - y - Slack")))
     }
 
     func testRenderedConversationUsesYouForTheDraftAndNeverTheInternalUserMarker() throws {
@@ -3573,7 +3862,17 @@ Expected: FAIL to compile — "type 'SlackParser' does not conform to protocol '
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `Sources/MaxMiCapture/SlackParser.swift`:
+First **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/SlackParser.swift:12` — it is already declared in the struct, so declaring it again in the extension below would be an invalid redeclaration (ruling F1):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+Delete `messages(in:windowX:)`, `collectRows(_:into:windowX:)` and `collectStaticText(_:into:)` in the same edit — the new path replaces all three and Swift warns on the unused `private` pair (ruling F20).
+
+Then append to the same file:
 
 ```swift
 extension SlackParser: StructuredParser {
@@ -3595,15 +3894,6 @@ extension SlackParser: StructuredParser {
     static let senderClass = "c-message__sender"
     static let timestampClass = "c-timestamp"
     static let composerClass = "ql-editor"
-
-    /// "<view> - <workspace> - Slack" -> "<view>". Slack's title and message DOM carry no
-    /// channel-vs-DM marker, which is why `isGroup` is always true (and unused by the renderer).
-    static func channelName(fromTitle title: String?) -> String {
-        guard let title, !title.isEmpty else { return "unknown" }
-        let parts = title.components(separatedBy: " - ")
-        if parts.count >= 3, parts.last == "Slack" { return parts[0] }
-        return title
-    }
 
     static func domMessages(in snapshot: AXNode) -> [Message] {
         guard let list = AXQuery.find("//*[domClass*=\"\(messageListClass)\"]", in: snapshot)
@@ -3645,12 +3935,15 @@ extension SlackParser: StructuredParser {
     /// (older builds, and a tree captured before AXManualAccessibility fully woke).
     static func geometryMessages(in snapshot: AXNode) -> [Message] {
         let windowX = snapshot.frame?.minX ?? 0
-        return AXQuery.findAll("//AXRow", in: snapshot)
+        let rows = AXQuery.findAll("//AXRow", in: snapshot)
             .filter { row in
                 // Window-relative: AXFrame is global screen coordinates.
                 guard let x = row.frame?.minX else { return true }
                 return (x - windowX) >= sidebarMaxX
             }
+        // Oldest first, exactly as the Phase A row walk sorted by y — `.appendItems` accumulation
+        // and the newest-anchored cap both depend on this order.
+        return AXQuery.sortedByVisualOrder(rows, relativeTo: snapshot.frame)
             .compactMap { row -> Message? in
                 let texts = AXQuery.collectStaticTexts(in: row)
                 guard let first = texts.first else { return nil }
@@ -3662,20 +3955,21 @@ extension SlackParser: StructuredParser {
             }
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         var messages = Self.domMessages(in: snapshot)
         if messages.isEmpty { messages = Self.geometryMessages(in: snapshot) }
         if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
         guard !messages.isEmpty else { return nil }
-        return .conversation(Conversation(
-            channel: Self.channelName(fromTitle: context.windowTitle),
-            isGroup: true,
+        let conversation = Conversation(
+            // The existing title helpers, not new ones: they are asserted directly by
+            // StructuredConversationParserTests and Task 25 refines `isGroup` from the header.
+            channel: channel(fromTitle: context.windowTitle),
+            isGroup: isGroup(fromTitle: context.windowTitle),
             messages: messages
-        ))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        )
+        // Newest-anchored HARD cap on the STRUCTURED value, unchanged from Phase A: the rendered
+        // text is derived from it, and one pathological message must not bloat a version.
+        return CaptureAccumulator.boundHard(.conversation(conversation), to: Self.contentCap)
     }
 }
 ```
@@ -3692,7 +3986,10 @@ Run: `swift test --filter SlackStructuredTests`
 Expected: PASS except the two golden tests.
 
 Run: `swift test --filter SlackParserTests`
-Expected: PASS, unchanged — `key(fromTitle:)`, `messageLines` and `parse(window:app:)` are untouched.
+Expected: PASS, unchanged — all 8 tests drive `parseStructured`/`parse` over DOM-less fixtures and synthetic rows, so they now exercise `geometryMessages`: the sidebar filter, the window-relative filter, sender attribution and both cap tests all hold because the fallback keeps the same rules and the same `boundHard` cap.
+
+Run: `swift test --filter StructuredConversationParserTests`
+Expected: PASS, unchanged — `channel(fromTitle:)`/`isGroup(fromTitle:)` are still there and still what the conversation is built from.
 
 - [ ] **Step 5: Record the two fixtures and their goldens**
 
@@ -3734,14 +4031,18 @@ git commit -m "Anchor Slack messages on DOM classes with a geometry fallback"
 **Files:**
 - Modify: `Sources/MaxMiCapture/DiscordParser.swift`
 - Modify: `Sources/MaxMiCapture/ParserRegistry.swift` (register `DiscordParser()` in `structured`, with hosts)
-- Create: `Tests/MaxMiCaptureTests/Fixtures/discord-messages.json`, `discord-messages-golden.json`, `discord-offset-messages.json`, `discord-offset-messages-golden.json`
+- Create: `Tests/MaxMiCaptureTests/Fixtures/discord-messages.json`, `discord-messages-golden.json`, `discord-offset-messages.json` (no second golden — see Step 1's `testTheOffsetFixtureProducesTheSameContentAsTheFlushOne`)
 - Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
 - Test: `Tests/MaxMiCaptureTests/DiscordStructuredTests.swift`
 
 **Interfaces:**
 - Consumes: `AXQuery.findAll(_:in:)`, `AXQuery.collectStaticTexts(in:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `Message`, `Conversation`, `CapturedContent` (Phase A).
-- Produces: `DiscordParser: StructuredParser`; `DiscordParser.config` (bundle ID `ParserRegistry.discordBundleID`, hosts `["discord.com", "www.discord.com"]`, `preferOverNative: true`); `DiscordParser.messageList(in:) -> AXNode?`; `DiscordParser.channelName(fromTitle:) -> String`; `DiscordParser.messages(in list: AXNode) -> [Message]`; `DiscordParser.parseStructured(window:app:)`.
-- `key(fromTitle:)`, `chrome`, `parse(window:app:)` are untouched — `DiscordParserTests` keeps passing verbatim.
+- Produces: `DiscordParser: StructuredParser`; `DiscordParser.config` (bundle ID `ParserRegistry.discordBundleID`, hosts `["discord.com", "www.discord.com"]`, `preferOverNative: true`); `DiscordParser.messageList(in:) -> AXNode?`; `DiscordParser.channelName(fromTitle:) -> String`; `DiscordParser.messages(in list: AXNode) -> [Message]`; `DiscordParser.staticTextsInTreeOrder(_:) -> [String]`.
+- `key(fromTitle:)`, `chrome`, `contentCap` and `parse(window:app:)` are untouched: `parse` already delegates to `parseStructured` (`Sources/MaxMiCapture/DiscordParser.swift:34`), so replacing that body replaces the whole content path.
+- **`parseStructured(window:app:)` already exists at `:19` — its body is edited, not redeclared** (ruling F1).
+- **Deleted in this task** (ruling F20): `messageLines(in:)` (`:74`) and `collect(_:into:)` (`:79`), both `private` and both orphaned by the new path.
+- `channelName(fromTitle:)` is genuinely new: `key(fromTitle:)` returns a slugged `discord:<server>/<channel>` key, not a display channel name, and it is asserted by `DiscordParserTests`, so it is reused for the key and not for the channel.
+- The `contentCap` bound is preserved with `CaptureAccumulator.boundHard`, replacing Phase A's hand-rolled newest-anchored trim loop.
 - **This task fixes the missing sender attribution the current parser documents as unfixable**, and it must do so with **zero geometry**: Discord's `AXFrame` values are unreliable (spec §7c).
 
 - [ ] **Step 1: Write the failing test**
@@ -3880,22 +4181,29 @@ final class DiscordStructuredTests: XCTestCase {
         XCTAssertEqual(c.messages.map(\.sender), ["unknown"])
     }
 
-    func testNoMessageListIsNotHandled() {
-        XCTAssertNil(DiscordParser().parse(node("AXWindow", children: [node("AXList", label: "Servers")]),
+    func testNoMessageListIsNotHandled() throws {
+        XCTAssertNil(try DiscordParser().parse(node("AXWindow", children: [node("AXList", label: "Servers")]),
                                            context: context("#general | Acme - Discord")))
     }
 
     func testResultIsUnaffectedByFrameValuesEntirely() throws {
         // Same tree, every frame replaced with an absurd one. Discord's frames lie; the parser
         // must not read them at all.
+        // EVERY field except `frame` is carried over: a rebuild that dropped subrole/heading
+        // level/DOM attributes would prove attribute-independence too, and would let a future
+        // frame read slip in through a node that kept its own attributes (ruling F25).
         func reframed(_ node: AXNode, _ frame: CGRect) -> AXNode {
             AXNode(role: node.role, value: node.value, title: node.title, url: node.url,
                    frame: frame, focused: node.focused,
                    children: node.children.map { reframed($0, frame) },
-                   identifier: node.identifier, label: node.label)
+                   identifier: node.identifier, label: node.label, subrole: node.subrole,
+                   headingLevel: node.headingLevel, selected: node.selected,
+                   placeholder: node.placeholder, selectedText: node.selectedText,
+                   hidden: node.hidden, domClassList: node.domClassList,
+                   domIdentifier: node.domIdentifier)
         }
-        let a = DiscordParser().parse(window(), context: context("#general | Acme - Discord"))
-        let b = DiscordParser().parse(reframed(window(), CGRect(x: -9_999, y: 5, width: 1, height: 1)),
+        let a = try DiscordParser().parse(window(), context: context("#general | Acme - Discord"))
+        let b = try DiscordParser().parse(reframed(window(), CGRect(x: -9_999, y: 5, width: 1, height: 1)),
                                       context: context("#general | Acme - Discord"))
         XCTAssertEqual(a, b)
     }
@@ -3906,10 +4214,17 @@ final class DiscordStructuredTests: XCTestCase {
                      matches: "discord-messages-golden")
     }
 
-    func testOffsetDiscordFixtureMatchesItsGolden() throws {
-        assertGolden(try XCTUnwrap(DiscordParser().parse(try fixture("discord-offset-messages"),
-                                                        context: context("#general | Acme - Discord"))),
-                     matches: "discord-offset-messages-golden")
+    func testTheOffsetFixtureProducesTheSameContentAsTheFlushOne() throws {
+        // Discord is geometry-free, so the offset recording must produce the SAME typed value —
+        // and it is checked against the SAME golden. A second golden file with identical bytes
+        // would add no signal (ruling F25), so `discord-offset-messages-golden.json` is not
+        // created; the equality below plus the shared golden is the assertion.
+        let flush = try XCTUnwrap(DiscordParser().parse(
+            try fixture("discord-messages"), context: context("#general | Acme - Discord")))
+        let offset = try XCTUnwrap(DiscordParser().parse(
+            try fixture("discord-offset-messages"), context: context("#general | Acme - Discord")))
+        XCTAssertEqual(flush, offset, "the window origin must not reach the typed value")
+        assertGolden(offset, matches: "discord-messages-golden")
     }
 }
 ```
@@ -3921,7 +4236,17 @@ Expected: FAIL to compile — "type 'DiscordParser' does not conform to protocol
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `Sources/MaxMiCapture/DiscordParser.swift`:
+First **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/DiscordParser.swift:19` (it is already declared in the struct — ruling F1) and delete the two now-orphaned private helpers `messageLines(in:)` and `collect(_:into:)` (ruling F20):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+The `GenericV2Content.lines(kept)` call goes with the old body — it is deleted, not chained.
+
+Then append to the same file:
 
 ```swift
 extension DiscordParser: StructuredParser {
@@ -3994,19 +4319,17 @@ extension DiscordParser: StructuredParser {
         return out
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         guard let list = Self.messageList(in: snapshot) else { return nil }
         let messages = Self.messages(in: list)
         guard !messages.isEmpty else { return nil }
-        return .conversation(Conversation(
+        let conversation = Conversation(
             channel: Self.channelName(fromTitle: context.windowTitle),
             isGroup: true,
             messages: messages
-        ))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        )
+        // Same newest-anchored cap Phase A applied by hand, expressed with the shared accumulator.
+        return CaptureAccumulator.boundHard(.conversation(conversation), to: Self.contentCap)
     }
 }
 ```
@@ -4033,7 +4356,7 @@ Expected: PASS, unchanged.
 swift tools/ax-snapshot-record.swift com.hnc.Discord /tmp/discord-messages.json
 ```
 
-Record once flush at the origin and once with the window at a nonzero origin (the golden must be **identical apart from nothing** — Discord is geometry-free, so the two goldens differ only in the fixture they came from; that is the point of the pair).
+Record once flush at the origin and once with the window at a nonzero origin. Because Discord is geometry-free, the **second golden must be byte-identical to the first** — so do not hand-write it: assert the equality directly (`testTheOffsetFixtureProducesTheSameContentAsTheFlushOne` in Step 1 compares the two parses) and reuse `discord-messages-golden.json` as the expected value for both fixtures. A second copy of the same bytes proves nothing (ruling F25).
 
 Each fixture must retain at minimum:
 - the `AXWindow` root with its real `frame` (nonzero `x`/`y` for `discord-offset-messages.json`) and a `title` of the form `#general | Acme - Discord`,
@@ -4042,7 +4365,7 @@ Each fixture must retain at minimum:
 - a second `AXList` of sidebar channels **kept**, so structural exclusion is a real assertion,
 - at least one chrome string from `DiscordParser.chrome` (e.g. `Add Reaction`) inside a message group.
 
-Hand-scrub, move into `Fixtures/`, print and save the goldens, and add four README rows.
+Hand-scrub, move into `Fixtures/`, print and save `discord-messages-golden.json`, and add three README rows.
 
 - [ ] **Step 6: Run test to verify it passes**
 
@@ -4057,7 +4380,6 @@ git add Sources/MaxMiCapture/DiscordParser.swift Sources/MaxMiCapture/ParserRegi
         Tests/MaxMiCaptureTests/Fixtures/discord-messages.json \
         Tests/MaxMiCaptureTests/Fixtures/discord-messages-golden.json \
         Tests/MaxMiCaptureTests/Fixtures/discord-offset-messages.json \
-        Tests/MaxMiCaptureTests/Fixtures/discord-offset-messages-golden.json \
         Tests/MaxMiCaptureTests/Fixtures/README.md
 git commit -m "Attribute Discord messages to their group heading sender"
 ```
@@ -4075,8 +4397,11 @@ git commit -m "Attribute Discord messages to their group heading sender"
 
 **Interfaces:**
 - Consumes: `AXQuery.findAll(_:in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `Message`, `Conversation`, `CapturedContent` (Phase A).
-- Produces: `MessagesParser: StructuredParser`; `MessagesParser.config`; `MessagesParser.chatName(fromTitle:) -> String`; `MessagesParser.isUserBubble(_ bubble: AXNode, window: AXNode) -> Bool`; `MessagesParser.bubbles(in:) -> [AXNode]`; `MessagesParser.parseStructured(window:app:)`.
-- `key(fromTitle:)` and `parse(window:app:)` are untouched — `MessagesParserTests` keeps passing verbatim.
+- Produces: `MessagesParser: StructuredParser`; `MessagesParser.config`; `MessagesParser.chatName(fromTitle:) -> String`; `MessagesParser.isUserBubble(_ bubble: AXNode, window: AXNode) -> Bool` (Task 13 consumes this exact spelling); `MessagesParser.bubbles(in:) -> [AXNode]`.
+- `key(fromTitle:)`, `contentCap` and `parse(window:app:)` are untouched: `parse` already delegates to `parseStructured` (`Sources/MaxMiCapture/MessagesParser.swift:23`).
+- **`parseStructured(window:app:)` already exists at `:15` — its body is edited, not redeclared** (ruling F1). The `GenericV2Content.lines` call is deleted, not chained.
+- **Deleted in this task** (ruling F20): `conversationLines(in:)` (`:50`) and `collect(_:into:)` (`:57`), both `private` and both orphaned.
+- `chatName(fromTitle:)` returns the display name; `key(fromTitle:)` returns the slugged `imessage:` key. Both are needed and neither can be derived from the other, so the pair is not duplication.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4186,10 +4511,10 @@ final class MessagesStructuredTests: XCTestCase {
         XCTAssertEqual(c.messages.map(\.text).first, "are we still on for 4")
     }
 
-    func testEmptyTranscriptIsNotHandled() {
+    func testEmptyTranscriptIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
                         children: [node("AXButton", frame: CGRect(x: 0, y: 0, width: 10, height: 10))])
-        XCTAssertNil(MessagesParser().parse(bare, context: context("Ada Lovelace")))
+        XCTAssertNil(try MessagesParser().parse(bare, context: context("Ada Lovelace")))
     }
 
     func testRenderedOutputUsesYouAndNeverTheInternalUserMarker() throws {
@@ -4221,7 +4546,15 @@ Expected: FAIL to compile — "type 'MessagesParser' does not conform to protoco
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `Sources/MaxMiCapture/MessagesParser.swift`:
+First **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/MessagesParser.swift:15` (already declared in the struct — ruling F1) and delete the orphaned `conversationLines(in:)` / `collect(_:into:)` pair (ruling F20):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+Then append to the same file:
 
 ```swift
 extension MessagesParser: StructuredParser {
@@ -4255,7 +4588,7 @@ extension MessagesParser: StructuredParser {
         return AXQuery.sortedByVisualOrder(found, relativeTo: snapshot.frame)
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let chat = Self.chatName(fromTitle: context.windowTitle)
         let messages = Self.bubbles(in: snapshot).compactMap { bubble -> Message? in
             guard let text = bubble.value?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -4275,11 +4608,9 @@ extension MessagesParser: StructuredParser {
         guard !messages.isEmpty else { return nil }
         // A 1:1 chat is titled with one name; a group chat's messages carry per-bubble senders.
         let isGroup = Set(messages.filter { !$0.isUser }.map(\.sender)).count > 1
-        return .conversation(Conversation(channel: chat, isGroup: isGroup, messages: messages))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        let conversation = Conversation(channel: chat, isGroup: isGroup, messages: messages)
+        // Same cap Phase A applied to the `.lines` page, now on the typed conversation.
+        return CaptureAccumulator.bound(.conversation(conversation), to: Self.contentCap)
     }
 }
 ```
@@ -4341,8 +4672,13 @@ git commit -m "Derive Messages authorship from bubble side"
 
 **Interfaces:**
 - Consumes: `AXQuery.findAll(_:in:)`, `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `MessagesParser.isUserBubble(_:window:)` (Task 12); `Message`, `Conversation`, `CapturedContent` (Phase A).
-- Produces: `WhatsAppParser: StructuredParser`; `WhatsAppParser.config` (bundle IDs `ParserRegistry.whatsAppBundleIDs`, hosts `["web.whatsapp.com"]`, `preferOverNative: true`); `WhatsAppParser.bubbleCellIdentifier = "WAMessageBubbleTableViewCell"`; `WhatsAppParser.timeStringPattern`; `WhatsAppParser.splitBubbleTexts(_:) -> (body: String, timeString: String?)`; `NativeConversationExtraction.conversationName(window:app:) -> String?` (promoted from private).
-- `TeamsParser` is untouched in this task — it keeps Phase A's `.conversation` output; spec §7c lists no separate Teams anchor.
+- Produces: `WhatsAppParser: StructuredParser`; `WhatsAppParser.config` (bundle IDs `ParserRegistry.whatsAppBundleIDs`, hosts `["web.whatsapp.com"]`, `preferOverNative: true`); `WhatsAppParser.bubbleCellIdentifier = "WAMessageBubbleTableViewCell"`; `WhatsAppParser.timeStringPattern`; `WhatsAppParser.splitBubbleTexts(_:) -> (body: String, timeString: String?)`; `NativeConversationExtraction.conversationName(window:app:) -> String?`.
+- **`conversationName(window:app:)` is NEW, not promoted** (ruling F24). No member of that name exists today. What *is* promoted from `private` to internal is the pair it wraps: `conversationTitle(in:app:mainBoundary:requiresHeaderSemantics:)` (`Sources/MaxMiCapture/NativeConversationParser.swift:210`) and `mainPaneBoundary(_:)` (`:205`).
+- **`split(_:byKnownParticipant:)` (`:179-182`) stays on the new path** (ruling F24): a group bubble arrives as one label, `"Alex: text"`, and without the known-participant split the anchored parser would lose the sender attribution Phase A already had.
+- **The Phase A walk stays as the fallback.** `NativeConversationExtraction.extract(...)` owns both `ParserRefusal` cases (`:113` "no-conversation-content", `:118` "unconfirmed-conversation-identity") and is what `NativeConversationParserTests`' six WhatsApp tests drive over trees that have **no** `WAMessageBubbleTableViewCell` (the `whatsapp-conversation.json` fixture has none). So `parse(_:context:)` tries the bubble-cell anchor first and delegates to `extract` when the anchor is absent — one content path, both behaviours, no lost coverage.
+- **`parseStructured(window:app:)` already exists at `:7` — its body is edited, not redeclared** (ruling F1).
+- The anchored path throws `ParserRefusal(reason: "unconfirmed-conversation-identity")` when no chat header can be confirmed, exactly as the Phase A walk does: a WhatsApp window with no open chat must store NOTHING, not the sidebar list of every unopened chat (ruling F13).
+- `TeamsParser` is untouched in this task — it keeps Phase A's `.conversation` output; spec §7c lists no separate Teams anchor (Teams **web** is Task 26).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4443,9 +4779,9 @@ final class WhatsAppStructuredTests: XCTestCase {
         XCTAssertEqual(c.channel, "Ada Lovelace")
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
-        XCTAssertEqual(WhatsAppParser().parse(window(), context: context("WhatsApp")),
-                       WhatsAppParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        XCTAssertEqual(try WhatsAppParser().parse(window(), context: context("WhatsApp")),
+                       try WhatsAppParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
                                               context: context("WhatsApp")))
     }
 
@@ -4459,11 +4795,33 @@ final class WhatsAppStructuredTests: XCTestCase {
         XCTAssertEqual(c.messages.map(\.sender), ["Grace"])
     }
 
-    func testNoBubbleCellsIsNotHandled() {
+    func testNoBubbleCellsDelegatesToThePhaseAWalkWhichRefusesThisShape() {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1000, height: 700),
                         children: [node("AXStaticText", value: "Use WhatsApp on your phone",
                                         frame: CGRect(x: 400, y: 300, width: 200, height: 16))])
-        XCTAssertNil(WhatsAppParser().parse(bare, context: context("WhatsApp")))
+        // No bubble anchor: the Phase A walk takes over, and for a banner with no chat header it
+        // REFUSES — a generic capture here would store the sidebar list of every unopened chat.
+        // This is the branch that keeps `NativeConversationParserTests`' six WhatsApp tests green.
+        XCTAssertThrowsError(try WhatsAppParser().parse(bare, context: context("WhatsApp"))) { error in
+            XCTAssertTrue(error is ParserRefusal, "expected a refusal, got \(error)")
+        }
+    }
+
+    func testBubblesWithNoConfirmedChatHeaderAreRefusedRatherThanStored() {
+        let headerless = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1000, height: 700),
+                              children: [
+            node("AXGroup", label: "Chats", frame: CGRect(x: 0, y: 0, width: 300, height: 700),
+                 children: [node("AXStaticText", value: "Archived",
+                                 frame: CGRect(x: 10, y: 20, width: 100, height: 16))]),
+            bubble("are we still on for 4", time: "16:02", x: 340, y: 100),
+        ])
+        // Bubbles but no confirmed header: there is no thread to attribute them to, so refuse
+        // rather than key them under the window title "WhatsApp" (ruling F13).
+        XCTAssertThrowsError(try WhatsAppParser().parse(headerless,
+                                                        context: context("WhatsApp"))) { error in
+            XCTAssertEqual(error as? ParserRefusal,
+                           ParserRefusal(reason: "unconfirmed-conversation-identity"))
+        }
     }
 
     func testWhatsAppFixtureMatchesItsGolden() throws {
@@ -4487,7 +4845,7 @@ Expected: FAIL to compile — "type 'WhatsAppParser' does not conform to protoco
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `Sources/MaxMiCapture/NativeConversationParser.swift`, promote the existing title derivation so the structured parser reuses the tested logic instead of re-deriving it. Change `private static func conversationTitle` to `static func conversationTitle` and `private static func mainPaneBoundary` to `static func mainPaneBoundary`, then add:
+In `Sources/MaxMiCapture/NativeConversationParser.swift`, promote the existing title derivation so the structured parser reuses the tested logic instead of re-deriving it. Change `private static func conversationTitle` (`:210`) to `static func conversationTitle`, `private static func mainPaneBoundary` (`:205`) to `static func mainPaneBoundary` and `private static func slug` (`:410`) to `static func slug`, then add this **new** wrapper (nothing of this name exists today — ruling F24):
 
 ```swift
 extension NativeConversationExtraction {
@@ -4530,39 +4888,94 @@ extension WhatsAppParser: StructuredParser {
         return (texts.dropLast().joined(separator: " "), last)
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let cells = AXQuery.findAll("//*[identifier=\"\(Self.bubbleCellIdentifier)\"]", in: snapshot)
-        guard !cells.isEmpty else { return nil }
-        let channel = NativeConversationExtraction.conversationName(
+        guard !cells.isEmpty else {
+            // No bubble-cell anchor: an older build, a tree captured before AXManualAccessibility
+            // finished waking, or a non-chat surface. The Phase A walk still applies AND it owns
+            // both refusals, so this is a delegation, not a second content path.
+            return try NativeConversationExtraction.extract(
+                window: snapshot,
+                app: context.app,
+                sourceApp: "WhatsApp",
+                keyPrefix: "whatsapp",
+                requiresConversationIdentity: true,
+                allowsFallback: false,
+                usesWhatsAppSenderLabels: true
+            ).content
+        }
+        // Without a confirmed chat header there is no thread to attribute these bubbles to, and a
+        // generic capture would store the sidebar list of every unopened chat. Refuse (F13).
+        guard let channel = NativeConversationExtraction.conversationName(
             window: snapshot, app: context.app
-        ) ?? context.windowTitle ?? "unknown"
+        ) else {
+            throw ParserRefusal(reason: "unconfirmed-conversation-identity")
+        }
+        // Participants this walk can vouch for, same set the Phase A walk builds: the user plus
+        // the contact in a 1:1 chat. `split` only fires for a prefix naming one of them.
+        let known: Set<String> = ["you", channel.lowercased()]
         let messages = AXQuery.sortedByVisualOrder(cells, relativeTo: snapshot.frame)
             .compactMap { cell -> Message? in
                 let split = Self.splitBubbleTexts(AXQuery.collectStaticTexts(in: cell))
                 guard !split.body.isEmpty else { return nil }
                 let isUser = MessagesParser.isUserBubble(cell, window: snapshot)
-                let sender = isUser
-                    ? "You"
-                    : (cell.label?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
-                        $0.isEmpty ? nil : $0
-                    } ?? channel
+                let labelSender = (cell.label?.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .flatMap { $0.isEmpty ? nil : $0 }
+                // A group bubble arrives as ONE label ("Alex: text") with no sender node, so the
+                // Phase A known-participant split is what recovers the sender (ruling F24).
+                let resolved = NativeConversationExtraction.split(
+                    (sender: isUser ? "You" : labelSender, text: split.body),
+                    byKnownParticipant: known
+                )
+                let sender = resolved.sender ?? channel
                 return Message(
                     id: Message.makeID(sender: sender, timeString: split.timeString,
-                                       text: split.body),
-                    sender: sender, text: split.body, timestamp: nil,
+                                       text: resolved.text),
+                    sender: sender, text: resolved.text, timestamp: nil,
                     timeString: split.timeString, isUser: isUser, isDraft: false
                 )
             }
-        guard !messages.isEmpty else { return nil }
+        guard !messages.isEmpty else {
+            throw ParserRefusal(reason: "no-conversation-content")
+        }
         let isGroup = Set(messages.filter { !$0.isUser }.map(\.sender)).count > 1
-        return .conversation(Conversation(channel: channel, isGroup: isGroup, messages: messages))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        let conversation = Conversation(channel: channel, isGroup: isGroup, messages: messages)
+        // The same hard cap the Phase A walk applies (`NativeConversationExtraction.contentCap`).
+        return CaptureAccumulator.boundHard(.conversation(conversation),
+                                            to: NativeConversationExtraction.contentCap)
     }
 }
 ```
+
+Then **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/NativeConversationParser.swift:7` — it is already declared on `WhatsAppParser`, so declaring it in the extension above would be an invalid redeclaration (ruling F1):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+`WhatsAppParser.parse(window:app:)` currently calls `NativeConversationExtraction.capture(...)`, which walks the tree a second time. Rewrite it to build the capture from `parseStructured`'s value so the tree is walked once (spec §4f rule 1 keeps the key and the policies here). The key is byte-identical to Phase A's, because Phase A keys on `slug(identity)` where `identity` is exactly the `channel` the conversation carries:
+
+```swift
+    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        guard let structured = try parseStructured(window: window, app: app),
+              case .conversation(let conversation) = structured else { return nil }
+        return ParsedCapture(
+            sourceApp: "WhatsApp",
+            sourceKey: "whatsapp:\(NativeConversationExtraction.slug(conversation.channel))",
+            sourceTitle: conversation.channel,
+            content: ContentRenderer.render(structured, style: .full),
+            contentKind: .conversation,
+            parserVersion: 3,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: Self.config.offscreenPolicy,
+            structured: structured
+        )
+    }
+```
+
+That needs one more access change in the same file: `private static func slug` (`:410`) becomes `static func slug`.
 
 In `Sources/MaxMiCapture/ParserRegistry.swift`, append `WhatsAppParser()` to `structured`.
 
@@ -4572,7 +4985,10 @@ Run: `swift test --filter WhatsAppStructuredTests`
 Expected: PASS except the two golden tests.
 
 Run: `swift test --filter NativeConversationParserTests`
-Expected: PASS, unchanged — only two access modifiers changed.
+Expected: PASS, unchanged. All six WhatsApp tests drive trees with no `WAMessageBubbleTableViewCell`, so they take the delegation branch and keep asserting the Phase A walk, its sidebar exclusion and both refusal reasons. `TeamsParser`'s tests are untouched.
+
+Run: `swift test --filter StructuredConversationParserTests`
+Expected: PASS, unchanged — `whatsapp-conversation.json` has no bubble cells either.
 
 - [ ] **Step 5: Record the two fixtures and their goldens**
 
@@ -4593,7 +5009,7 @@ Hand-scrub, move into `Fixtures/`, print and save the goldens, and add four READ
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `swift test --filter WhatsAppStructuredTests`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 7: Commit**
 
@@ -4618,7 +5034,7 @@ git commit -m "Anchor WhatsApp messages on bubble table cells"
 - Create: `Tests/MaxMiCaptureTests/MailComposeDraftTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.find(_:in:)`, `AXQuery.collectStaticTexts(in:)` (Tasks 3-4); `Message`, `Conversation`, `CapturedContent` (Phase A); `MailParser.parseStructured(window:app:)` as added by Phase A Task 8.
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.collectStaticTexts(in:)` (Tasks 3-4); `Message`, `Conversation`, `CapturedContent` (Phase A); `MailParser.parseStructured(window:app:)` (`Sources/MaxMiCapture/MailParser.swift:33`, added by Phase A **Task 12**, the parser-migration task — Phase A Task 8 was the store/migration work).
 - Produces: `MailParser.subjectFieldIdentifier = "Mail.subjectField"`; `MailParser.composeDraft(window: AXNode) -> CapturedContent?`.
 - **Mail keeps its AppleScript source** (spec §12 Q6: Mail's AX tree is ~80 ms/node, so reaching the message list would take minutes). This task adds the ONE AX read spec §7c still asks for and changes nothing else. `MailParserTests` keeps passing verbatim.
 
@@ -4749,7 +5165,7 @@ and add this method to `MailParser`:
     }
 ```
 
-In `MailParser.parseStructured(window:app:)` (added by Phase A Task 8), insert this as the **first** statement of the method body:
+In `MailParser.parseStructured(window:app:)` (`Sources/MaxMiCapture/MailParser.swift:33`), insert this as the **first** statement of the method body. This is the one task that edits an existing `parseStructured` without replacing it, because Mail's AppleScript path is not superseded (spec §12 Q6):
 
 ```swift
         // A frontmost compose window is what the user is doing right now, so it wins over the
@@ -4786,8 +5202,12 @@ git commit -m "Capture the Mail compose window as a draft"
 
 **Interfaces:**
 - Consumes: `AXQuery.find(_:in:)`, `AXQuery.collectStaticTexts(in:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `Document`, `Block`, `Authorship`, `CapturedContent` (Phase A).
-- Produces: `NotesParser: StructuredParser`; `NotesParser.config`; `NotesParser.bodyIdentifier = "Note Body Text View"`; `NotesParser.sharedSuffix = "— Shared"`; `NotesParser.noteTitle(fromBody lines: [String], windowTitle: String?) -> String`; `NotesParser.parseStructured(window:app:)`.
-- `parse(window:app:)` (and its `notes:<slug>` key) is untouched — `DocumentParsersTests` keeps passing verbatim.
+- Produces: `NotesParser: StructuredParser`; `NotesParser.config`; `NotesParser.bodyIdentifier = "Note Body Text View"`; `NotesParser.sharedSuffix = "— Shared"`; `NotesParser.noteTitle(fromBody lines: [String], windowTitle: String?) -> String`.
+- `parse(window:app:)` (and its `notes:<slug>` key) is untouched: it already delegates to `parseStructured` (`Sources/MaxMiCapture/NotesParser.swift:19`).
+- **`parseStructured(window:app:)` already exists at `:12` — its body is edited, not redeclared** (ruling F1). Its `GenericV2Content.page` call is **deleted, not chained**.
+
+**The 32_000 note-app budget is kept** (ruling F10, spec §12 final-review amendment): `NotesParser.offscreen` already reads `.accessibilityScroll(maxSteps: 3, maxCharacters: StructuredEntityExtraction.pageBudget)`, the `config` reuses that exact constant rather than restating a policy, and the typed document is bounded with `CaptureAccumulator.bound(_:to: StructuredEntityExtraction.pageBudget)` — Phase A's cap must not disappear just because the content path changed.
+
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4885,19 +5305,19 @@ final class NotesStructuredTests: XCTestCase {
         XCTAssertFalse(doc.blocks.contains { $0.text == "All iCloud" })
     }
 
-    func testWithoutTheBodyAnchorTheNoteIsNotHandled() {
-        XCTAssertNil(NotesParser().parse(window(body: nil), context: context("Grocery list")),
+    func testWithoutTheBodyAnchorTheNoteIsNotHandled() throws {
+        XCTAssertNil(try NotesParser().parse(window(body: nil), context: context("Grocery list")),
                      "nil routes to GenericPageExtractor")
     }
 
-    func testAnEmptyBodyIsNotHandled() {
-        XCTAssertNil(NotesParser().parse(window(body: "   \n  "), context: context("x")))
+    func testAnEmptyBodyIsNotHandled() throws {
+        XCTAssertNil(try NotesParser().parse(window(body: "   \n  "), context: context("x")))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
         XCTAssertEqual(
-            NotesParser().parse(window(body: "Grocery list\nmilk"), context: context("Grocery list")),
-            NotesParser().parse(window(body: "Grocery list\nmilk", origin: CGPoint(x: 1440, y: 220)),
+            try NotesParser().parse(window(body: "Grocery list\nmilk"), context: context("Grocery list")),
+            try NotesParser().parse(window(body: "Grocery list\nmilk", origin: CGPoint(x: 1440, y: 220)),
                                 context: context("Grocery list")))
     }
 
@@ -4922,14 +5342,23 @@ Expected: FAIL to compile — "type 'NotesParser' does not conform to protocol '
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `Sources/MaxMiCapture/NotesParser.swift`:
+First **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/NotesParser.swift:12` (already declared in the struct — ruling F1; the `GenericV2Content.page` call is deleted):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+Then append to the same file:
 
 ```swift
 extension NotesParser: StructuredParser {
     public static let config = ParserConfig(
         app: "Notes",
         bundleIDs: [ParserRegistry.notesBundleID],
-        offscreenPolicy: .accessibilityScroll(maxSteps: 3)
+        // The existing constant, not a new policy: 3 scroll steps with a 32_000 ceiling (F10).
+        offscreenPolicy: NotesParser.offscreen
     )
 
     /// Notes exposes the editor as one text area with a stable identifier, which is what keeps
@@ -4946,7 +5375,7 @@ extension NotesParser: StructuredParser {
         return fallback.isEmpty ? "untitled" : fallback
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         guard let body = AXQuery.find("//*[identifier=\"\(Self.bodyIdentifier)\"]", in: snapshot),
               let raw = body.value,
               !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -4972,11 +5401,10 @@ extension NotesParser: StructuredParser {
         let blocks = lines
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .map { Block(type: .paragraph, text: $0, authoredByUser: false) }
-        return .document(Document(title: title, blocks: blocks, author: author, url: nil))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        // The 32_000 page budget Phase A's final review installed on the note apps (F10).
+        return CaptureAccumulator.bound(
+            .document(Document(title: title, blocks: blocks, author: author, url: nil)),
+            to: StructuredEntityExtraction.pageBudget)
     }
 }
 ```
@@ -5037,8 +5465,12 @@ git commit -m "Anchor Notes on the note body text view"
 
 **Interfaces:**
 - Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)`, `AXQuery.Matchers`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `Document`, `Block`, `Authorship`, `CapturedContent` (Phase A).
-- Produces: `NotionParser: StructuredParser`; `NotionParser.config` (bundle ID `ParserRegistry.notionBundleID`, hosts `["www.notion.so", "notion.so", ".notion.site"]`, `attributeSet: ["AXDOMClassList"]`, `preferOverNative: true`); `NotionParser.frameClasses = ["notion-frame", "notion-peek-renderer"]`; `NotionParser.skippedClasses = ["layout-margin-right", "notion-page-properties"]`; `NotionParser.topbarClass = "notion-topbar"`; `NotionParser.pageRoot(in:) -> AXNode?`; `NotionParser.pageTitle(in:windowTitle:) -> String`; `NotionParser.blocks(under root: AXNode) -> [Block]`; `NotionParser.parseStructured(window:app:)`.
-- `parse(window:app:)` (and its `notion:<slug>` key) is untouched.
+- Produces: `NotionParser: StructuredParser`; `NotionParser.config` (bundle ID `ParserRegistry.notionBundleID`, hosts `["www.notion.so", "notion.so", ".notion.site"]`, `attributeSet: ["AXDOMClassList"]`, `preferOverNative: true`); `NotionParser.frameClasses = ["notion-frame", "notion-peek-renderer"]`; `NotionParser.skippedClasses = ["layout-margin-right", "notion-page-properties"]`; `NotionParser.topbarClass = "notion-topbar"`; `NotionParser.pageRoot(in:) -> AXNode?`; `NotionParser.pageTitle(in:windowTitle:) -> String`; `NotionParser.blocks(under root: AXNode) -> [Block]`.
+- `parse(window:app:)` (and its `notion:<slug>` key) is untouched: it already delegates to `parseStructured` (`Sources/MaxMiCapture/NotionParser.swift:19`).
+- **`parseStructured(window:app:)` already exists at `:12` — its body is edited, not redeclared** (ruling F1). Its `GenericV2Content.page` call is **deleted, not chained**.
+
+**The 32_000 note-app budget is kept** (ruling F10, spec §12 final-review amendment): `NotionParser.offscreen` already reads `.accessibilityScroll(maxSteps: 3, maxCharacters: StructuredEntityExtraction.pageBudget)`, the `config` reuses that exact constant rather than restating a policy, and the typed document is bounded with `CaptureAccumulator.bound(_:to: StructuredEntityExtraction.pageBudget)` — Phase A's cap must not disappear just because the content path changed.
+
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5165,15 +5597,15 @@ final class NotionStructuredTests: XCTestCase {
         XCTAssertEqual(doc.url, "https://www.notion.so/acme/R-1")
     }
 
-    func testNoNotionFrameIsNotHandled() {
+    func testNoNotionFrameIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 100, height: 100),
                         children: [text("loading", y: 0, x: 0)])
-        XCTAssertNil(NotionParser().parse(bare, context: context("Notion")))
+        XCTAssertNil(try NotionParser().parse(bare, context: context("Notion")))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
-        XCTAssertEqual(NotionParser().parse(window(), context: context("Roadmap — Notion")),
-                       NotionParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        XCTAssertEqual(try NotionParser().parse(window(), context: context("Roadmap — Notion")),
+                       try NotionParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
                                             context: context("Roadmap — Notion")))
     }
 
@@ -5198,7 +5630,15 @@ Expected: FAIL to compile — "type 'NotionParser' does not conform to protocol 
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `Sources/MaxMiCapture/NotionParser.swift`:
+First **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/NotionParser.swift:12` (already declared in the struct — ruling F1; the `GenericV2Content.page` call is deleted):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+Then append to the same file:
 
 ```swift
 extension NotionParser: StructuredParser {
@@ -5208,7 +5648,8 @@ extension NotionParser: StructuredParser {
         hosts: ["www.notion.so", "notion.so", ".notion.site"],
         // Notion's Electron shell does not always expose an AXWebArea above the page.
         attributeSet: ["AXDOMClassList"],
-        offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+        // The existing constant, not a new policy: 3 scroll steps with a 32_000 ceiling (F10).
+        offscreenPolicy: NotionParser.offscreen,
         preferOverNative: true
     )
 
@@ -5270,16 +5711,15 @@ extension NotionParser: StructuredParser {
             }
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         guard let root = Self.pageRoot(in: snapshot) else { return nil }
         let title = Self.pageTitle(in: snapshot, windowTitle: context.windowTitle)
         let blocks = Self.blocks(under: root).filter { $0.text != title }
         guard !blocks.isEmpty else { return nil }
-        return .document(Document(title: title, blocks: blocks, author: .user, url: context.url))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        // The 32_000 page budget Phase A's final review installed on the note apps (F10).
+        return CaptureAccumulator.bound(
+            .document(Document(title: title, blocks: blocks, author: .user, url: context.url)),
+            to: StructuredEntityExtraction.pageBudget)
     }
 }
 ```
@@ -5341,8 +5781,12 @@ git commit -m "Anchor Notion pages on the notion frame class"
 
 **Interfaces:**
 - Consumes: `AXQuery.find(_:in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.all(in:where:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `Document`, `Block`, `CapturedContent` (Phase A); `NotionParser.blocks(under:)` is **not** reused — Obsidian has no skip classes, so it gets its own three-line collector.
-- Produces: `ObsidianParser: StructuredParser`; `ObsidianParser.config` (bundle ID `ParserRegistry.obsidianBundleID`, `attributeSet: ["AXDOMClassList"]`); `ObsidianParser.editorClass = "cm-editor"`; `ObsidianParser.previewClass = "markdown-preview-view"`; `ObsidianParser.noteName(fromTitle:) -> String` (the same title split `key(fromTitle:)` already performs); `ObsidianParser.paneRoot(in:) -> AXNode?`; `ObsidianParser.parseStructured(window:app:)`.
-- `key(fromTitle:)` and `parse(window:app:)` are untouched — `DocumentParsersTests` keeps passing verbatim.
+- Produces: `ObsidianParser: StructuredParser`; `ObsidianParser.config` (bundle ID `ParserRegistry.obsidianBundleID`, `attributeSet: ["AXDOMClassList"]`); `ObsidianParser.editorClass = "cm-editor"`; `ObsidianParser.previewClass = "markdown-preview-view"`; `ObsidianParser.noteName(fromTitle:) -> String` (the display half of the same title split `key(fromTitle:)` performs for the key — the key is slugged and vault-scoped, so neither can be derived from the other); `ObsidianParser.paneRoot(in:) -> AXNode?`.
+- `key(fromTitle:)` and `parse(window:app:)` are untouched: `parse` already delegates to `parseStructured` (`Sources/MaxMiCapture/ObsidianParser.swift:19`).
+- **`parseStructured(window:app:)` already exists at `:12` — its body is edited, not redeclared** (ruling F1). Its `GenericV2Content.page` call is **deleted, not chained**.
+
+**The 32_000 note-app budget is kept** (ruling F10, spec §12 final-review amendment): `ObsidianParser.offscreen` already reads `.accessibilityScroll(maxSteps: 3, maxCharacters: StructuredEntityExtraction.pageBudget)`, the `config` reuses that exact constant rather than restating a policy, and the typed document is bounded with `CaptureAccumulator.bound(_:to: StructuredEntityExtraction.pageBudget)` — Phase A's cap must not disappear just because the content path changed.
+
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5457,25 +5901,25 @@ final class ObsidianStructuredTests: XCTestCase {
                        "in split view the editor is what the user is editing")
     }
 
-    func testNeitherPaneIsNotHandled() {
+    func testNeitherPaneIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 100, height: 100),
                         children: [node("AXStaticText", value: "loading vault",
                                         frame: CGRect(x: 0, y: 0, width: 100, height: 16))])
-        XCTAssertNil(ObsidianParser().parse(bare, context: context("Obsidian")))
+        XCTAssertNil(try ObsidianParser().parse(bare, context: context("Obsidian")))
     }
 
-    func testAnEmptyPaneIsNotHandled() {
+    func testAnEmptyPaneIsNotHandled() throws {
         let empty = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 100, height: 100),
                          children: [node("AXGroup", domClassList: ["cm-editor"],
                                          frame: CGRect(x: 0, y: 0, width: 100, height: 100))])
-        XCTAssertNil(ObsidianParser().parse(empty, context: context("Note - V - Obsidian v1")))
+        XCTAssertNil(try ObsidianParser().parse(empty, context: context("Note - V - Obsidian v1")))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
         let title = "Index rebuild - Research - Obsidian v1.5.3"
         XCTAssertEqual(
-            ObsidianParser().parse(window(paneClass: "cm-editor"), context: context(title)),
-            ObsidianParser().parse(window(paneClass: "cm-editor", origin: CGPoint(x: 1440, y: 220)),
+            try ObsidianParser().parse(window(paneClass: "cm-editor"), context: context(title)),
+            try ObsidianParser().parse(window(paneClass: "cm-editor", origin: CGPoint(x: 1440, y: 220)),
                                    context: context(title)))
     }
 
@@ -5502,7 +5946,15 @@ Expected: FAIL to compile — "type 'ObsidianParser' does not conform to protoco
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `Sources/MaxMiCapture/ObsidianParser.swift`:
+First **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/ObsidianParser.swift:12` (already declared in the struct — ruling F1; the `GenericV2Content.page` call is deleted):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+Then append to the same file:
 
 ```swift
 extension ObsidianParser: StructuredParser {
@@ -5511,7 +5963,8 @@ extension ObsidianParser: StructuredParser {
         bundleIDs: [ParserRegistry.obsidianBundleID],
         // Obsidian is Electron and does not always expose an AXWebArea above the vault view.
         attributeSet: ["AXDOMClassList"],
-        offscreenPolicy: .accessibilityScroll(maxSteps: 3)
+        // The existing constant, not a new policy: 3 scroll steps with a 32_000 ceiling (F10).
+        offscreenPolicy: ObsidianParser.offscreen
     )
 
     /// CodeMirror's editor root (edit mode) and the rendered pane (reading mode).
@@ -5535,7 +5988,7 @@ extension ObsidianParser: StructuredParser {
             ?? AXQuery.find("//*[domClass*=\"\(previewClass)\"]", in: snapshot)
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         guard let pane = Self.paneRoot(in: snapshot) else { return nil }
         let texts = AXQuery.all(in: pane) {
             ($0.role == "AXHeading" || $0.role == "AXStaticText") && !$0.hidden
@@ -5551,12 +6004,11 @@ extension ObsidianParser: StructuredParser {
                 return Block(type: type, text: text, authoredByUser: false)
             }
         guard !blocks.isEmpty else { return nil }
-        return .document(Document(title: Self.noteName(fromTitle: context.windowTitle),
-                                  blocks: blocks, author: .user, url: nil))
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        // The 32_000 page budget Phase A's final review installed on the note apps (F10).
+        return CaptureAccumulator.bound(
+            .document(Document(title: Self.noteName(fromTitle: context.windowTitle),
+                               blocks: blocks, author: .user, url: nil)),
+            to: StructuredEntityExtraction.pageBudget)
     }
 }
 ```
@@ -5617,8 +6069,9 @@ git commit -m "Anchor Obsidian on the CodeMirror editor and preview panes"
 - Test: `Tests/MaxMiCaptureTests/FinderStructuredTests.swift`
 
 **Interfaces:**
-- Consumes: `GenericPageExtractor.extract(window:focusedElement:url:options:)` and its `Options` (Phase A — Finder's regions and joined rows are exactly what the §4e rules already produce, so this parser adds a path, not a second walk); `AXQuery.find(_:in:)` (Task 3); `StructuredParser`, `ParserConfig`, `ParseContext`, `ParserRegistry.finderBundleID` (Task 5); `GenericPage`, `RegionKind`, `BlockType`, `CapturedContent` (Phase A).
-- Produces: `FinderParser: SourceParser, StructuredParser`; `FinderParser.config`; `FinderParser.folderPath(in: AXNode, windowTitle: String?) -> String?`; `FinderParser.key(fromPath:windowTitle:) -> String` producing `"finder:<slug>"`.
+- Consumes: `GenericPageExtractor.extract(window:focusedElement:url:options:)` and its `Options` (Phase A — Finder's regions and joined rows are exactly what the §4e rules already produce, so this parser adds a path, not a second walk); `AXQuery.findAll(_:in:)` (Task 3); `StructuredParser`, `ParserConfig`, `ParseContext`, `ParserRegistry.finderBundleID` (Task 5); `GenericPage`, `RegionKind`, `BlockType`, `CapturedContent` (Phase A).
+- Produces: `FinderParser: SourceParser, StructuredParser`; `FinderParser.config`; `FinderParser.folderPath(in: AXNode, windowTitle: String?) -> String?`; `FinderParser.sidebarRows(in: AXNode) -> [AXNode]`; `FinderParser.key(fromPath:windowTitle:) -> String` producing `"finder:<slug>"`.
+- **Division of labour, ruling F16 (recorded as a spec §12 amendment):** spec §7c writes Finder's rows as `//AXOutline//AXRow` and `//AXTable//AXRow` → `.tableRow(cells:selected:)`. That is *exactly* what `GenericPageExtractor.block(for:)` already emits for `rowRoles` with `selected` from `AXSelected` (`Sources/MaxMiCapture/GenericPageExtractor.swift:181-188`, `rowCells` at `:210`), so the rows are **delegated** and a second row formatter is not written (that is also why Task 4 has no `formatTable`). `AXQuery` is used for the two anchors the extractor does not provide: the folder **path** (`AXDocument` may sit on the window or on the outline/scroll area beneath it) and the **source list**, which the sidebar-classification test asserts against.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5759,19 +6212,28 @@ final class FinderStructuredTests: XCTestCase {
         XCTAssertEqual(page.url, "/Users/ada/code/sample")
     }
 
-    func testRegionsAreIdenticalAtANonzeroWindowOrigin() throws {
-        let flush = try page(FinderParser().parse(window(status: "Uploading 34 items"),
-                                                context: context("sample")))
-        let offset = try page(FinderParser().parse(
-            window(status: "Uploading 34 items", origin: CGPoint(x: 1440, y: 220)),
-            context: context("sample")))
-        XCTAssertEqual(flush.regions, offset.regions,
-                       "the sidebar heuristic is window-relative (spec §4e)")
+    func testTheSourceListIsClassifiedAsSidebarEvenAtANonzeroWindowOrigin() throws {
+        // Replaces a bare flush-vs-offset region comparison, which `GenericPageRegionTests`
+        // already covers for `finder-offset-window.json` and which no Finder-parser change could
+        // ever break (ruling F25). This asserts the thing that CAN break: that the rows the
+        // structural anchor identifies as source-list rows are the rows the geometric §4e rules
+        // put in `.sidebar`, and that none of them leak into the listing — at an origin where a
+        // missing window-relative conversion would misclassify them.
+        let offsetWindow = window(status: "Uploading 34 items", origin: CGPoint(x: 1_440, y: 220))
+        let anchored = Set(FinderParser.sidebarRows(in: offsetWindow)
+            .flatMap { AXQuery.collectStaticTexts(in: $0) })
+        XCTAssertEqual(anchored, ["Downloads"], "the fixture's source list holds exactly one row")
+        let page = try page(FinderParser().parse(offsetWindow, context: context("sample")))
+        XCTAssertEqual(Set(blocks(page, .sidebar).map(\.text)), anchored)
+        for text in anchored {
+            XCTAssertFalse(blocks(page, .main).contains { $0.text.contains(text) },
+                           "\(text) is source-list chrome, not a folder listing row")
+        }
     }
 
-    func testAnEmptyWindowIsNotHandled() {
+    func testAnEmptyWindowIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800))
-        XCTAssertNil(FinderParser().parse(bare, context: context("sample")))
+        XCTAssertNil(try FinderParser().parse(bare, context: context("sample")))
     }
 
     func testSourceParserSuppliesTheKeyAndTheGenericKind() throws {
@@ -5825,14 +6287,29 @@ public struct FinderParser: SourceParser, StructuredParser {
         offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
     )
 
-    /// `AXDocument` on the window is a file URL; the window title is only a folder name.
+    /// `AXDocument` is a file URL and Finder puts it on the window in list view but on the
+    /// browser/outline beneath it in column view, so the anchor is a path query rather than one
+    /// field read. The window title is only a folder name, so it is the last resort.
     static func folderPath(in snapshot: AXNode, windowTitle: String?) -> String? {
-        if let raw = snapshot.url, !raw.isEmpty {
+        let raw = [snapshot.url]
+            .compactMap { $0 }
+            .first(where: { !$0.isEmpty })
+            ?? AXQuery.findAll("//*", in: snapshot)
+                .compactMap(\.url)
+                .first(where: { !$0.isEmpty })
+        if let raw {
             if let url = URL(string: raw), url.isFileURL { return url.path }
             return raw
         }
         let title = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return title.isEmpty ? nil : title
+    }
+
+    /// The source list's rows. Used by the sidebar-classification assertion: the §4e sidebar
+    /// rules are geometric and window-relative, and this is the structural statement of the same
+    /// thing — every row under the split group's `AXOutline` is chrome, never a folder listing.
+    static func sidebarRows(in snapshot: AXNode) -> [AXNode] {
+        AXQuery.findAll("//AXSplitGroup//AXOutline//AXRow", in: snapshot)
     }
 
     static func key(fromPath path: String?, windowTitle: String?) -> String {
@@ -5841,7 +6318,7 @@ public struct FinderParser: SourceParser, StructuredParser {
         return title.isEmpty ? "finder:unknown" : "finder:\(docSlug(title))"
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         var options = GenericPageExtractor.Options()
         options.offscreenPolicy = Self.config.offscreenPolicy
         let page = GenericPageExtractor.extract(
@@ -5855,7 +6332,7 @@ public struct FinderParser: SourceParser, StructuredParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = parse(window, context: ParseContext(app: app)) else { return nil }
+        guard let structured = try parse(window, context: ParseContext(app: app)) else { return nil }
         let path = Self.folderPath(in: window, windowTitle: app.windowTitle)
         return ParsedCapture(
             sourceApp: "Finder",
@@ -5872,10 +6349,12 @@ public struct FinderParser: SourceParser, StructuredParser {
     }
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
+        try parse(window, context: ParseContext(app: app))
     }
 }
 ```
+
+`FinderParser` is a new type, so all three requirements are declared in the struct body — no redeclaration hazard (ruling F1).
 
 In `Sources/MaxMiCapture/ParserRegistry.swift`:
 
@@ -5921,7 +6400,7 @@ Hand-scrub, move into `Fixtures/`, print and save the goldens, and add four READ
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `swift test --filter FinderStructuredTests`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 7: Commit**
 
@@ -5949,9 +6428,13 @@ git commit -m "Capture Finder windows as sidebar, listing and toolbar regions"
 - Test: `Tests/MaxMiCaptureTests/CalendarStructuredTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.findAll(_:in:)` (Task 3); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `CalendarEvent`, `CapturedContent` (Phase A); `StructuredEntityExtraction.preferredDetailRoot(in:hints:)`, `.orderedFields(in:)`, `.Field`, `.firstValue(_:metadataHints:)`, `.looksLikeDateOrTime(_:)`, `.isChrome(_:)` — **all six promoted from `private` to `internal`** so the retyped parser reuses the anchor the existing tests already cover.
-- Produces: `CalendarStructuredExtraction.events(in: AXNode, windowTitle: String?) -> [CalendarEvent]`; `CalendarParser: StructuredParser` and `FantasticalParser: StructuredParser`, each with `config` and the `parseStructured` bridge.
-- The two `parse(window:app:)` methods and their `calendar:event:<hash>` keys are untouched — `StructuredNativeParserTests` keeps passing verbatim. The existing `calendar-event.json` fixture is reused; only its golden is new.
+- Consumes: `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `CalendarEvent` (Phase A, `Sources/MaxMiCore/CapturedContent.swift:168-189`), `CapturedContent`; `StructuredEntityExtraction.calendarContent(window:app:sourceApp:) -> Extracted?` (`Sources/MaxMiCapture/StructuredNativeParsers.swift:143`, already internal).
+- Produces: `CalendarStructuredExtraction.events(in: AXNode, app: AppInfo, sourceApp: String) -> [CalendarEvent]`; `CalendarParser: StructuredParser` and `FantasticalParser: StructuredParser`, each with `config` and `parse(_:context:)`.
+- **This task adds no second calendar extractor.** Spec §7c asks for "the existing `StructuredEntityExtraction.preferredDetailRoot` anchor, **retyped**" — Phase A already retyped it: `calendarContent` returns `.calendar([CalendarEvent])` built from that anchor, with `organizer`, `location`, `hasConference` and `notes` (`:143-179`). Re-deriving those fields here would be two implementations of one shape with different hint tables, which is what ruling F15 rejected for `formatTable`. So `CalendarStructuredExtraction.events` is a **thin adapter** over `calendarContent`, and no `StructuredEntityExtraction` member needs promoting (ruling F22's "remove `private` from `struct Field`" was a no-op, and the six method promotions are unnecessary once nothing re-derives the fields).
+- Because the plan constructs **no** `CalendarEvent`, the missing `notes:` argument ruling F7 flagged cannot recur: `calendarContent` (`:172-179`) already passes all eight arguments.
+- **`parseStructured(window:app:)` already exists on both types** (`Sources/MaxMiCapture/StructuredNativeParsers.swift:9` for `CalendarParser`, `:19` for `FantasticalParser`) — **their bodies are edited, they are not redeclared** (ruling F1).
+- The two `parse(window:app:)` methods and their `calendar:event:<hash>` keys are untouched — `StructuredNativeParserTests` and `StructuredEntityTypedTests` keep passing verbatim. The existing `calendar-event.json` fixture is reused; only its golden is new.
+- One behaviour change to the shared extractor, in the one place it lives: `hasConference` also fires on a field whose **metadata** contains `"conference"` (an `AXLink` with `identifier: "event-conference"` and the label `Join video call`), which today it misses. `StructuredEntityTypedTests.swift:26` asserts `hasConference == false` for `calendar-event.json`, whose fields carry no `conference` metadata, so it stays green.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -6036,6 +6519,7 @@ final class CalendarStructuredTests: XCTestCase {
         XCTAssertEqual(event.location, "Room 4")
         XCTAssertEqual(event.organizer, "ada@example.com")
         XCTAssertFalse(event.hasConference)
+        XCTAssertNil(event.notes, "all four fields were claimed, so nothing is left for notes")
         XCTAssertNil(event.start, "M8 stores the date STRING; parsing it is not in scope")
         XCTAssertNil(event.end)
     }
@@ -6043,7 +6527,10 @@ final class CalendarStructuredTests: XCTestCase {
     func testAConferenceLinkSetsHasConference() throws {
         let list = try events(CalendarParser().parse(window(conference: true),
                                                     context: context("com.apple.iCal", "Calendar")))
-        XCTAssertTrue(list[0].hasConference)
+        XCTAssertTrue(list[0].hasConference,
+                      "the field's identifier names it as the conference link")
+        XCTAssertEqual(list[0].notes, "Join video call",
+                       "an unclaimed detail field is the notes body, exactly as Phase A built it")
     }
 
     func testDateFallsBackToADateLookingFieldWithoutAMetadataHint() throws {
@@ -6064,16 +6551,16 @@ final class CalendarStructuredTests: XCTestCase {
         XCTAssertFalse(list.contains { $0.title == "Today" })
     }
 
-    func testNoDetailRootIsNotHandled() {
+    func testNoDetailRootIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
                         children: [node("AXGroup", identifier: "calendar-sidebar",
                                         frame: CGRect(x: 0, y: 0, width: 220, height: 800))])
-        XCTAssertNil(CalendarParser().parse(bare, context: context("com.apple.iCal", "Calendar")))
+        XCTAssertNil(try CalendarParser().parse(bare, context: context("com.apple.iCal", "Calendar")))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
-        XCTAssertEqual(CalendarParser().parse(window(), context: context("com.apple.iCal", "Calendar")),
-                       CalendarParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        XCTAssertEqual(try CalendarParser().parse(window(), context: context("com.apple.iCal", "Calendar")),
+                       try CalendarParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
                                               context: context("com.apple.iCal", "Calendar")))
     }
 
@@ -6090,7 +6577,8 @@ final class CalendarStructuredTests: XCTestCase {
             style: .full)
         XCTAssertEqual(rendered,
                        "Thursday 12 September, 14:00 to 15:00 — Design review @Room 4 "
-                       + "/ ada@example.com [conference]")
+                       + "/ ada@example.com [conference]\nDetails: Join video call",
+                       "renderEvent appends the notes body it was given")
     }
 
     func testCalendarEventFixtureMatchesItsGolden() throws {
@@ -6116,47 +6604,32 @@ Expected: FAIL to compile — "type 'CalendarParser' does not conform to protoco
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `Sources/MaxMiCapture/StructuredNativeParsers.swift`, remove `private` from these six members of `StructuredEntityExtraction` so the retyped parsers reuse the already-tested anchor: `preferredDetailRoot(in:hints:)`, `isPreferred(_:hints:)`, `orderedFields(in:)`, `firstValue(_:metadataHints:)`, `looksLikeDateOrTime(_:)`, `isChrome(_:)`. Also remove `private` from `struct Field`'s declaration line (the struct is already internal; its stored properties stay as they are).
+In `Sources/MaxMiCapture/StructuredNativeParsers.swift`, widen the shared `hasConference` rule inside `calendarContent` (`:158-163`) by one clause, so a detail field that is *labelled* as the conference link counts even when its text is not a known meeting domain:
+
+```swift
+        let hasConference = fields.contains { field in
+            let value = field.value.lowercased()
+            return field.metadata.contains("conference")
+                || value.contains("zoom.us") || value.contains("meet.google.com")
+                || value.contains("teams.microsoft.com") || value.contains("join with")
+        }
+```
+
+No `private` is removed anywhere in this task: the adapter below calls `calendarContent`, which is already internal, so the six promotions the draft plan asked for are unnecessary and `struct Field` (`:121`) is already internal (ruling F22).
 
 Then append to the same file:
 
 ```swift
-/// The `.calendar` retyping of `StructuredEntityExtraction.calendar`, reusing the same detail-root
-/// anchor and the same field-hint scoring — only the OUTPUT type changes (spec §7c).
+/// `.calendar` events for a window. Phase A already retyped this anchor — `calendarContent`
+/// resolves the detail root, scores the fields and builds the `CalendarEvent` — so this is a thin
+/// adapter that lets a `StructuredParser` reach it, NOT a second extractor (spec §7c, ruling F15's
+/// no-duplicate-implementations rule).
 enum CalendarStructuredExtraction {
-    static let conferenceHints = ["conference", "video call", "join", "meet", "zoom", "teams"]
-
-    static func events(in window: AXNode, windowTitle: String?) -> [CalendarEvent] {
-        let root = StructuredEntityExtraction.preferredDetailRoot(
-            in: window, hints: ["event", "detail", "popover"]
-        )
-        let fields = StructuredEntityExtraction.orderedFields(in: root)
-        guard !fields.isEmpty else { return [] }
-
-        let title = StructuredEntityExtraction.firstValue(
-            fields, metadataHints: ["title", "summary", "event-name"]
-        ) ?? fields.first {
-            $0.role == "AXHeading" && !StructuredEntityExtraction.isChrome($0.value)
-        }?.value
-        guard let title, !title.isEmpty else { return [] }
-
-        let dateString = StructuredEntityExtraction.firstValue(
-            fields, metadataHints: ["date", "time", "start", "end"]
-        ) ?? fields.first { StructuredEntityExtraction.looksLikeDateOrTime($0.value) }?.value ?? ""
-        let location = StructuredEntityExtraction.firstValue(
-            fields, metadataHints: ["location", "place"]
-        )
-        let organizer = StructuredEntityExtraction.firstValue(
-            fields, metadataHints: ["organizer", "organiser", "invitee", "account"]
-        )
-        let hasConference = fields.contains { field in
-            conferenceHints.contains { field.metadata.contains($0) || field.value.lowercased().contains($0) }
-        }
-        // M8 stores the date STRING; turning a localised human date into a Date is out of scope
-        // (spec §4a: `dateString` is required, `start`/`end` are optional).
-        return [CalendarEvent(title: title, dateString: dateString, start: nil, end: nil,
-                              organizer: organizer, location: location,
-                              hasConference: hasConference)]
+    static func events(in window: AXNode, app: AppInfo, sourceApp: String) -> [CalendarEvent] {
+        guard let extracted = StructuredEntityExtraction.calendarContent(
+                window: window, app: app, sourceApp: sourceApp),
+              case .calendar(let events) = extracted.content else { return [] }
+        return events
     }
 }
 
@@ -6167,14 +6640,10 @@ extension CalendarParser: StructuredParser {
         offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
     )
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
-        let events = CalendarStructuredExtraction.events(in: snapshot,
-                                                        windowTitle: context.windowTitle)
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        let events = CalendarStructuredExtraction.events(in: snapshot, app: context.app,
+                                                        sourceApp: Self.config.app)
         return events.isEmpty ? nil : .calendar(events)
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
     }
 }
 
@@ -6185,16 +6654,20 @@ extension FantasticalParser: StructuredParser {
         offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
     )
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
-        let events = CalendarStructuredExtraction.events(in: snapshot,
-                                                        windowTitle: context.windowTitle)
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        let events = CalendarStructuredExtraction.events(in: snapshot, app: context.app,
+                                                        sourceApp: Self.config.app)
         return events.isEmpty ? nil : .calendar(events)
     }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
-    }
 }
+```
+
+Then **edit the two existing `parseStructured` bodies** at `Sources/MaxMiCapture/StructuredNativeParsers.swift:9` and `:19` (both are already declared in their structs — ruling F1). The `StructuredEntityExtraction.calendarContent(...)` calls are deleted, not chained; `parse(window:app:)` keeps calling `StructuredEntityExtraction.calendar(...)` for the key and the policies, so the `calendar:event:<hash>` keys `StructuredNativeParserTests` asserts are unchanged:
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
 ```
 
 In `Sources/MaxMiCapture/ParserRegistry.swift`, append `CalendarParser(), FantasticalParser()` to `structured`.
@@ -6205,7 +6678,10 @@ Run: `swift test --filter CalendarStructuredTests`
 Expected: PASS except the two golden tests.
 
 Run: `swift test --filter StructuredNativeParserTests`
-Expected: PASS, unchanged — only access modifiers changed on the existing extraction.
+Expected: PASS, unchanged.
+
+Run: `swift test --filter StructuredEntityTypedTests`
+Expected: PASS, unchanged — `calendar-event.json` carries no `conference` metadata, so the widened `hasConference` clause does not flip its `XCTAssertFalse(events[0].hasConference)` at `:26`.
 
 - [ ] **Step 5: Record the second fixture and both goldens**
 
@@ -6255,8 +6731,10 @@ git commit -m "Retype calendar event details as calendar captures"
 - Test: `Tests/MaxMiCaptureTests/RemindersStructuredTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.findAll(_:in:)`, `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); the six `StructuredEntityExtraction` members made internal in Task 19; `TaskItem`, `TaskStatus`, `CapturedContent` (Phase A).
-- Produces: `TaskStructuredExtraction.completedValues: Set<String>` (`["1", "true", "yes", "checked"]`, matching the existing string test in `StructuredEntityExtraction.task`); `TaskStructuredExtraction.status(ofRow: AXNode) -> TaskStatus`; `TaskStructuredExtraction.tasks(in: AXNode, windowTitle: String?) -> [TaskItem]`; `RemindersParser: StructuredParser` with `config` and the bridge.
+- Consumes: `AXQuery.findAll(_:in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Tasks 3-4); `StructuredParser`, `ParserConfig`, `ParseContext` (Task 5); `TaskItem`, `TaskStatus`, `CapturedContent` (Phase A); and these **five** `StructuredEntityExtraction` members, each promoted from `private` to internal **in this task** (Task 19 needs none — it delegates to `calendarContent`): `preferredDetailRoot(in:hints:)` (`Sources/MaxMiCapture/StructuredNativeParsers.swift:318`), `orderedFields(in:)` (`:342`), `firstValue(_:metadataHints:)` (`:377`), `looksLikeDateOrTime(_:)` (`:396`), `isChrome(_:)` (the enum's last member). `isPreferred(_:hints:)` stays private — only `preferredDetailRoot` calls it — and `struct Field` (`:121`) is already internal, so nothing changes there (ruling F22).
+- Produces: `TaskStructuredExtraction.completedValues: Set<String>` (`["1", "true", "yes", "checked"]`, matching the existing string test in `StructuredEntityExtraction.task`); `TaskStructuredExtraction.status(ofRow: AXNode) -> TaskStatus`; `TaskStructuredExtraction.notes(from: [StructuredEntityExtraction.Field], excluding: [String?]) -> String?`; `TaskStructuredExtraction.item(fromRow: AXNode) -> TaskItem?`; `TaskStructuredExtraction.detailItem(in: AXNode, windowTitle: String?) -> TaskItem?`; `TaskStructuredExtraction.tasks(in: AXNode, windowTitle: String?) -> [TaskItem]`; `RemindersParser: StructuredParser` with `config`.
+- **The notes body is derived once, in `notes(from:excluding:)`, and used by both the row path and the detail path** (ruling F23). Writing the filter twice is how the draft let a row's checkbox value (`"0"`) leak into `TaskItem.notes` while its sibling filtered it: `AXCheckBox` is in `StructuredEntityExtraction.readableRoles` (`:129-131`), so it *is* collected as a field and must be excluded explicitly.
+- **`parseStructured(window:app:)` already exists on `RemindersParser`** (`Sources/MaxMiCapture/StructuredNativeParsers.swift:29`) — **its body is edited, not redeclared** (ruling F1).
 - `RemindersParser.parse(window:app:)` and its `reminder:task:<hash>` key are untouched. The four other task apps (`MicrosoftToDoParser`, `TodoistParser`, `OmniFocusParser`, `TogglParser`) keep Phase A's `.tasks` output — spec §7c lists only Reminders.
 
 - [ ] **Step 1: Write the failing test**
@@ -6394,16 +6872,16 @@ final class RemindersStructuredTests: XCTestCase {
         XCTAssertEqual(items[0].title, "Submit project notes")
     }
 
-    func testNothingUsableIsNotHandled() {
+    func testNothingUsableIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1100, height: 760),
                         children: [node("AXGroup", identifier: "reminders-sidebar",
                                         frame: CGRect(x: 0, y: 0, width: 240, height: 760))])
-        XCTAssertNil(RemindersParser().parse(bare, context: context("Reminders")))
+        XCTAssertNil(try RemindersParser().parse(bare, context: context("Reminders")))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
-        XCTAssertEqual(RemindersParser().parse(window(), context: context("Reminders")),
-                       RemindersParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        XCTAssertEqual(try RemindersParser().parse(window(), context: context("Reminders")),
+                       try RemindersParser().parse(window(origin: CGPoint(x: 1440, y: 220)),
                                                context: context("Reminders")))
     }
 
@@ -6436,7 +6914,9 @@ Expected: FAIL to compile — "cannot find 'TaskStructuredExtraction' in scope".
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `Sources/MaxMiCapture/StructuredNativeParsers.swift`:
+In `Sources/MaxMiCapture/StructuredNativeParsers.swift`, remove `private` from exactly these five members of `StructuredEntityExtraction`, which the extraction below reuses: `preferredDetailRoot(in:hints:)`, `orderedFields(in:)`, `firstValue(_:metadataHints:)`, `looksLikeDateOrTime(_:)`, `isChrome(_:)`. Leave `isPreferred(_:hints:)` and `struct Field` alone (ruling F22).
+
+Then append to the same file:
 
 ```swift
 /// The `.tasks` retyping of `StructuredEntityExtraction.task`. A Reminders window is a LIST of
@@ -6465,6 +6945,21 @@ enum TaskStructuredExtraction {
         return detailItem(in: window, windowTitle: windowTitle).map { [$0] } ?? []
     }
 
+    /// Everything the named fields did not claim, as the notes body. `AXCheckBox` is excluded
+    /// because it is in `StructuredEntityExtraction.readableRoles` — without this, a row's
+    /// checkbox value ("0") is rendered as a task note (ruling F23). One implementation, used by
+    /// both the row path and the detail path.
+    static func notes(from fields: [StructuredEntityExtraction.Field],
+                      excluding claimed: [String?]) -> String? {
+        let claimed = Set(claimed.compactMap { $0 })
+        let remaining = fields
+            .filter { $0.role != "AXCheckBox" }
+            .filter { !claimed.contains($0.value) }
+            .filter { !StructuredEntityExtraction.isChrome($0.value) }
+            .map(\.value)
+        return remaining.isEmpty ? nil : remaining.joined(separator: "\n")
+    }
+
     static func item(fromRow row: AXNode) -> TaskItem? {
         let fields = StructuredEntityExtraction.orderedFields(in: row)
         let title = StructuredEntityExtraction.firstValue(
@@ -6477,13 +6972,9 @@ enum TaskStructuredExtraction {
         let project = StructuredEntityExtraction.firstValue(
             fields, metadataHints: ["list", "project", "section"]
         )
-        let notes = fields
-            .filter { $0.value != title && $0.value != dueString && $0.value != project }
-            .filter { !StructuredEntityExtraction.isChrome($0.value) }
-            .map(\.value)
         return TaskItem(title: title, status: status(ofRow: row), due: nil, dueString: dueString,
                         project: project, tags: [],
-                        notes: notes.isEmpty ? nil : notes.joined(separator: "\n"))
+                        notes: notes(from: fields, excluding: [title, dueString, project]))
     }
 
     static func detailItem(in window: AXNode, windowTitle: String?) -> TaskItem? {
@@ -6508,13 +6999,9 @@ enum TaskStructuredExtraction {
         let status: TaskStatus = checkboxValue.map {
             completedValues.contains($0) ? .completed : .open
         } ?? .unknown
-        let notes = fields
-            .filter { $0.value != title && $0.value != dueString && $0.value != project }
-            .filter { $0.role != "AXCheckBox" && !StructuredEntityExtraction.isChrome($0.value) }
-            .map(\.value)
         return TaskItem(title: title, status: status, due: nil, dueString: dueString,
                         project: project, tags: [],
-                        notes: notes.isEmpty ? nil : notes.joined(separator: "\n"))
+                        notes: notes(from: fields, excluding: [title, dueString, project]))
     }
 }
 
@@ -6525,15 +7012,41 @@ extension RemindersParser: StructuredParser {
         offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
     )
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let items = TaskStructuredExtraction.tasks(in: snapshot, windowTitle: context.windowTitle)
         return items.isEmpty ? nil : .tasks(items)
     }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        parse(window, context: ParseContext(app: app))
-    }
 }
+```
+
+Then **edit the existing `parseStructured` body** at `Sources/MaxMiCapture/StructuredNativeParsers.swift:29` (already declared on `RemindersParser` — ruling F1; its `taskContent` call is deleted):
+
+```swift
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+```
+
+`RemindersParser.parse(window:app:)` (`:26`) must also stop attaching the v1 content, or a Reminders window would be keyed by the v1 anchor while carrying the v1 single-item shape and the row-aware shape would never reach the store — the two-content-paths failure this plan forbids. Keep the key from the v1 anchor (`StructuredNativeParserTests` asserts `reminder:task:<hash>`) and take the content from `parseStructured`:
+
+```swift
+    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        guard let base = StructuredEntityExtraction.task(window: window, app: app,
+                                                         sourceApp: "Reminders",
+                                                         prefix: "reminder"),
+              let structured = try parseStructured(window: window, app: app) else { return nil }
+        return ParsedCapture(
+            sourceApp: base.sourceApp,
+            sourceKey: base.sourceKey,
+            sourceTitle: base.sourceTitle,
+            content: ContentRenderer.render(structured, style: .full),
+            contentKind: .task,
+            parserVersion: 3,
+            accumulationPolicy: .replace,
+            offscreenPolicy: Self.config.offscreenPolicy,
+            structured: structured
+        )
+    }
 ```
 
 In `Sources/MaxMiCapture/ParserRegistry.swift`, append `RemindersParser()` to `structured`.
@@ -6592,6 +7105,7 @@ git commit -m "Retype reminder rows as task captures with checkbox status"
 **Interfaces:**
 - Consumes: `ParserRegistry` and every `StructuredParser` registered in Tasks 7-20; `fixture(_:)` and `goldenCapturedContent(_:)` (Task 6).
 - Produces: `PhaseDCoverageTests` — a machine check that spec §11 item 8 actually holds, so the exit criterion is not a manual eyeball.
+- **Re-asserts Task 5's registration list.** After Task 20 the single `structured` list in `ParserRegistry.init()` holds exactly these **thirteen** entries: `TerminalParser`, `EditorParser`, `SlackParser`, `DiscordParser`, `MessagesParser`, `WhatsAppParser`, `NotesParser`, `NotionParser`, `ObsidianParser`, `FinderParser`, `CalendarParser`, `FantasticalParser`, `RemindersParser`. Tasks 22-26 append four more (`GmailParser`, `LinkedInMessagingParser`, `OutlookWebParser`, `TeamsWebParser`), all host-only, for a final total of **seventeen**. `MailParser` is absent by design (§12 Q6) and `WebPageParser` is the browser default, not a registered parser.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -6613,8 +7127,10 @@ final class PhaseDCoverageTests: XCTestCase {
                          ("cursor-offset-editor", "cursor-offset-editor-golden")],
         "SlackParser": [("slack-dom-messages", "slack-dom-messages-golden"),
                         ("slack-offset-no-dom", "slack-offset-no-dom-golden")],
+        // Discord is geometry-free, so its offset fixture is pinned against the SAME golden
+        // (Task 11, ruling F25) — the pair is (two fixtures, one golden).
         "DiscordParser": [("discord-messages", "discord-messages-golden"),
-                          ("discord-offset-messages", "discord-offset-messages-golden")],
+                          ("discord-offset-messages", "discord-messages-golden")],
         "MessagesParser": [("messages-thread", "messages-thread-golden"),
                            ("messages-offset-thread", "messages-offset-thread-golden")],
         "WhatsAppParser": [("whatsapp-bubbles", "whatsapp-bubbles-golden"),
@@ -6632,6 +7148,38 @@ final class PhaseDCoverageTests: XCTestCase {
         "RemindersParser": [("reminder-task", "reminder-task-golden"),
                             ("reminders-offset-list", "reminders-offset-list-golden")],
     ]
+
+    /// The exact registration list Task 5 declares and Tasks 7-20 fill in, restated here so a
+    /// parser cannot be quietly dropped from `ParserRegistry.init()` (ruling F28). The four
+    /// host-only parsers (Tasks 22-26) are NOT in this set — they are unreachable by bundle ID by
+    /// design, and `hostCoverage` plus `testEveryHostRoutedParserIsReachableFromTheHostMap`
+    /// (added in Task 22) cover them.
+    static let registeredStructuredParserNames: Set<String> = [
+        "TerminalParser", "EditorParser", "SlackParser", "DiscordParser", "MessagesParser",
+        "WhatsAppParser", "NotesParser", "NotionParser", "ObsidianParser", "FinderParser",
+        "CalendarParser", "FantasticalParser", "RemindersParser",
+    ]
+
+    func testTheRegistrationListIsExactlyTheThirteenBundleIDParsers() {
+        let registry = ParserRegistry()
+        var names = Set<String>()
+        for bundleID in [
+            ParserRegistry.slackBundleID, ParserRegistry.notionBundleID,
+            ParserRegistry.obsidianBundleID, ParserRegistry.notesBundleID,
+            ParserRegistry.discordBundleID, ParserRegistry.messagesBundleID,
+            ParserRegistry.finderBundleID, ParserRegistry.cursorBundleID,
+            ParserRegistry.vsCodeBundleID,
+        ] + ParserRegistry.terminalBundleIDs + ParserRegistry.whatsAppBundleIDs
+          + ParserRegistry.calendarBundleIDs + ParserRegistry.fantasticalBundleIDs
+          + ParserRegistry.remindersBundleIDs {
+            if let parser = registry.structuredParser(for: bundleID) {
+                names.insert(String(describing: type(of: parser)))
+            }
+        }
+        XCTAssertEqual(names, Self.registeredStructuredParserNames)
+        XCTAssertNil(registry.structuredParser(for: ParserRegistry.mailBundleID),
+                     "Mail stays AppleScript-sourced (§12 Q6) and is deliberately unregistered")
+    }
 
     func testEveryCoveredParserIsRegisteredAsAStructuredParser() {
         let registry = ParserRegistry()
@@ -6653,6 +7201,8 @@ final class PhaseDCoverageTests: XCTestCase {
         for name in Self.coverage.keys {
             XCTAssertTrue(registered.contains(name), "\(name) is not reachable from the registry")
         }
+        XCTAssertTrue(registered.contains("FantasticalParser"),
+                      "Fantastical shares Calendar's fixtures but must still be registered")
     }
 
     func testEveryCoveredParserHasTwoFixturesAndTwoGoldens() throws {
@@ -6722,11 +7272,27 @@ Expected: FAIL on the first missing fixture, golden or registration. Fix by comp
 
 - [ ] **Step 3: Run the whole suite**
 
-Run: `swift test`
-Expected: PASS, zero failures. The count is the 506 pre-M8 tests plus Phase A's plus this phase's.
+Run: `swift test 2>&1 | tail -40`
 
-Run: `swift build 2>&1 | grep -i warning; echo "exit=$?"`
-Expected: no warning lines (spec §11 item 10: "zero warnings").
+**The gate is zero NEW failures, not zero failures** (ruling F19). The baseline this branch starts from is **689 tests with exactly 3 known-red**, frozen by the Phase A ledger:
+
+- `ActivityStoreTests.testNewSourceActivitySummaryWaitsForCloudReview`
+- `CaptureDisplaySummarizerTests.testConversationSummaryUsesTrailingMessages`
+- `PauseSettingsTests.testNewSourceIsHeldFromCloudUntilReviewed`
+
+Expected: those three, and nothing else, still fail. Any other failing test — including any of Phase D's own — blocks the phase. The total count rises by this phase's new tests; the total is **not** the gate and no number in this plan is binding (spec §2's "506 tests" is a pre-Phase-A figure).
+
+Run: `swift test --filter TerminalSegmentationTests` and `swift test --filter StructuredConversationParserTests`
+Expected: PASS — the two Phase A suites this plan edits rather than replaces.
+
+Run: `swift build 2>&1 | grep -i warning`
+Expected: no output (spec §11 item 10: "zero warnings"). An unused `private` member left behind by a replaced content path is the likely offender; every parser task names the members it deletes for exactly this reason (ruling F20).
+
+Run: `swift test -c release --filter AXQueryPathTests` and `swift test -c release --filter AXQueryEvaluationTests`
+Expected: both compile and PASS — `AXQuery.trapsOnInvalidPath` exists in release too (ruling F14), and the release configuration is where the invalid-path policy the tests assert actually applies.
+
+Run: `grep -rn "import Testing" Tests/ | wc -l`
+Expected: `0` (§2).
 
 - [ ] **Step 4: Rebuild the app**
 
@@ -6796,9 +7362,9 @@ git commit -m "Assert Phase D parser fixture and origin coverage"
 **Interfaces:**
 - Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.host(fromURL:)`, `.structuredParser(forHost:)`, `.forcedAttributes(for:)` (Task 5); `fixture(_:)`, `goldenCapturedContent(_:)`, `assertGolden(_:matches:)` (Task 6); `WebPageParser.parse(window:tab:)` (Task 9); `NativeConversationExtraction.senderLabel(_:) -> String?` (`Sources/MaxMiCapture/NativeConversationParser.swift`, already internal); `ParserRefusal(reason:)` (`ParserRegistry.swift:74`); `WebAppCaptureParser.parse(tab:window:contentBudget:) throws -> WebAppParseResult`, `.classify(url:)`, `.contentCap`; `URLKeyNormalizer.normalize(_:)`; `CaptureAccumulator.bound(_:to:)` (`Sources/MaxMiCore/StructuredAccumulator.swift`); `Message`, `Message.makeID(sender:timeString:text:)`, `Conversation`, `GenericPage`, `Region`, `Block`, `BlockType.tableRow(cells:selected:)`, `CapturedContent` (Phase A).
 - Produces:
-  - `protocol RefusingStructuredParser: StructuredParser { func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool }` — `public`.
+  - **No refusal protocol.** A host parser refuses by throwing `ParserRefusal` from `StructuredParser.parse`, which is `throws` (Task 5, ruling F13). `refusesEmptyCompose(_:context:)` is a plain method on each parser — the predicate the throw is guarded by, and the thing the tests assert directly.
   - `WebHostParsing.text(of: AXNode) -> String?`, `.editorText(in: AXNode) -> String`, `.draft(in: AXNode?) -> Message?`, `.message(sender: String?, timeString: String?, texts: [String], isUser: Bool = false) -> Message?`, `.path(of: String?) -> String` — all `internal static`, shared by Tasks 22-26.
-  - `GmailParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `messageClass`, `senderNameClass`, `senderAddressClass`, `timeClass`, `bodyClass`, `listRowClass`, `composeBodyDescription`, `chromeHeadings`, `composer(in:) -> AXNode?`, `subject(in:windowTitle:) -> String`, `threadMessages(in:) -> [Message]`, `listRows(in:) -> [Block]`.
+  - `GmailParser: StructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `messageClass`, `senderNameClass`, `senderAddressClass`, `timeClass`, `bodyClass`, `listRowClass`, `composeBodyDescription`, `chromeHeadings`, `composer(in:) -> AXNode?`, `subject(in:windowTitle:) -> String`, `threadMessages(in:) -> [Message]`, `listRows(in:) -> [Block]`.
   - `BrowserCapturePipeline.parse(window:windowTitle:browser:contentBudget:registry:)` — `registry` is added **after** `contentBudget`, so `WebAppStructuredTests.swift:117` (`contentBudget: 60`) keeps compiling.
   - `PhaseDCoverageTests.hostCoverage: [String: [String]]` — parser type name → the hosts it claims.
 
@@ -7106,36 +7672,40 @@ final class GmailParserTests: XCTestCase {
 
     // MARK: - Not handled vs refusal
 
-    func testAPageWithNoMessageContainerIsNotHandledRatherThanRefused() {
+    func testAPageWithNoMessageContainerIsNotHandledRatherThanRefused() throws {
         let parser = GmailParser()
-        XCTAssertNil(parser.parse(settingsWindow(), context: context(nil)))
+        XCTAssertNil(try parser.parse(settingsWindow(), context: context(nil)))
         XCTAssertFalse(parser.refusesEmptyCompose(settingsWindow(), context: context(nil)),
                        "no composer means no refusal — this window becomes generic v2")
     }
 
-    func testAnEmptyComposeOnlyWindowRefuses() {
+    func testAnEmptyComposeOnlyWindowRefuses() throws {
         let parser = GmailParser()
         let window = composeOnlyWindow("   ")
-        XCTAssertNil(parser.parse(window, context: context(nil)))
         XCTAssertTrue(parser.refusesEmptyCompose(window, context: context(nil)))
+        // The refusal travels on `parse`'s `throws` — there is nothing to store and this must not
+        // degrade to a generic capture of the compose chrome (ruling F13).
+        XCTAssertThrowsError(try parser.parse(window, context: context(nil))) { error in
+            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "empty-compose"))
+        }
     }
 
-    func testAnEmptyComposerOverAThreadDoesNotRefuse() {
+    func testAnEmptyComposerOverAThreadDoesNotRefuse() throws {
         let parser = GmailParser()
         let window = threadWindow(draft: "")
-        XCTAssertNotNil(parser.parse(window, context: context(nil)))
+        XCTAssertNotNil(try parser.parse(window, context: context(nil)))
         XCTAssertFalse(parser.refusesEmptyCompose(window, context: context(nil)))
     }
 
     // MARK: - Origin invariance
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
         let parser = GmailParser()
-        XCTAssertEqual(parser.parse(threadWindow(), context: context(nil)),
-                       parser.parse(threadWindow(origin: CGPoint(x: 1440, y: 220)),
+        XCTAssertEqual(try parser.parse(threadWindow(), context: context(nil)),
+                       try parser.parse(threadWindow(origin: CGPoint(x: 1440, y: 220)),
                                     context: context(nil)))
-        XCTAssertEqual(parser.parse(inboxWindow(), context: context(nil)),
-                       parser.parse(inboxWindow(origin: CGPoint(x: 1440, y: 220)),
+        XCTAssertEqual(try parser.parse(inboxWindow(), context: context(nil)),
+                       try parser.parse(inboxWindow(origin: CGPoint(x: 1440, y: 220)),
                                     context: context(nil)))
     }
 
@@ -7211,20 +7781,6 @@ Create `Sources/MaxMiCapture/WebHostParsing.swift`:
 ```swift
 import Foundation
 import MaxMiCore
-
-/// Opt-in companion to `StructuredParser` for host-routed parsers that must be able to REFUSE a
-/// window rather than let it fall through to generic v2.
-///
-/// `StructuredParser.parse` cannot throw (spec §12 Q18) and a browser tab never reaches a
-/// `SourceParser` bridge at all, so the refusal is raised at the browser path's own throwing
-/// boundary — `BrowserCapturePipeline.parse` — which is the exact analogue of the
-/// `NativeConversationParser` bridge §14b points at.
-public protocol RefusingStructuredParser: StructuredParser {
-    /// True ONLY for a compose-only window whose draft is empty: there is genuinely nothing to
-    /// store, and a refusal is how the health ledger records that. Every other empty read
-    /// returns nil from `parse` and becomes a generic v2 page (§4f rule 3).
-    func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool
-}
 
 /// The app-agnostic half of the five §14b web-app parsers. The DOM anchors live in each parser;
 /// the message-building rules live here, so Gmail, LinkedIn, Outlook, Slack web and Teams web
@@ -7331,7 +7887,7 @@ import MaxMiCore
 ///   `a3s`  message body               ?
 ///   `zA`   list row                   ?
 ///   AXDescription "Message Body"      compose editor  ?
-public struct GmailParser: RefusingStructuredParser {
+public struct GmailParser: StructuredParser {
     public init() {}
 
     public static let config = ParserConfig(
@@ -7417,7 +7973,7 @@ public struct GmailParser: RefusingStructuredParser {
 
     // MARK: - StructuredParser
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let draft = WebHostParsing.draft(in: Self.composer(in: snapshot))
         var messages = Self.threadMessages(in: snapshot)
         if !messages.isEmpty {
@@ -7437,13 +7993,24 @@ public struct GmailParser: RefusingStructuredParser {
             ))
         }
         let rows = Self.listRows(in: snapshot)
-        // NOT_HANDLED, never a refusal: §4f rule 3 routes this window to GenericPageExtractor and
-        // the health ledger records "GenericPageExtractor.v2/fallback/GmailParser".
-        guard !rows.isEmpty else { return nil }
+        guard !rows.isEmpty else {
+            // The ONE refusal case (§14b): a compose-only window whose draft is empty.
+            if refusesEmptyCompose(snapshot, context: context) {
+                throw ParserRefusal(reason: "empty-compose")
+            }
+            // Otherwise NOT_HANDLED: §4f rule 3 routes this window to `WebPageParser` and the
+            // health ledger records "GenericPageExtractor.v2/fallback/GmailParser".
+            return nil
+        }
         return .generic(GenericPage(regions: [Region(kind: .main, blocks: rows)],
                                     focused: nil, url: context.url))
     }
 
+    /// True ONLY for a compose-only window whose draft is empty: there is genuinely nothing to
+    /// store, so `parse` throws `ParserRefusal` rather than letting generic v2 store the chrome
+    /// around an empty composer. Every other empty read returns nil (NOT_HANDLED, §4f rule 3).
+    /// A plain method, not a protocol requirement: the refusal travels on `parse`'s `throws`
+    /// (spec §12 amendment superseding Q18).
     public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
         guard let composer = Self.composer(in: snapshot) else { return false }
         return WebHostParsing.draft(in: composer) == nil
@@ -7468,44 +8035,55 @@ In `Sources/MaxMiCapture/BrowserCapturePipeline.swift`, replace Task 9's routing
             windowTitle: windowTitle,
             engine: browser.browserEngine
         )
-        // Host routing (spec §7b): a registered host parser claims the tab; otherwise the tab is
-        // a generic web page. Either way `contentKind`, `sourceKey` and the accumulation policy
-        // come from `WebAppCaptureParser.parse` — a host parser owns CONTENT only (§4f rule 1).
-        let hostParser = ParserRegistry.host(fromURL: tab.url)
-            .flatMap { registry.structuredParser(forHost: $0) }
+        // Host routing (spec §7b), through the ONE entry point Task 5 defines: a registered host
+        // parser claims the tab, otherwise `WebPageParser` does. Either way `contentKind`,
+        // `sourceKey` and the accumulation policy come from `WebAppCaptureParser.parse` — a host
+        // parser owns CONTENT only (§4f rule 1).
         let hostContext = ParseContext(
             app: AppInfo(bundleID: browser.bundleID, name: browser.displayName,
                          windowTitle: windowTitle),
             url: tab.url
         )
-        let hostStructured = hostParser?.parse(window, context: hostContext)
-        // The ONE refusal case (§14b, §12 Q18): a compose-only window with an empty draft. Raised
-        // here because `StructuredParser.parse` cannot throw and a tab reaches no `SourceParser`
-        // bridge — and raised BEFORE `WebAppCaptureParser.parse` so the refusal is what surfaces
-        // rather than that path's `ExtractionError.emptyContent`.
-        if hostStructured == nil, let refuser = hostParser as? any RefusingStructuredParser,
-           refuser.refusesEmptyCompose(window, context: hostContext) {
-            throw ParserRefusal(reason: "empty-compose")
-        }
+        // Routed FIRST, and with `try`: the ONE refusal case (§14b) is a compose-only window with
+        // an empty draft, and the host parser throws `ParserRefusal` from its own `parse`. Running
+        // this before `WebAppCaptureParser.parse` is what makes the refusal — rather than that
+        // path's `ExtractionError.emptyContent` — the error that reaches `AppWiring` (ruling F13).
+        let routed = try CaptureDispatch.structuredCapture(
+            window: window, context: hostContext, registry: registry,
+            fallback: { window, _, _ in WebPageParser.parse(window: window, tab: tab) }
+        )
         let web = try WebAppCaptureParser.parse(tab: tab, window: window,
                                                contentBudget: contentBudget)
-        // A host shape is bounded to the same budget the web path has always used, so one long
-        // thread cannot blow past the browser cap.
-        let structured = hostStructured.map { CaptureAccumulator.bound($0, to: contentBudget) }
-            ?? WebPageParser.parse(window: window, tab: tab)
+        let structured: CapturedContent
+        let hostClaimed: Bool
+        var hostMarker: String?
+        switch routed {
+        case .parsed(let content, let parserName):
+            // A host shape is bounded to the same budget the web path has always used, so one
+            // long thread cannot blow past the browser cap.
+            structured = CaptureAccumulator.bound(content, to: contentBudget)
+            hostClaimed = true
+            hostMarker = parserName
+        case .fellThrough(let content, let notHandledBy):
+            structured = content
+            hostClaimed = false
+            // Spec §8: a registered host parser that returned nil is a non-silent degradation,
+            // spelled with the one existing helper (ruling F4).
+            hostMarker = notHandledBy.map { CaptureDispatch.fallbackParserID(failedParser: $0) }
+        }
         let quality: BrowserCaptureQuality
-        if hostStructured != nil || web.preservedBoundaries {
+        if hostClaimed || web.preservedBoundaries {
             quality = .high
         } else {
             quality = tab.quality
         }
-        let parserID = [
+        let parserID = ([
             "BrowserWeb.v2",
             browser.browserEngine?.rawValue ?? "unknown",
             web.app.rawValue,
             tab.urlSource.rawValue,
             "quality-\(quality.rawValue)",
-        ].joined(separator: "/")
+        ] + (hostMarker.map { [$0] } ?? [])).joined(separator: "/")
         return BrowserCaptureResult(
             url: tab.url,
             capture: ParsedCapture(
@@ -7522,12 +8100,14 @@ In `Sources/MaxMiCapture/BrowserCapturePipeline.swift`, replace Task 9's routing
             parserID: parserID,
             quality: quality,
             truncated: tab.truncated || web.truncated
-                || web.capture.content.count >= WebAppCaptureParser.contentCap,
-            webApp: web.app,
-            structured: structured
+                || ContentRenderer.render(structured, style: .full).count
+                    >= WebAppCaptureParser.contentCap,
+            webApp: web.app
         )
     }
 ```
+
+`BrowserCaptureResult` itself is unchanged: `result.capture.structured` already carries this value, and a second copy would be two sources of truth (ruling F30).
 
 In `Sources/MaxMiCapture/ParserRegistry.swift`, append to Task 5's single registration list (Gmail has no bundle IDs, so the derived loop puts it in the host map only):
 
@@ -7675,8 +8255,8 @@ git commit -m "Capture Gmail threads, inbox rows and drafts from verified DOM an
 - Test: `Tests/MaxMiCaptureTests/LinkedInMessagingParserTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.first(in:where:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:isUser:)`, `.path(of:)` (Task 22); `WebAppCaptureParser.classify(url:)`; `URLKeyNormalizer.normalize(_:)`; `Message`, `Conversation`, `CapturedContent` (Phase A).
-- Produces: `LinkedInMessagingParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `eventClass`, `groupNameClass`, `groupTimestampClass`, `bodyClass`, `titleClass`, `composerClass`, `navMeClass`, `messagingPathPrefix`, `signedInName(in:) -> String?`, `channel(in:windowTitle:) -> String`, `messages(in:selfName:) -> [Message]`, `composer(in:) -> AXNode?`.
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.first(in:where:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:isUser:)`, `.path(of:)` (Task 22); `WebAppCaptureParser.classify(url:)`; `URLKeyNormalizer.normalize(_:)`; `Message`, `Conversation`, `CapturedContent` (Phase A).
+- Produces: `LinkedInMessagingParser: StructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `eventClass`, `groupNameClass`, `groupTimestampClass`, `bodyClass`, `titleClass`, `composerClass`, `navMeClass`, `messagingPathPrefix`, `signedInName(in:) -> String?`, `channel(in:windowTitle:) -> String`, `messages(in:selfName:) -> [Message]`, `composer(in:) -> AXNode?`.
 
 **Two rulings this task must not relitigate:**
 
@@ -7834,14 +8414,14 @@ final class LinkedInMessagingParserTests: XCTestCase {
                         is LinkedInMessagingParser)
     }
 
-    func testEveryLinkedInPageThatIsNotMessagingIsNotHandled() {
+    func testEveryLinkedInPageThatIsNotMessagingIsNotHandled() throws {
         let parser = LinkedInMessagingParser()
-        XCTAssertNil(parser.parse(feedWindow(),
+        XCTAssertNil(try parser.parse(feedWindow(),
                                   context: context("Feed | LinkedIn",
                                                    url: "https://www.linkedin.com/feed/")))
         // Even a page that DOES expose message events stays generic off /messaging: the notification
         // rail on the feed renders the same classes.
-        XCTAssertNil(parser.parse(messagingWindow(),
+        XCTAssertNil(try parser.parse(messagingWindow(),
                                   context: context(url: "https://www.linkedin.com/feed/")))
         XCTAssertFalse(parser.refusesEmptyCompose(
             feedWindow(), context: context(url: "https://www.linkedin.com/feed/")))
@@ -7892,7 +8472,7 @@ final class LinkedInMessagingParserTests: XCTestCase {
             event(name: nil, time: nil, bodies: ["Note: check the doc"], y: 100, x: 400),
         ])
         let message = try XCTUnwrap(try conversation(
-            LinkedInMessagingParser().parse(win, context: context())).messages.first)
+            try LinkedInMessagingParser().parse(win, context: context())).messages.first)
         XCTAssertEqual(message.sender, "unknown")
         XCTAssertEqual(message.text, "Note: check the doc")
     }
@@ -7919,22 +8499,24 @@ final class LinkedInMessagingParserTests: XCTestCase {
         XCTAssertEqual(c.messages.count, 4)
     }
 
-    func testAMessagingPageWithNoEventsIsNotHandled() {
+    func testAMessagingPageWithNoEventsIsNotHandled() throws {
         let empty = node("AXWindow", title: "Messaging | LinkedIn",
                          frame: CGRect(x: 0, y: 0, width: 800, height: 600),
                          children: [text("No conversations yet", nil, y: 100)])
-        XCTAssertNil(LinkedInMessagingParser().parse(empty, context: context()))
+        XCTAssertNil(try LinkedInMessagingParser().parse(empty, context: context()))
     }
 
-    func testAnEmptyComposerWithNoEventsRefuses() {
+    func testAnEmptyComposerWithNoEventsRefuses() throws {
         let parser = LinkedInMessagingParser()
         let composeOnly = node("AXWindow", title: "Messaging | LinkedIn",
                                frame: CGRect(x: 0, y: 0, width: 800, height: 600), children: [
             node("AXTextArea", value: "  ", domClassList: ["msg-form__contenteditable"],
                  frame: CGRect(x: 400, y: 500, width: 500, height: 60)),
         ])
-        XCTAssertNil(parser.parse(composeOnly, context: context()))
         XCTAssertTrue(parser.refusesEmptyCompose(composeOnly, context: context()))
+        XCTAssertThrowsError(try parser.parse(composeOnly, context: context())) { error in
+            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "empty-compose"))
+        }
     }
 
     // MARK: - Kind, key, origin, goldens
@@ -7949,10 +8531,10 @@ final class LinkedInMessagingParserTests: XCTestCase {
             "https://www.linkedin.com/messaging/thread"))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
         let parser = LinkedInMessagingParser()
-        XCTAssertEqual(parser.parse(messagingWindow(), context: context()),
-                       parser.parse(messagingWindow(origin: CGPoint(x: 1440, y: 220)),
+        XCTAssertEqual(try parser.parse(messagingWindow(), context: context()),
+                       try parser.parse(messagingWindow(origin: CGPoint(x: 1440, y: 220)),
                                     context: context()))
     }
 
@@ -8008,7 +8590,7 @@ import MaxMiCore
 ///   `msg-form__contenteditable`        composer              ?
 ///   `global-nav__me-photo`             signed-in name        ?
 ///   `global-nav__me`                   signed-in name        ?
-public struct LinkedInMessagingParser: RefusingStructuredParser {
+public struct LinkedInMessagingParser: StructuredParser {
     public init() {}
 
     public static let config = ParserConfig(
@@ -8098,7 +8680,7 @@ public struct LinkedInMessagingParser: RefusingStructuredParser {
 
     // MARK: - StructuredParser
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         // Off /messaging this parser has nothing to say and the page stays generic v2 (§14b).
         guard WebHostParsing.path(of: context.url).hasPrefix(Self.messagingPathPrefix) else {
             return nil
@@ -8107,8 +8689,14 @@ public struct LinkedInMessagingParser: RefusingStructuredParser {
         if let draft = WebHostParsing.draft(in: Self.composer(in: snapshot)) {
             messages.append(draft)
         }
-        // NOT_HANDLED, not a refusal: an empty messaging shell is still a page.
-        guard !messages.isEmpty else { return nil }
+        guard !messages.isEmpty else {
+            // The ONE refusal case (§14b): a compose-only thread whose draft is empty.
+            if refusesEmptyCompose(snapshot, context: context) {
+                throw ParserRefusal(reason: "empty-compose")
+            }
+            // Otherwise NOT_HANDLED: an empty messaging shell is still a page.
+            return nil
+        }
         return .conversation(Conversation(
             channel: Self.channel(in: snapshot, windowTitle: context.windowTitle),
             // LinkedIn's anchors expose no participant count, so a thread stays flat.
@@ -8117,6 +8705,11 @@ public struct LinkedInMessagingParser: RefusingStructuredParser {
         ))
     }
 
+    /// True ONLY for a compose-only window whose draft is empty: there is genuinely nothing to
+    /// store, so `parse` throws `ParserRefusal` rather than letting generic v2 store the chrome
+    /// around an empty composer. Every other empty read returns nil (NOT_HANDLED, §4f rule 3).
+    /// A plain method, not a protocol requirement: the refusal travels on `parse`'s `throws`
+    /// (spec §12 amendment superseding Q18).
     public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
         guard WebHostParsing.path(of: context.url).hasPrefix(Self.messagingPathPrefix),
               let composer = Self.composer(in: snapshot) else { return false }
@@ -8206,8 +8799,8 @@ git commit -m "Capture LinkedIn messaging threads and leave every other page gen
 - Test: `Tests/MaxMiCaptureTests/OutlookWebParserTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.formatTable(_:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:isUser:)` (Task 22); `WebAppCaptureParser.classify(url:)`; `URLKeyNormalizer.normalize(_:)`; `Message`, `Conversation`, `GenericPage`, `Region`, `Block`, `CapturedContent` (Phase A).
-- Produces: `OutlookWebParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `cardDescriptionPrefix`, `cardRole`, `composeBodyDescription`, `listRole`, `senderPrefix`, `sentSeparator`, `headerFields(fromDescription:) -> (sender: String?, time: String?)`, `messageCards(in:) -> [AXNode]`, `readingPaneMessages(in:) -> [Message]`, `listRows(in:) -> [Block]`, `composer(in:) -> AXNode?`, `subject(in:windowTitle:) -> String`.
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Task 4); `GenericPageExtractor.block(for:listDepth:)` (Phase A, for table rows — ruling F15 leaves row formatting with the extractor); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:isUser:)` (Task 22); `WebAppCaptureParser.classify(url:)`; `URLKeyNormalizer.normalize(_:)`; `Message`, `Conversation`, `GenericPage`, `Region`, `Block`, `CapturedContent` (Phase A).
+- Produces: `OutlookWebParser: StructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `cardDescriptionPrefix`, `cardRole`, `composeBodyDescription`, `listRole`, `senderPrefix`, `sentSeparator`, `headerFields(fromDescription:) -> (sender: String?, time: String?)`, `messageCards(in:) -> [AXNode]`, `readingPaneMessages(in:) -> [Message]`, `listRows(in:) -> [Block]`, `composer(in:) -> AXNode?`, `subject(in:windowTitle:) -> String`.
 
 **Host set.** Exactly the two hosts §14b names: `outlook.office.com` and `outlook.live.com`. `WebAppCaptureParser.classify` also treats `outlook.office365.com` as `.outlook`, but that domain is deliberately **left off the host map** until someone dumps it — an unverified anchor set is precisely what §14b forbids. A tab there keeps `contentKind` `.email` and stays generic v2, which is exactly today's behaviour.
 
@@ -8416,7 +9009,7 @@ final class OutlookWebParserTests: XCTestCase {
                  body: ["Note: check the doc"], y: 100, x: 200),
         ])
         let message = try XCTUnwrap(try conversation(
-            OutlookWebParser().parse(win, context: context())).messages.first)
+            try OutlookWebParser().parse(win, context: context())).messages.first)
         XCTAssertEqual(message.sender, "unknown")
         XCTAssertEqual(message.text, "Note: check the doc")
     }
@@ -8455,20 +9048,22 @@ final class OutlookWebParserTests: XCTestCase {
 
     // MARK: - Not handled vs refusal
 
-    func testAPageWithNoCardAndNoRowIsNotHandled() {
+    func testAPageWithNoCardAndNoRowIsNotHandled() throws {
         let bare = node("AXWindow", title: "Calendar - Outlook",
                         frame: CGRect(x: 0, y: 0, width: 900, height: 700),
                         children: [text("September 2026", y: 60)])
         let parser = OutlookWebParser()
-        XCTAssertNil(parser.parse(bare, context: context("Calendar - Outlook")))
+        XCTAssertNil(try parser.parse(bare, context: context("Calendar - Outlook")))
         XCTAssertFalse(parser.refusesEmptyCompose(bare, context: context("Calendar - Outlook")))
     }
 
-    func testAnEmptyComposeOnlyWindowRefuses() {
+    func testAnEmptyComposeOnlyWindowRefuses() throws {
         let parser = OutlookWebParser()
         let window = composeOnlyWindow("  ")
-        XCTAssertNil(parser.parse(window, context: context()))
         XCTAssertTrue(parser.refusesEmptyCompose(window, context: context()))
+        XCTAssertThrowsError(try parser.parse(window, context: context())) { error in
+            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "empty-compose"))
+        }
     }
 
     // MARK: - Kind, key, origin, goldens
@@ -8482,13 +9077,13 @@ final class OutlookWebParserTests: XCTestCase {
         XCTAssertFalse(key.contains("exvsurl"))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
         let parser = OutlookWebParser()
-        XCTAssertEqual(parser.parse(readingWindow(), context: context()),
-                       parser.parse(readingWindow(origin: CGPoint(x: 1600, y: 300)),
+        XCTAssertEqual(try parser.parse(readingWindow(), context: context()),
+                       try parser.parse(readingWindow(origin: CGPoint(x: 1600, y: 300)),
                                     context: context()))
-        XCTAssertEqual(parser.parse(listWindow(), context: context()),
-                       parser.parse(listWindow(origin: CGPoint(x: 1600, y: 300)),
+        XCTAssertEqual(try parser.parse(listWindow(), context: context()),
+                       try parser.parse(listWindow(origin: CGPoint(x: 1600, y: 300)),
                                     context: context()))
     }
 
@@ -8538,7 +9133,7 @@ import MaxMiCore
 ///   AXDescription "From: X, Sent: T"      card header        ?   (record the EXACT separator)
 ///   AXDescription "Message body"          compose editor     ?
 ///   AXRow (vs AXListItem / AXOption)      list row           ?
-public struct OutlookWebParser: RefusingStructuredParser {
+public struct OutlookWebParser: StructuredParser {
     public init() {}
 
     public static let config = ParserConfig(
@@ -8641,12 +9236,16 @@ public struct OutlookWebParser: RefusingStructuredParser {
     static func listRows(in snapshot: AXNode) -> [Block] {
         let rows = AXQuery.sortedByVisualOrder(
             AXQuery.findAll("//\(listRowRole)", in: snapshot), relativeTo: snapshot.frame)
-        return rows.map(AXQuery.formatTable).filter { !$0.text.isEmpty }
+        // Rows are `GenericPageExtractor`'s job: `block(for:listDepth:)` already emits
+        // `.tableRow(cells:selected:)` with `selected` from `AXSelected`, so there is no second
+        // row formatter in this plan (ruling F15). `listDepth` is irrelevant for a row.
+        return rows.compactMap { GenericPageExtractor.block(for: $0, listDepth: 0) }
+            .filter { !$0.text.isEmpty }
     }
 
     // MARK: - StructuredParser
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let draft = WebHostParsing.draft(in: Self.composer(in: snapshot))
         var messages = Self.readingPaneMessages(in: snapshot)
         if !messages.isEmpty {
@@ -8663,12 +9262,24 @@ public struct OutlookWebParser: RefusingStructuredParser {
             ))
         }
         let rows = Self.listRows(in: snapshot)
-        // NOT_HANDLED → generic v2 (§4f rule 3): Outlook's calendar and settings live here too.
-        guard !rows.isEmpty else { return nil }
+        guard !rows.isEmpty else {
+            // The ONE refusal case (§14b): a compose-only window whose draft is empty.
+            if refusesEmptyCompose(snapshot, context: context) {
+                throw ParserRefusal(reason: "empty-compose")
+            }
+            // Otherwise NOT_HANDLED → generic v2 (§4f rule 3): Outlook's calendar and settings
+            // live on this host too.
+            return nil
+        }
         return .generic(GenericPage(regions: [Region(kind: .main, blocks: rows)],
                                     focused: nil, url: context.url))
     }
 
+    /// True ONLY for a compose-only window whose draft is empty: there is genuinely nothing to
+    /// store, so `parse` throws `ParserRefusal` rather than letting generic v2 store the chrome
+    /// around an empty composer. Every other empty read returns nil (NOT_HANDLED, §4f rule 3).
+    /// A plain method, not a protocol requirement: the refusal travels on `parse`'s `throws`
+    /// (spec §12 amendment superseding Q18).
     public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
         guard let composer = Self.composer(in: snapshot) else { return false }
         return WebHostParsing.draft(in: composer) == nil
@@ -8746,7 +9357,7 @@ git commit -m "Capture Outlook web reading panes, lists and drafts"
 ### Task 25: Slack web (`app.slack.com`) → the same `.conversation` the native app produces
 
 **Files:**
-- Modify: `Sources/MaxMiCapture/SlackParser.swift` (**replace** Task 10's `domMessages(in:)` and `parse(_:context:)`; add the header-channel, `isGroup` and refusal members)
+- Modify: `Sources/MaxMiCapture/SlackParser.swift` (**replace** Task 10's `domMessages(in:)` and `parse(_:context:)`; add the header-channel members, the web `isGroup` override and the refusal predicate)
 - Modify: `Tests/MaxMiCaptureTests/SlackStructuredTests.swift` (one Task 10 assertion becomes the header-driven one; see Step 4)
 - Modify: `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (two more `coverage` pairs, one `hostCoverage` row)
 - Create: `Tests/MaxMiCaptureTests/Fixtures/slack-web-channel.json`, `slack-web-channel-golden.json`, `slack-web-offset-dm.json`, `slack-web-offset-dm-golden.json`
@@ -8754,14 +9365,15 @@ git commit -m "Capture Outlook web reading panes, lists and drafts"
 - Test: `Tests/MaxMiCaptureTests/SlackWebStructuredTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Task 4); `SlackParser.config`, `.channelName(fromTitle:)`, `.draftMessage(in:)`, `.geometryMessages(in:)`, `.messageListClass`, `.messageItemClass`, `.senderClass`, `.timestampClass`, `.composerClass` (Task 10); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.message(sender:timeString:texts:)` (Task 22); `Conversation`, `Message`, `CapturedContent` (Phase A).
-- Produces: `SlackParser.messageBackgroundClass`, `.headerChannelClass`, `.headerChannel(in:) -> String?`, `.channel(in:windowTitle:) -> String`, `.isGroup(in:) -> Bool`, `.domItems(in:) -> [AXNode]`, the replaced `.domMessages(in:) -> [Message]` and `.parse(_:context:)`, and `SlackParser: RefusingStructuredParser` via `refusesEmptyCompose(_:context:)`.
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Task 4); `SlackParser.config`, `.channel(fromTitle:)`, `.isGroup(fromTitle:)`, `.draftMessage(in:)`, `.geometryMessages(in:)`, `.messageListClass`, `.messageItemClass`, `.senderClass`, `.timestampClass`, `.composerClass` (Task 10); `WebHostParsing.text(of:)`, `.message(sender:timeString:texts:)` (Task 22); `ParserRefusal(reason:)` (`Sources/MaxMiCapture/ParserRegistry.swift:74`); `Conversation`, `Message`, `CapturedContent` (Phase A).
+- Produces: `SlackParser.messageBackgroundClass`, `.headerChannelClass`, `.headerChannel(in:) -> String?`, `.channel(in:windowTitle:) -> String`, `.isGroup(in:windowTitle:) -> Bool`, `.domItems(in:) -> [AXNode]`, `.refusesEmptyCompose(_:context:) -> Bool`, and the replaced `.domMessages(in:) -> [Message]` and `.parse(_:context:)`.
+- **No conformance change.** Task 10 already declared `extension SlackParser: StructuredParser`; the refusal travels on `parse`'s `throws`, so there is no second protocol to adopt (spec §12 amendment superseding Q18, ruling F13).
 - `SlackParser.config` is **unchanged** — Task 10 already registered `hosts: ["app.slack.com", ".slack.com"]`, which is why §14b says this task *extends* `SlackParser` rather than adding a second parser for the same host. `key(fromTitle:)`, `messageLines` and `parse(window:app:)` stay untouched, so `SlackParserTests` keeps passing verbatim.
 
 **Two rulings this task must not relitigate:**
 
 1. **Native and web must render byte-identically** from equivalent trees (§14b). `ContentRenderer` renders only `messages` for a `.conversation` — `channel` and `isGroup` never reach the string — so the byte-identity test compares renders while `isGroup` is asserted separately.
-2. **`refusesEmptyCompose` affects the browser path only.** `BrowserCapturePipeline` is the sole consumer (Task 22). On the native Slack path an empty read still returns nil and degrades to generic v2, exactly as Task 10 left it.
+2. **The refusal reaches the browser path only in practice.** `refusesEmptyCompose` is true only when a composer is present, visible and empty AND neither anchor read anything — which is a Slack *tab*. On the native Slack path an empty read still returns nil and degrades to generic v2, exactly as Task 10 left it, and a native window with a visible empty composer and no messages at all is a window with nothing to store either, so the same answer is correct there.
 
 - [ ] **Step 1: Record the live fixtures FIRST and verify the anchors**
 
@@ -8965,30 +9577,32 @@ final class SlackWebStructuredTests: XCTestCase {
                        .slack)
     }
 
-    func testAnEmptyComposerWithNoMessagesRefuses() {
+    func testAnEmptyComposerWithNoMessagesRefuses() throws {
         let parser = SlackParser()
         let composeOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
                                children: [
             node("AXTextArea", value: "   ", domClassList: ["ql-editor"],
                  frame: CGRect(x: 260, y: 600, width: 900, height: 60)),
         ])
-        XCTAssertNil(parser.parse(composeOnly, context: context("Acme - Slack")))
+        XCTAssertThrowsError(try parser.parse(composeOnly, context: context("Acme - Slack"))) {
+            XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "empty-compose"))
+        }
         XCTAssertTrue(parser.refusesEmptyCompose(composeOnly, context: context("Acme - Slack")))
     }
 
-    func testAMessageListWithNoMessagesIsNotHandledAndNotRefused() {
+    func testAMessageListWithNoMessagesIsNotHandledAndNotRefused() throws {
         let parser = SlackParser()
         let empty = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700), children: [
             node("AXGroup", domClassList: ["c-message_list"],
                  frame: CGRect(x: 260, y: 80, width: 600, height: 400)),
         ])
-        XCTAssertNil(parser.parse(empty, context: context("Acme - Slack")))
+        XCTAssertNil(try parser.parse(empty, context: context("Acme - Slack")))
         XCTAssertFalse(parser.refusesEmptyCompose(empty, context: context("Acme - Slack")))
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
-        XCTAssertEqual(SlackParser().parse(webWindow(), context: context("general - Acme - Slack")),
-                       SlackParser().parse(webWindow(origin: CGPoint(x: 1440, y: 220)),
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        XCTAssertEqual(try SlackParser().parse(webWindow(), context: context("general - Acme - Slack")),
+                       try SlackParser().parse(webWindow(origin: CGPoint(x: 1440, y: 220)),
                                            context: context("general - Acme - Slack")))
     }
 
@@ -9033,19 +9647,21 @@ Add the header-channel members:
     }
 
     /// The channel NAME, with the group marker removed: "#general" and native "general" must
-    /// produce the same name so one thread does not read two ways across surfaces.
-    static func channel(in snapshot: AXNode, windowTitle: String?) -> String {
-        guard let header = headerChannel(in: snapshot) else {
-            return channelName(fromTitle: windowTitle)
+    /// produce the same name so one thread does not read two ways across surfaces. With no header
+    /// the existing title helper answers — this task adds a source, it does not replace one.
+    func channel(in snapshot: AXNode, windowTitle: String?) -> String {
+        guard let header = Self.headerChannel(in: snapshot) else {
+            return channel(fromTitle: windowTitle)
         }
         return header.hasPrefix("#") ? String(header.dropFirst()) : header
     }
 
     /// A leading "#" in the header title is the only group marker Slack exposes (§14b). With no
-    /// header at all the answer stays `true`, which is Task 10's behaviour and what the native
-    /// fixtures pin.
-    static func isGroup(in snapshot: AXNode) -> Bool {
-        guard let header = headerChannel(in: snapshot) else { return true }
+    /// header at all the existing title rule answers, which is what Task 10's native fixtures pin.
+    func isGroup(in snapshot: AXNode, windowTitle: String?) -> Bool {
+        guard let header = Self.headerChannel(in: snapshot) else {
+            return isGroup(fromTitle: windowTitle)
+        }
         return header.hasPrefix("#")
     }
 ```
@@ -9084,25 +9700,34 @@ Add the header-channel members:
 **Replace** Task 10's `parse(_:context:)` with the version below (only `channel` and `isGroup` change) and add the refusal:
 
 ```swift
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         var messages = Self.domMessages(in: snapshot)
         if messages.isEmpty { messages = Self.geometryMessages(in: snapshot) }
         if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
-        guard !messages.isEmpty else { return nil }
-        return .conversation(Conversation(
-            channel: Self.channel(in: snapshot, windowTitle: context.windowTitle),
-            isGroup: Self.isGroup(in: snapshot),
+        guard !messages.isEmpty else {
+            // The ONE refusal case (§14b): a visible, empty composer and nothing else readable.
+            if refusesEmptyCompose(snapshot, context: context) {
+                throw ParserRefusal(reason: "empty-compose")
+            }
+            return nil
+        }
+        let conversation = Conversation(
+            channel: channel(in: snapshot, windowTitle: context.windowTitle),
+            isGroup: isGroup(in: snapshot, windowTitle: context.windowTitle),
             messages: messages
-        ))
+        )
+        // Task 10's hard cap stays: the render is derived from this value.
+        return CaptureAccumulator.boundHard(.conversation(conversation), to: Self.contentCap)
     }
 ```
 
-Change the conformance line from `extension SlackParser: StructuredParser {` to `extension SlackParser: RefusingStructuredParser {` and add:
+The conformance line stays exactly as Task 10 wrote it (`extension SlackParser: StructuredParser {`) — there is no second protocol (ruling F13). Add the refusal predicate to the same extension:
 
 ```swift
-    /// Consulted on the BROWSER path only (`BrowserCapturePipeline`), so the native Slack path is
-    /// unchanged: there, an empty read still returns nil and degrades to generic v2.
-    public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
+    /// True only for a compose-only Slack surface: a visible composer, an empty draft and neither
+    /// anchor reading anything. `parse` turns that into `ParserRefusal`; every other empty read
+    /// stays nil and degrades to generic v2.
+    func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
         guard let composer = AXQuery.find("//*[domClass*=\"\(Self.composerClass)\"]", in: snapshot)
         else { return false }
         return Self.draftMessage(in: snapshot) == nil
@@ -9118,7 +9743,7 @@ Then update `Sources/MaxMiCapture/SlackParser.swift`'s header comment with the v
         XCTAssertTrue(c.isGroup, "no header anchor in this fixture, so the channel default holds")
 ```
 
-(the assertion text is the only change; `XCTAssertTrue(c.isGroup)` still holds because that fixture exposes no `p-view_header__channel_title`).
+(the assertion text is the only change; `XCTAssertTrue(c.isGroup)` still holds because that fixture exposes no `p-view_header__channel_title` and its window title is a three-part `"general - Acme - Slack"`, which `isGroup(fromTitle:)` already reads as a channel view.)
 
 In `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift`, extend Slack's `coverage` entry to four pairs and add the host row:
 
@@ -9198,8 +9823,8 @@ git commit -m "Read Slack web through the native Slack anchors with header drive
 - Test: `Tests/MaxMiCaptureTests/TeamsWebParserTests.swift`
 
 **Interfaces:**
-- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.all(in:where:)`, `AXQuery.Matchers.hasRole(_:)`, `.and(_:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:)`, `.editorText(in:)` (Task 22); `WebAppCaptureParser.classify(url:)`, `WebAppKind.teams`; `URLKeyNormalizer.normalize(_:)`; `AXReader.textEntryRoles` (Phase A); `Message`, `Conversation`, `CapturedContent` (Phase A).
-- Produces: `TeamsWebParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `messageClass`, `authorClass`, `timestampClass`, `bodyClass`, `messageIdentifierPrefix`, `composerClass`, `composerIdentifier`, `messageContainers(in:) -> [AXNode]`, `messages(in:) -> [Message]`, `channel(in:windowTitle:) -> String`, `composer(in:) -> AXNode?`.
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.all(in:where:)`, `AXQuery.Matchers.hasRole(_:)`, `.and(_:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:)`, `.editorText(in:)` (Task 22); `WebAppCaptureParser.classify(url:)`, `WebAppKind.teams`; `URLKeyNormalizer.normalize(_:)`; `AXReader.textEntryRoles` (Phase A); `Message`, `Conversation`, `CapturedContent` (Phase A).
+- Produces: `TeamsWebParser: StructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `messageClass`, `authorClass`, `timestampClass`, `bodyClass`, `messageIdentifierPrefix`, `composerClass`, `composerIdentifier`, `messageContainers(in:) -> [AXNode]`, `messages(in:) -> [Message]`, `channel(in:windowTitle:) -> String`, `composer(in:) -> AXNode?`.
 
 **Three rulings this task must not relitigate:**
 
@@ -9382,7 +10007,7 @@ final class TeamsWebParserTests: XCTestCase {
                               description: "Ada Lovelace, 10:14 AM, index rebuilt"),
         ])
         let message = try XCTUnwrap(try conversation(
-            TeamsWebParser().parse(win, context: context())).messages.first)
+            try TeamsWebParser().parse(win, context: context())).messages.first)
         XCTAssertEqual(message.sender, "unknown",
                        "an AXDescription is never parsed into sender and time")
         XCTAssertEqual(message.text, "Ada Lovelace, 10:14 AM, index rebuilt")
@@ -9393,7 +10018,7 @@ final class TeamsWebParserTests: XCTestCase {
             identifiedMessage(["Note: check the doc"], y: 100, x: 400),
         ])
         let message = try XCTUnwrap(try conversation(
-            TeamsWebParser().parse(win, context: context())).messages.first)
+            try TeamsWebParser().parse(win, context: context())).messages.first)
         XCTAssertEqual(message.sender, "unknown")
         XCTAssertEqual(message.text, "Note: check the doc")
     }
@@ -9418,23 +10043,25 @@ final class TeamsWebParserTests: XCTestCase {
         XCTAssertEqual(c.messages.count, 3)
     }
 
-    func testATeamsPageWithNoMessageContainerIsNotHandled() {
+    func testATeamsPageWithNoMessageContainerIsNotHandled() throws {
         let calendar = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900),
                             children: [text("September 2026", nil, y: 60)])
         let parser = TeamsWebParser()
-        XCTAssertNil(parser.parse(calendar, context: context()))
+        XCTAssertNil(try parser.parse(calendar, context: context()))
         XCTAssertFalse(parser.refusesEmptyCompose(calendar, context: context()))
     }
 
-    func testAnEmptyComposerWithNoMessagesRefuses() {
+    func testAnEmptyComposerWithNoMessagesRefuses() throws {
         let parser = TeamsWebParser()
         let composeOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
                                children: [
             node("AXTextArea", value: "   ", domClassList: ["ck-editor__editable"],
                  frame: CGRect(x: 400, y: 600, width: 700, height: 60)),
         ])
-        XCTAssertNil(parser.parse(composeOnly, context: context()))
         XCTAssertTrue(parser.refusesEmptyCompose(composeOnly, context: context()))
+        XCTAssertThrowsError(try parser.parse(composeOnly, context: context())) { error in
+            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "empty-compose"))
+        }
     }
 
     func testAComposerFoundOnlyByItsPlaceholderStillCounts() throws {
@@ -9448,9 +10075,9 @@ final class TeamsWebParserTests: XCTestCase {
         XCTAssertTrue(c.messages.last?.isDraft == true)
     }
 
-    func testResultIsIdenticalAtANonzeroWindowOrigin() {
-        XCTAssertEqual(TeamsWebParser().parse(chatWindow(), context: context()),
-                       TeamsWebParser().parse(chatWindow(origin: CGPoint(x: 1500, y: 260)),
+    func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
+        XCTAssertEqual(try TeamsWebParser().parse(chatWindow(), context: context()),
+                       try TeamsWebParser().parse(chatWindow(origin: CGPoint(x: 1500, y: 260)),
                                               context: context()))
     }
 
@@ -9508,7 +10135,7 @@ import MaxMiCore
 ///   data-tid "ckeditor"             composer            ?
 ///   `ck-editor__editable`           composer            ?
 ///   AXDescription on a text-free container              ?
-public struct TeamsWebParser: RefusingStructuredParser {
+public struct TeamsWebParser: StructuredParser {
     public init() {}
 
     public static let config = ParserConfig(
@@ -9601,13 +10228,20 @@ public struct TeamsWebParser: RefusingStructuredParser {
 
     // MARK: - StructuredParser
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         var messages = Self.messages(in: snapshot)
         if let draft = WebHostParsing.draft(in: Self.composer(in: snapshot)) {
             messages.append(draft)
         }
-        // NOT_HANDLED → generic v2 (§4f rule 3): Teams' calendar, files and apps tabs live here.
-        guard !messages.isEmpty else { return nil }
+        guard !messages.isEmpty else {
+            // The ONE refusal case (§14b): a compose-only chat whose draft is empty.
+            if refusesEmptyCompose(snapshot, context: context) {
+                throw ParserRefusal(reason: "empty-compose")
+            }
+            // Otherwise NOT_HANDLED → generic v2 (§4f rule 3): Teams' calendar, files and apps
+            // tabs live on this host too.
+            return nil
+        }
         return .conversation(Conversation(
             channel: Self.channel(in: snapshot, windowTitle: context.windowTitle),
             // Teams' anchors expose no channel-vs-chat marker; the renderer does not use isGroup.
@@ -9616,6 +10250,11 @@ public struct TeamsWebParser: RefusingStructuredParser {
         ))
     }
 
+    /// True ONLY for a compose-only window whose draft is empty: there is genuinely nothing to
+    /// store, so `parse` throws `ParserRefusal` rather than letting generic v2 store the chrome
+    /// around an empty composer. Every other empty read returns nil (NOT_HANDLED, §4f rule 3).
+    /// A plain method, not a protocol requirement: the refusal travels on `parse`'s `throws`
+    /// (spec §12 amendment superseding Q18).
     public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
         guard let composer = Self.composer(in: snapshot) else { return false }
         return WebHostParsing.draft(in: composer) == nil && Self.messages(in: snapshot).isEmpty
@@ -9715,8 +10354,8 @@ This is the **second** live pass of the phase. Task 21 verified the eighteen nat
 
 - [ ] **Step 1: Run the whole suite**
 
-Run: `swift test`
-Expected: PASS, zero failures.
+Run: `swift test 2>&1 | tail -40`
+Expected: **zero NEW failures** — the same three known-red tests Task 21 Step 3 names, and nothing else (ruling F19).
 
 Run: `swift test --filter PhaseDCoverageTests`
 Expected: PASS — in particular `testEveryHostRoutedParserIsReachableFromTheHostMap` covers all five hosts, and the two-fixture / nonzero-origin / no-secure-value assertions now cover ten more fixtures.
@@ -9793,7 +10432,8 @@ Run after the plan is written, before execution. This is the author's checklist,
 | §7a `find`, `findAll` | 3 |
 | §7a `Matchers.hasRole/hasIdentifierPrefix/hasClass/hasTitleContaining/and/or/not` | 4 |
 | §7a `sortedByVisualOrder(_:relativeTo:)` translation-invariant | 4 |
-| §7a `collectStaticTexts(in:)`, `formatTable(_:) -> Block` | 4 |
+| §7a `collectStaticTexts(in:)` | 4 |
+| §7a a table-row formatter | **not added** (ruling F15): `GenericPageExtractor.block(for:listDepth:)` already emits `.tableRow(cells:selected:)`, and Tasks 18 and 24 — the only row consumers — call it |
 | §7b `ParserConfig`, `ParseContext`, `StructuredParser` | 5 |
 | §7b `nil` = NOT_HANDLED routing to `GenericPageExtractor` | 5 |
 | §7b registry map by bundle ID, third map by host, `preferOverNative` ordering | 5 |
@@ -9811,11 +10451,11 @@ Run after the plan is written, before execution. This is the author's checklist,
 | §7c Notion `.document`, `notion-frame`/`notion-peek-renderer`, skip `layout-margin-right` and property groups, title from `notion-topbar` | 16 |
 | §7c Obsidian `.document`, `cm-editor` / `markdown-preview-view`, vault-stripped title | 17 |
 | §7c Finder `.generic`, `AXOutline`/`AXTable` rows → `.tableRow` with `selected`, path, sidebar region, toolbar status | 18 |
-| §7c Calendar `.calendar` from the existing `preferredDetailRoot` anchor, retyped | 19 |
+| §7c Calendar `.calendar` from the existing `preferredDetailRoot` anchor, retyped | 19 (Phase A already retyped it; 19 registers it, widens `hasConference` and adds the goldens) |
 | §7c Reminders `.tasks`, status from the row's `AXCheckBox` | 20 |
 | §7d `tools/ax-snapshot-record.swift <bundle-id> <out.json>`, same budgets as `AXReader`, hand-scrub rule | 6 |
-| §7d the six duplicated `fixture(_:)` helpers consolidated into `FixtureLoading.swift` | 6 |
-| §8 fall-through is not silent: `"GenericPageExtractor.v2/fallback/<ParserTypeName>"` in `capture_health_events.parser`, no new column | 5 |
+| §7d the duplicated `fixture(_:)` helpers consolidated into `FixtureLoading.swift` — **twelve** exist on this branch, not the six §7d names, plus Task 1's thirteenth (spec §12 repair amendment) | 6 |
+| §8 fall-through is not silent: `"GenericPageExtractor.v2/fallback/<ParserTypeName>"` in `capture_health_events.parser`, no new column | 5 (reuses Phase A's `CaptureDispatch.fallbackParserID(failedParser:)`, ruling F4); native path already wired at `AppWiring.swift:1492`, browser path in 9 and 22 |
 | §8 DOM attribute reads bounded by the web-area gate plus `ParserConfig.attributeSet`; `AXQuery` path parsing cached | 1, 2 |
 | §8 secure fields never read | 6 (the recorder refuses), 21 (fixture + live assertion) |
 | §9 each grammar token, predicate ANDing, index selection, `domClass` case-insensitivity, cache hit does not change results, invalid path returns nil | 2, 3 |
@@ -9830,7 +10470,7 @@ Run after the plan is written, before execution. This is the author's checklist,
 | §14b Slack web mirrors the native Slack anchors; `isGroup` from a `#` channel; renders byte-identically | 25 |
 | §14b Teams web: `data-tid` anchors with an `AXDescription` fallback; `classify` gains `teams.cloud.microsoft` | 26 |
 | §14b host registration via `ParserConfig.hosts` → `ParserRegistry.host(fromURL:)` → `structuredParser(forHost:)`, `preferOverNative` false | 22-26, on Task 5's mechanism |
-| §14b nil = NOT_HANDLED → generic v2; refusal ONLY for a compose-only window with an empty draft (§12 Q18) | 22 (`RefusingStructuredParser` + the `BrowserCapturePipeline` throw + the `AppWiring` catch), 23-26 per parser |
+| §14b nil = NOT_HANDLED → generic v2; refusal ONLY for a compose-only window with an empty draft (§12 Q18, superseded by the §12 repair amendment) | 5 (`StructuredParser.parse` is `throws`), 22 (each parser's `refusesEmptyCompose` guard + the `BrowserCapturePipeline` rethrow + the `AppWiring` catch), 23-26 per parser |
 | §14b `Message`s built from container structure via `NativeConversationExtraction.senderLabel`, never split on `": "` | 22 (`WebHostParsing.message`), asserted in 22-26 |
 | §14b `contentKind` never derived from shape; `sourceKey` schemes preserved | 22 (Gmail `.email` + key test), 23, 24, 25, 26 (five-host key-stability test) |
 | §14b ≥2 recorded hand-scrubbed fixtures + golden per host, ≥1 at a nonzero origin, registered in Task 21's `coverage` | 22-26, machine-checked by 21's dictionaries |
@@ -9850,25 +10490,72 @@ Checked across tasks:
 
 - `ParserConfig(app:bundleIDs:hosts:attributeSet:offscreenPolicy:preferOverNative:minAppVersion:)` — Task 5 defines it; Tasks 7-20 all construct it with that exact label order and rely on the same defaults.
 - `ParseContext(app:url:previousStructured:now:)` convenience init — Task 5 defines it; every `parseStructured` bridge in Tasks 7-20 calls `ParseContext(app: app)`, and every test calls `ParseContext(app:..., url:...)`.
-- `StructuredParser.parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent?` — one spelling everywhere. `SourceParser.parse(window: AXNode, app: AppInfo) throws -> ParsedCapture?` keeps its own labels, and the two never collide because the argument labels differ.
+- `StructuredParser.parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent?` — one spelling everywhere, `throws` in every task (ruling F13), so every call site inside a parser or a test uses `try`. `SourceParser.parse(window: AXNode, app: AppInfo) throws -> ParsedCapture?` keeps its own labels, and the two never collide because the argument labels differ.
 - `AXQuery.Step(axis:role:predicates:index:)` and `AXQuery.Predicate(attribute:op:expected:)` — Task 2 defines them; Task 2's test constructs both with those labels; Task 3 reads `step.axis`, `step.role`, `step.predicates`, `step.index`, `predicate.attribute`, `predicate.op`, `predicate.expected`.
-- `AXQuery.menuRoles` is declared once, in Task 4's `AXQueryHelpers.swift`, as a computed `static var` on the extension; Task 4's `collectStaticTexts` and `formatTable` are its only users. `GenericPageExtractor.menuRoles` (Phase A) is a separate, private-to-that-file set and is not referenced here.
+- `AXQuery.menuRoles` is declared once, in Task 4's `AXQueryHelpers.swift`, as a computed `static var` that returns `GenericPageExtractor.menuRoles` — one menu-skip set for the whole capture layer, not a second literal. `collectStaticTexts` is its only user.
 - `AXQuery.all(in:where:)` / `first(in:where:)` — Task 4 produces them; Task 12 (`MessagesParser.bubbles`) and Task 17 (`ObsidianParser.parse`) consume them.
 - `AXQuery.sortedByVisualOrder(_:relativeTo:)` takes `CGRect?` — Tasks 4, 10, 12, 13, 16, 17, 20 all pass a `node.frame`, which is `CGRect?`. Consistent.
 - `MessagesParser.isUserBubble(_:window:)` — Task 12 produces it, Task 13 consumes it. One spelling.
-- `NativeConversationExtraction.conversationName(window:app:)` — Task 13 both promotes and consumes it; no other task touches it.
-- `StructuredEntityExtraction.preferredDetailRoot(in:hints:)`, `orderedFields(in:)`, `firstValue(_:metadataHints:)`, `looksLikeDateOrTime(_:)`, `isChrome(_:)`, `isPreferred(_:hints:)`, `struct Field` — Task 19 promotes all seven to internal; Tasks 19 and 20 consume them with exactly those labels.
-- `TaskStructuredExtraction.completedValues` is the single source of the truthy set; `status(ofRow:)` and `detailItem(in:windowTitle:)` both read it. No second copy.
-- `CaptureDispatch.fallbackParserID(notHandledBy:)` — one spelling in Task 5's implementation, its test, and the §8 table row.
+- `NativeConversationExtraction.conversationName(window:app:)` — **new** in Task 13 (nothing of that name exists today, ruling F24), wrapping the promoted `conversationTitle(in:app:mainBoundary:requiresHeaderSemantics:)` and `mainPaneBoundary(_:)`; consumed only by Task 13.
+- `StructuredEntityExtraction.preferredDetailRoot(in:hints:)`, `orderedFields(in:)`, `firstValue(_:metadataHints:)`, `looksLikeDateOrTime(_:)`, `isChrome(_:)` — **five** members, promoted to internal in **Task 20**, the only task that reuses them. Task 19 needs none (it calls the already-internal `calendarContent`), `isPreferred(_:hints:)` stays private, and `struct Field` was already internal (ruling F22).
+- `StructuredEntityExtraction.Field` is referenced by label in `TaskStructuredExtraction.notes(from:excluding:)` (Task 20) — the one place a `Field` array crosses a function boundary in this plan.
+- `TaskStructuredExtraction.completedValues` is the single source of the truthy set; `status(ofRow:)` and `detailItem(in:windowTitle:)` both read it. `notes(from:excluding:)` is the single source of the notes rule, so the `AXCheckBox` exclusion cannot be present on one path and missing on the other (ruling F23).
+- `CaptureDispatch.fallbackParserID(failedParser:)` — Phase A's existing helper (`ParserRegistry.swift:167-169`), the ONE spelling of the §8 marker. This plan adds no overload (ruling F4); Tasks 5, 9 and 22 all call it with `failedParser:`.
 - `ParserRegistry.host(fromURL:)` — Task 5 produces it; Task 9 consumes it. `structuredParser(forHost:)` likewise.
 - `BrowserTabExtractor.primaryWebArea(in:windowTitle:engine:)` — produced by Phase A Task 15, consumed by Task 9 only; `WebPageParser.parse(window:tab:)` passes `engine: nil`, which Phase A's `engine: BrowserEngine? = nil` default already tolerates.
 - `EditorParser.activeTabTitle(fromWindowTitle:)` / `workspaceName(fromWindowTitle:)` / `titleComponents(_:)` / `looksLikeFilename(_:)` / `key(fromTitle:)` — five names, each used consistently inside Task 8.
-- Fixture and golden names: the 24 `(fixture, golden)` pairs listed in Task 21's `coverage` dictionary are character-for-character the names used in Tasks 7-20's `assertGolden` calls and `git add` lines. `calendar-event` and `reminder-task` are pre-existing fixtures reused with new goldens; the other 22 are new.
+- Fixture and golden names: the 24 `(fixture, golden)` pairs listed in Task 21's `coverage` dictionary are character-for-character the names used in Tasks 7-20's `assertGolden` calls and `git add` lines. They cover **24 fixtures and 23 goldens** — `discord-offset-messages` is pinned against `discord-messages-golden`, because a geometry-free parser must produce identical bytes from both fixtures and a second identical file would assert nothing (ruling F25). `calendar-event` and `reminder-task` are pre-existing fixtures reused with new goldens; the other 22 fixtures are new.
 - Phase A names consumed and never redefined: `CapturedContent`, `Document`, `Conversation`, `Message`, `Message.makeID`, `TaskItem`, `TaskStatus`, `CalendarEvent`, `TerminalSegment`, `TerminalSession`, `GenericPage`, `Region`, `RegionKind`, `Block`, `BlockType`, `Authorship`, `CapturedContentEnvelope`, `ContentRenderer.render/renderBlock`, `GenericPageExtractor.extract/Options/Result`, `LegacyContentAdapter`, `ParsedCapture.structured`, `SourceParser.parseStructured`, `AXNode.subrole/headingLevel/selected/placeholder/selectedText/hidden`, `AXReader.textEntryRoles`. All spelled as the spec §4 and the Phase A plan spell them.
 
 No inconsistencies found.
 
-### 4. Second pass over Tasks 22-27 (§14b)
+### 4. Repair pass against the merged Phase A code (pre-flight rulings F1-F30)
+
+This plan was re-checked line by line against `main` after the Phase A merge, and the 30 findings
+of `.superpowers/sdd/2026-09-06-maxmi-m8d-ax-query-dsl-and-parsers/preflight-scan.md` were applied
+with the controller's rulings. What changed, by ruling:
+
+| Ruling | Change |
+|---|---|
+| F1 | Ten tasks appended `parseStructured` in an extension of a type that already declares it (invalid redeclaration). Tasks 7, 10, 11, 12, 13, 15, 16, 17, 19, 20 now **edit the existing body** and name its `file:line`; Task 14 already did. |
+| F2 | Task 5 updates the Phase A test seam `ParserRegistry.init(parsers:)` to initialise both new stored properties, and asserts it (`ParserFallthroughTests` keeps compiling). |
+| F3 | Task 5 Step 5 wires `registry.forcedAttributes(for:)` into `AXReader.snapshotFrontmostWindow(forcedAttributes:)` at `AppWiring.swift:1382-1391`; the registry test asserts the whole declared set. |
+| F4 | The `fallbackParserID(notHandledBy:)` overload is gone; every site calls Phase A's `fallbackParserID(failedParser:)`. |
+| F5 | `BrowserCapturePipeline.parse` keeps `contentBudget:` (before the new `registry:`), so `WebAppStructuredTests.swift:117` compiles. |
+| F6 | `WebAppCaptureParser.parse` is called with `try` and with the budget. |
+| F7 | No `CalendarEvent` is constructed by the plan at all — Task 19 delegates to `calendarContent`, which already passes `notes:`. |
+| F8 | `TerminalSegmentationTests.swift` is kept; its two invariant tests move into `TerminalStructuredTests.swift` and its two `cwd` expectations are updated. |
+| F9 | `TerminalParser` has one content path: `session(fromScrollback:windowTitle:)`, rendered by `parse(window:app:)`, returned by `parse(_:context:)`. The same rule is applied to WhatsApp and Reminders, whose `parse(window:app:)` also attached a second shape. |
+| F10 | Notes/Notion/Obsidian reuse their existing `offscreen` constant and bound the document to `StructuredEntityExtraction.pageBudget`. |
+| F11 | Cursor/VS Code cap and ceiling are both 32_000; `96_000` appears nowhere. |
+| F12 | The non-browser `AppWiring` switch is untouched, so a window is parsed once; `structuredCapture` is the browser path's entry point and takes the fall-through as a closure (`WebPageParser` for a tab). |
+| F13 | `StructuredParser.parse` is `throws`; `ParserRefusal` = store nothing on both paths; the `RefusingStructuredParser` protocol is removed and `refusesEmptyCompose` is a plain predicate guarding each parser's own throw. |
+| F14 | `AXQuery.trapsOnInvalidPath` exists in both configurations; Task 21 runs the two grammar suites under `-c release`. |
+| F15 | `AXQuery.formatTable` is deleted; Finder and Outlook web use `GenericPageExtractor.block(for:listDepth:)`. `AXQuery.menuRoles` aliases the extractor's set instead of restating it. |
+| F16 | Task 18 states the division of labour explicitly and uses `AXQuery` for the path and source-list anchors. |
+| F17 | Task 6 migrates **twelve** copies (with real line ranges and both body variants) plus Task 1's thirteenth. |
+| F18 | Task 1's decode test enumerates `Fixtures/` instead of naming eleven files. |
+| F19 | Task 21 Step 3 and Task 27 Step 1 gate on zero NEW failures against the three named known-red tests. |
+| F20 | Every task that replaces a content path names and deletes the members it orphans. |
+| F21 | Declared test counts recomputed (Task 4: 12, Task 7: 19, Task 8: 12, Task 13: 12, Task 18: 12) and Task 6's self-contradicting "PASS, 4" split into a write-the-golden step. |
+| F22 | The no-op "remove `private` from `struct Field`" is dropped; the promotions are **five** members, in Task 20, the only task that needs them. |
+| F23 | `TaskStructuredExtraction.notes(from:excluding:)` is the single notes rule and excludes `AXCheckBox`, so a row's checkbox value cannot leak into `TaskItem.notes`. |
+| F24 | Task 13 says `conversationName` is new, promotes the two real private members it wraps, and keeps `split(_:byKnownParticipant:)` on the new path. |
+| F25 | The three vacuous tests are replaced: a genuinely frameless node asserted against the window origin (Task 4), a flush-vs-offset equality against one shared golden (Task 11), and a sidebar-classification assertion at a nonzero origin (Task 18). |
+| F26 | Stale `file:line` references refreshed (`AXReader.swift:23`/`:80-130`, `AppWiring.swift:1382-1391`/`:1449-1481`/`:1483`, `NativeConversationParserTests.swift:6`, `SlackParserTests.swift:6`, Mail's typed path is Phase A **Task 12**). |
+| F27 | The Global Constraints state that `GenericV2Content` survives for `GenericAXParser`, Word/Pages and Outlook/Spark. |
+| F28 | The final registration list is written out in Task 5, re-asserted by a new `PhaseDCoverageTests` test in Task 21, and appended to by Tasks 22-26 (13 bundle-ID + 4 host = 17). |
+| F29 | `testConfigClaimsEveryTerminalBundleID` asserts four bundle IDs. |
+| F30 | `BrowserCaptureResult` gains no field; consumers read `result.capture.structured`. |
+
+Two changes follow from the rulings rather than being named by them, and are recorded here so a
+reviewer does not read them as drift: Task 10 reuses `SlackParser.channel(fromTitle:)` /
+`isGroup(fromTitle:)` instead of adding a third title parser (they are asserted directly by
+`StructuredConversationParserTests`), and Task 13 keeps the Phase A conversation walk as the
+fallback when no `WAMessageBubbleTableViewCell` anchor is present, because that walk owns both
+`ParserRefusal` cases and is what the six existing WhatsApp tests drive.
+
+### 5. Second pass over Tasks 22-27 (§14b)
 
 **Spec coverage.** Every §14b paragraph maps to a task in the table above. The five hosts, the
 refusal rule, the sender heuristic, the `contentKind`/`sourceKey` rules, the fixture rules, the
@@ -9883,9 +10570,9 @@ survives.
 
 **Type consistency across the new tasks.**
 
-- `RefusingStructuredParser.refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool`
-  — one spelling in Task 22's protocol, its `BrowserCapturePipeline` call site, and all five
-  conformances (22, 23, 24, 25, 26).
+- `refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool` — a plain method on each host parser (no protocol), guarding the `throw ParserRefusal(reason: "empty-compose")` inside that parser's `parse`
+  — one spelling in all five parsers (22, 23, 24, 25, 26); each parser's `parse` is its only
+  caller, and the tests assert the predicate directly.
 - `WebHostParsing.message(sender:timeString:texts:isUser:)` — declared in Task 22 with
   `isUser: Bool = false`; Tasks 22, 24, 25, 26 call it without `isUser`, Task 23 passes it.
   `.draft(in:)`, `.text(of:)`, `.editorText(in:)` and `.path(of:)` likewise have one spelling each.
@@ -9900,18 +10587,21 @@ survives.
   pairs and adds its host row. The ten new `(fixture, golden)` names are character-for-character
   the names used in the `assertGolden` calls and `git add` lines of Tasks 22-26.
 - `AXQuery` surface used: `find`, `findAll`, `collectStaticTexts`, `sortedByVisualOrder`, `all`,
-  `first`, `formatTable` — all as Tasks 3 and 4 declare them, `sortedByVisualOrder(_:relativeTo:)`
-  always fed a `CGRect?`.
+  `first` — all as Tasks 3 and 4 declare them, `sortedByVisualOrder(_:relativeTo:)` always fed a
+  `CGRect?`. Table rows come from `GenericPageExtractor.block(for:listDepth:)` (ruling F15).
 
 **Three places §14b contradicts the tree or itself. Each is decided in the task, not left open.**
 
 1. **§14b/§12 Q18 put the refusal in `SourceParser.parse(window:app:)`, but a browser tab never
    reaches a `SourceParser`.** The browser path is `ApplicationRegistry.captureStrategy ==
    .browserAX` → `BrowserCapturePipeline.parse`, and `CaptureDispatch.parseDetailed` — the code
-   that catches `ParserRefusal` today — is only on the non-browser branch. **Decision (Task 22):**
-   the refusal is raised at the browser path's own throwing boundary, `BrowserCapturePipeline.parse`,
-   through the new `RefusingStructuredParser` hook, and `AppWiring` gains one `catch` clause that
-   records it as `.skipped(.parserNoContent)` — the same outcome the native refusal path produces.
+   that catches `ParserRefusal` today — is only on the non-browser branch. **Decision (Task 5 +
+   Task 22, spec §12 repair amendment superseding Q18):** `StructuredParser.parse` is `throws`, so a
+   host parser throws `ParserRefusal` itself, guarded by its own `refusesEmptyCompose` predicate.
+   `CaptureDispatch.structuredCapture` does not catch it, `BrowserCapturePipeline.parse` rethrows it,
+   and `AppWiring` gains one `catch` clause that records `.skipped(.parserNoContent)` — the same
+   outcome `CaptureDispatch.parseDetailed` already produces for a refusing native parser. There is
+   **no** separate refusal protocol; one mechanism serves both dispatch paths (ruling F13).
 2. **§14b says the DOM attributes are "gated per parser by `ParserConfig.attributeSet`", but
    `ParserRegistry.forcedAttributes(for:)` is keyed by bundle ID** (Task 5), and a host-routed
    parser has no bundle ID. **Decision:** the `attributeSet` is still declared exactly as §14b
