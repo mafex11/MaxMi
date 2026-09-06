@@ -101,6 +101,15 @@ final class ContentRendererTests: XCTestCase {
         """)
     }
 
+    func testEventWithoutADateStringOmitsTheSeparator() {
+        let content = CapturedContent.calendar([
+            CalendarEvent(title: "Untimed reminder", dateString: "", start: nil, end: nil,
+                          organizer: nil, location: "Room 2", hasConference: false, notes: nil),
+        ])
+        XCTAssertEqual(full(content), "Untimed reminder @Room 2",
+                       "an absent date must not print as a leading em dash")
+    }
+
     func testCalendarNotesKeepFurtherLinesIndented() {
         let content = CapturedContent.calendar([
             CalendarEvent(title: "Review", dateString: "Tue 14:00", start: nil, end: nil,
@@ -192,6 +201,18 @@ final class ContentRendererTests: XCTestCase {
             Region(kind: .dialog, blocks: [Block(type: .paragraph, text: "Quit?")]),
         ], focused: nil, url: "https://example.com/a"))
         XCTAssertEqual(ContentRenderer.render(content, style: .mainOnly(maxChars: 1_000)), "body\nQuit?")
+    }
+
+    func testMainOnlyConcatenatesEveryMainAndDialogRegionInOrder() {
+        let content = CapturedContent.generic(GenericPage(regions: [
+            Region(kind: .dialog, blocks: [Block(type: .paragraph, text: "Quit?")]),
+            Region(kind: .main, blocks: [Block(type: .paragraph, text: "first")]),
+            Region(kind: .sidebar, blocks: [Block(type: .label, text: "Downloads")]),
+            Region(kind: .main, blocks: [Block(type: .paragraph, text: "second")]),
+        ], focused: nil, url: nil))
+        XCTAssertEqual(ContentRenderer.render(content, style: .mainOnly(maxChars: 1_000)),
+                       "first\nsecond\nQuit?",
+                       "every region of a kind is kept, in regionOrder, like .full does")
     }
 
     func testMainOnlyFallsBackToCompactForNonGenericShapes() {

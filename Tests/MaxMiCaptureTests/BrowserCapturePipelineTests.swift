@@ -30,7 +30,7 @@ final class BrowserCapturePipelineTests: XCTestCase {
         )
         XCTAssertEqual(result.webApp, .gmail)
         XCTAssertEqual(result.capture.contentKind, .email)
-        XCTAssertEqual(result.capture.accumulationPolicy, .rollingText)
+        XCTAssertEqual(result.capture.accumulationPolicy, .replace)
         XCTAssertEqual(result.capture.sourceApp, "Web")
         XCTAssertTrue(result.capture.sourceKey.hasPrefix("https://mail.google.com/"))
     }

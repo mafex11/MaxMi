@@ -48,7 +48,8 @@ public struct ParsedCapture: Sendable, Equatable {
 
     /// The typed shape this capture will be stored as (spec 4f rule 2). A convenience for
     /// in-process callers; `CaptureEnvelope.init` is the single write-path resolution site.
-    public var resolvedStructured: CapturedContent {
+    /// Deliberately not public: nothing outside this module should resolve nil `structured`.
+    var resolvedStructured: CapturedContent {
         structured ?? LegacyContentAdapter.adapt(renderedContent: content, kind: contentKind)
     }
 

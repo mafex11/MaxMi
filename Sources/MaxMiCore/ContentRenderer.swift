@@ -41,10 +41,11 @@ public enum ContentRenderer {
             }
             // No region headers and no `URL:` line: the prompt's CONTEXT block (spec 6a)
             // already carries app, window, and url as separate fields.
-            let blocks = page.regions
-                .filter { $0.kind == .main || $0.kind == .dialog }
-                .sorted { orderIndex($0.kind) < orderIndex($1.kind) }
-                .flatMap(\.blocks)
+            // Iterated per kind in `regionOrder`, exactly as `.full` does: `sorted` is not
+            // stable, so two regions of the same kind had no defined order.
+            let blocks = regionOrder
+                .filter { $0 == .main || $0 == .dialog }
+                .flatMap { kind in page.regions.filter { $0.kind == kind }.flatMap(\.blocks) }
             return CaptureAccumulator.bound(renderBlocks(blocks), to: max(4, maxChars))
         }
     }
@@ -101,7 +102,11 @@ public enum ContentRenderer {
     }
 
     public static func renderEvent(_ event: CalendarEvent) -> String {
-        var line = "\(event.dateString) — \(event.title)"
+        // An event without a parsed date is still an event; a bare " — " head would read as one
+        // that starts at an unknown time AND has no title.
+        var line = event.dateString.isEmpty
+            ? event.title
+            : "\(event.dateString) — \(event.title)"
         if let location = event.location, !location.isEmpty { line += " @\(location)" }
         if let organizer = event.organizer, !organizer.isEmpty { line += " / \(organizer)" }
         if event.hasConference { line += " [conference]" }
@@ -136,10 +141,6 @@ public enum ContentRenderer {
         formatter.dateFormat = "MMM d, HH:mm zzz"
         return formatter
     }()
-
-    private static func orderIndex(_ kind: RegionKind) -> Int {
-        regionOrder.firstIndex(of: kind) ?? regionOrder.count
-    }
 
     /// Renders each line as `"\n  " + line`, concatenated in order. Shared by `renderMessage`,
     /// `renderTask`, and `renderEvent` for their multi-line text/notes fields: callers that want

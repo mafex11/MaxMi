@@ -62,6 +62,7 @@ public enum WebAppCaptureParser {
         let typedMessages = isConversation ? messages(in: window) : []
         let structured: CapturedContent
         let preservedBoundaries: Bool
+        let accumulation: CaptureAccumulationPolicy
         // Whether BOUNDING dropped content, which is a separate fact from the tab text having hit
         // the extractor's own cap. Both feed `BrowserCaptureResult.truncated`, which is what the
         // MCP layer discloses as "context was bounded".
@@ -82,6 +83,7 @@ public enum WebAppCaptureParser {
                 truncated = bounded.messages.count < typedMessages.count
             }
             preservedBoundaries = true
+            accumulation = .appendItems
         } else {
             // Generic path: the v2 extractor over the page subtree, with the URL attached.
             var options = GenericPageExtractor.Options()
@@ -100,12 +102,14 @@ public enum WebAppCaptureParser {
             structured = .generic(extracted.page)
             truncated = extracted.truncated
             preservedBoundaries = false
+            // Whole-page semantics (spec 4d): one extraction is the tab's current state, and a
+            // typed page is not legacy-shaped, so `.rollingText` would silently replace anyway.
+            accumulation = .replace
         }
 
         // Kind is NOT derived from the shape: Gmail/Outlook stay .email and every other page
         // stays .webpage (spec 12 Q3).
         let kind: CaptureContentKind = isConversation ? .conversation : (isEmail ? .email : .webpage)
-        let accumulation: CaptureAccumulationPolicy = isConversation ? .appendItems : .rollingText
         let capture = ParsedCapture(
             sourceApp: "Web",
             sourceKey: URLKeyNormalizer.normalize(tab.url),

@@ -56,7 +56,8 @@ final class WebAppStructuredTests: XCTestCase {
         XCTAssertEqual(result.webApp, .gmail)
         XCTAssertEqual(result.capture.contentKind, .email,
                        "kind is not derived from the shape")
-        XCTAssertEqual(result.capture.accumulationPolicy, .rollingText)
+        XCTAssertEqual(result.capture.accumulationPolicy, .replace,
+                       "a typed page is the tab's whole current state")
         XCTAssertEqual(try XCTUnwrap(result.capture.structured).kind, .generic)
         XCTAssertEqual(result.capture.content, ContentRenderer.render(
             try XCTUnwrap(result.capture.structured), style: .full))

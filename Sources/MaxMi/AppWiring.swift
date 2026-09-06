@@ -1639,7 +1639,8 @@ final class AppWiring {
             retryOrGiveUp(
                 app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
                 captureGeneration: captureGeneration, trigger: trigger,
-                startedAtMs: startedAtMs, terminalOutcome: .skipped(.emptyContent)
+                startedAtMs: startedAtMs, parser: effectiveParserName,
+                terminalOutcome: .skipped(.emptyContent)
             )
         } catch {
             SafeLogger.shared.log(
