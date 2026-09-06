@@ -54,8 +54,30 @@ public struct ParserRegistry: Sendable {
         parsers = p
     }
 
+    /// Test seam: a registry with an explicit parser table. `CaptureDispatch`'s not-handled /
+    /// refused / threw branches have to be exercised against parsers that do exactly one of those
+    /// things, and no shipping parser throws a non-refusal error to borrow for that.
+    init(parsers: [String: any SourceParser]) {
+        self.parsers = parsers
+    }
+
     public func parser(for bundleID: String) -> (any SourceParser)? {
         parsers[bundleID]
+    }
+}
+
+/// Thrown by a parser that will not let this window be stored at all, as distinct from returning
+/// nil, which only means "I can't read this shape" and lets the generic extractor stand in.
+///
+/// A conversation parser uses this when a generic capture would be actively wrong: WhatsApp with
+/// no confirmed chat header would otherwise store the sidebar list of every unopened chat.
+public struct ParserRefusal: Error, Sendable, Equatable {
+    /// A fixed, token-safe slug — never captured content, since it is logged verbatim.
+    /// Must satisfy `SafeLogToken(validating:)` or it is dropped from the log line.
+    public let reason: String
+
+    public init(reason: String) {
+        self.reason = reason
     }
 }
 
@@ -108,6 +130,19 @@ public enum CaptureDispatch {
                     event: .parserNoContent,
                     fields: SafeLogFields(parserID: SafeLogToken(validating: parserName))
                 )
+            } catch let refusal as ParserRefusal {
+                // REFUSE, not NOT-HANDLED: the parser has decided a generic capture of this
+                // window would be wrong, so rule 3 does not apply and nothing is stored.
+                SafeLogger.shared.log(
+                    .info,
+                    subsystem: .capture,
+                    event: .parserRefused,
+                    fields: SafeLogFields(
+                        parserID: SafeLogToken(validating: parserName),
+                        outcome: SafeLogToken(validating: refusal.reason)
+                    )
+                )
+                return .noContent
             } catch {
                 SafeLogger.shared.log(
                     .error,
@@ -117,6 +152,9 @@ public enum CaptureDispatch {
                     fields: SafeLogFields(parserID: SafeLogToken(validating: parserName))
                 )
             }
+            // The fallback re-keys this window as "bundleID:windowTitle", so an app whose
+            // dedicated parser split it into per-thread keys collapses into one coarse thread
+            // while it is degraded. Accepted for Phase A; Phase D revisits fallback keying.
             guard let fallback = genericCapture(window: window, app: app) else { return .noContent }
             return .parsedByFallback(fallback, failedParser: parserName)
         }
@@ -124,9 +162,28 @@ public enum CaptureDispatch {
         return .parsed(result)
     }
 
+    /// The `capture_health_events.parser` marker for a degraded capture (spec 8). Composed here
+    /// rather than at each call site so the health ledger and its tests agree on one spelling.
+    public static func fallbackParserID(failedParser: String) -> String {
+        "GenericPageExtractor.v2/fallback/\(failedParser)"
+    }
+
     /// `GenericPageExtractor` is pure and total, so the only nil here is "no readable content".
+    /// A throw is therefore not expected — it is logged rather than swallowed so that if the
+    /// generic path ever does start throwing, it does not disappear as a silent skip.
     private static func genericCapture(window: AXNode, app: AppInfo) -> ParsedCapture? {
-        (try? GenericAXParser().parse(window: window, app: app)) ?? nil
+        do {
+            return try GenericAXParser().parse(window: window, app: app)
+        } catch {
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .capture,
+                event: .parserFailed,
+                error: error,
+                fields: SafeLogFields(parserID: SafeLogToken(validating: "GenericAXParser"))
+            )
+            return nil
+        }
     }
 
     /// Pure decision: should this parsed capture commit or be skipped?

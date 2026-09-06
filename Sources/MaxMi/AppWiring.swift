@@ -1437,9 +1437,12 @@ final class AppWiring {
                               windowTitle: title ?? app.windowTitle,
                               windowID: AXReader.focusedWindowID(pid: pid))
 
+        // Declared outside the `do` so the trailing catch blocks report the parser that actually
+        // ran — the browser pipeline's parser id, or the generic fallback marker — rather than
+        // the registry's static guess for this bundle id.
+        var effectiveParserName = parserName
         do {
             let parsed: ParsedCapture?
-            var effectiveParserName = parserName
             var browserTruncated = false
 
             // Browsers: engine-aware URL extraction followed by semantic web-app routing.
@@ -1486,7 +1489,7 @@ final class AppWiring {
                     // are failing (spec 8). capture_health_events has no free-text note column
                     // and `reason` is only populated for skipped/failed, so the fallback is
                     // encoded in `parser`.
-                    effectiveParserName = "GenericPageExtractor.v2/fallback/\(failedParser)"
+                    effectiveParserName = CaptureDispatch.fallbackParserID(failedParser: failedParser)
                 case .noContent:
                     retryOrGiveUp(
                         app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
@@ -1517,19 +1520,24 @@ final class AppWiring {
             // (coarsen-don't-drop). No parser writes the final source_key directly (spec §3a).
             let cleanKey = ThreadKeyDeriver.derive(parsed)
             if ParserRegistry.whatsAppBundleIDs.contains(app.bundleID),
-               (trigger == .appActivated || trigger == .conversationChanged),
-               !hasStableWhatsAppIdentity(
-                   cleanKey: cleanKey,
-                   app: app,
-                   pid: pid,
-                   confirmationSnapshot: confirmationSnapshot
-               ) {
-                retryOrGiveUp(
-                    app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
-                    captureGeneration: captureGeneration, trigger: trigger,
-                    startedAtMs: startedAtMs, terminalOutcome: .skipped(.parserNoContent)
-                )
-                return
+               (trigger == .appActivated || trigger == .conversationChanged) {
+                switch whatsAppIdentity(
+                    cleanKey: cleanKey,
+                    app: app,
+                    pid: pid,
+                    confirmationSnapshot: confirmationSnapshot
+                ) {
+                case .confirmed:
+                    break
+                case .rejected(let parser):
+                    retryOrGiveUp(
+                        app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
+                        captureGeneration: captureGeneration, trigger: trigger,
+                        startedAtMs: startedAtMs, parser: parser ?? effectiveParserName,
+                        terminalOutcome: .skipped(.parserNoContent)
+                    )
+                    return
+                }
             }
 
             // Decision gate: denylist + per-thread pause. Fail closed on DB error.
@@ -1623,7 +1631,7 @@ final class AppWiring {
             }
         } catch ExtractionError.addressFieldFocused {
             recordCaptureHealth(
-                app: appInfo, trigger: trigger, parser: parserName,
+                app: appInfo, trigger: trigger, parser: effectiveParserName,
                 outcome: .skipped(.addressFieldFocused), startedAtMs: startedAtMs
             )
         } catch ExtractionError.emptyContent, ExtractionError.noWebArea,
@@ -1638,7 +1646,7 @@ final class AppWiring {
                 .error, subsystem: .capture, event: .captureCommitFailed, error: error
             )
             recordCaptureHealth(
-                app: appInfo, trigger: trigger, parser: parserName,
+                app: appInfo, trigger: trigger, parser: effectiveParserName,
                 outcome: .failed(.storeCommitFailed), startedAtMs: startedAtMs
             )
         }
@@ -1660,29 +1668,56 @@ final class AppWiring {
         }
     }
 
-    /// Returns false unless the WhatsApp header/message snapshot is still the same
-    /// conversation after a short settle. This prevents a chat switch from being
-    /// committed under a stale neighboring chat's key.
-    private func hasStableWhatsAppIdentity(
+    /// The result of re-reading a WhatsApp window after a short settle, and — when it fails —
+    /// the parser name the resulting skip belongs to.
+    private enum WhatsAppIdentity {
+        case confirmed
+        /// `parser` overrides the health-ledger parser for the skip; nil means "use the caller's
+        /// own effective parser name".
+        case rejected(parser: String?)
+    }
+
+    /// `.confirmed` only when the WhatsApp header/message snapshot is still the same conversation
+    /// after a short settle. This prevents a chat switch from being committed under a stale
+    /// neighboring chat's key.
+    ///
+    /// A `.parsedByFallback` confirmation is rejected outright: the generic extractor keys on
+    /// "bundleID:windowTitle" and reads no chat header at all, so it cannot corroborate a
+    /// conversation identity — it would confirm every chat equally. The skip is then recorded
+    /// under the fallback marker so the Capture Health window shows WhatsAppParser degrading
+    /// rather than a bare "no content".
+    private func whatsAppIdentity(
         cleanKey: String,
         app: AppInfo,
         pid: pid_t,
         confirmationSnapshot: (window: AXNode, title: String?)?
-    ) -> Bool {
+    ) -> WhatsAppIdentity {
         guard isStillFrontmost(bundleID: app.bundleID, pid: pid),
-              let (window, title) = confirmationSnapshot else { return false }
+              let (window, title) = confirmationSnapshot else { return .rejected(parser: nil) }
         let confirmationApp = AppInfo(
             bundleID: app.bundleID,
             name: app.name,
             windowTitle: title ?? app.windowTitle,
             windowID: AXReader.focusedWindowID(pid: pid)
         )
-        guard case .parsed(let confirmation) = CaptureDispatch.parseDetailed(
+        // A `switch` rather than a `guard case`: a future ParseResult case must be a compile
+        // error here, not a silently confirmed or silently rejected identity.
+        switch CaptureDispatch.parseDetailed(
             window: window,
             app: confirmationApp,
             registry: registry
-        ) else { return false }
-        return ThreadKeyDeriver.derive(confirmation) == cleanKey
+        ) {
+        case .parsed(let confirmation):
+            return ThreadKeyDeriver.derive(confirmation) == cleanKey
+                ? .confirmed
+                : .rejected(parser: nil)
+        case .parsedByFallback(_, let failedParser):
+            return .rejected(
+                parser: CaptureDispatch.fallbackParserID(failedParser: failedParser)
+            )
+        case .noContent, .failed:
+            return .rejected(parser: nil)
+        }
     }
 
     private func toggleGlobalPause() {
@@ -1706,12 +1741,16 @@ final class AppWiring {
         }
     }
 
+    /// `parser` overrides the health-ledger parser name for the terminal skip. nil keeps the
+    /// registry's static name for this bundle id, which is right for every caller that gave up
+    /// before a parser ran.
     private func retryOrGiveUp(app: AppInfo, pid: pid_t, attemptsLeft: Int,
                                captureGeneration: Int, trigger: CaptureTrigger,
-                               startedAtMs: EpochMs, terminalOutcome: CaptureOutcome) {
+                               startedAtMs: EpochMs, parser: String? = nil,
+                               terminalOutcome: CaptureOutcome) {
         guard attemptsLeft > 1 else {
             recordCaptureHealth(
-                app: app, trigger: trigger, parser: captureParserName(for: app.bundleID),
+                app: app, trigger: trigger, parser: parser ?? captureParserName(for: app.bundleID),
                 outcome: terminalOutcome, startedAtMs: startedAtMs
             )
             return

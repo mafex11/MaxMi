@@ -1,4 +1,5 @@
 import XCTest
+import MaxMiCore
 @testable import MaxMiCapture
 
 final class NativeConversationParserTests: XCTestCase {
@@ -29,12 +30,16 @@ final class NativeConversationParserTests: XCTestCase {
         XCTAssertFalse(capture.content.contains("Other Chat"))
     }
 
-    func testEmptyConversationReturnsNil() throws {
+    /// Refuses rather than returning nil: nil would let the generic extractor store the sidebar
+    /// chat list instead (spec 4f rule 3, refusal case).
+    func testEmptyConversationRefusesInsteadOfFallingThrough() throws {
         let empty = AXNode(role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
                            frame: CGRect(x: 0, y: 0, width: 1000, height: 700),
                            focused: false, children: [])
         let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp")
-        XCTAssertNil(try WhatsAppParser().parse(window: empty, app: app))
+        XCTAssertThrowsError(try WhatsAppParser().parse(window: empty, app: app)) { error in
+            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "no-conversation-content"))
+        }
     }
 
     func testWhatsAppReadsElectronSemanticButtonAndHeadingLabels() throws {
@@ -94,7 +99,9 @@ final class NativeConversationParserTests: XCTestCase {
             bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp"
         )
 
-        XCTAssertNil(try WhatsAppParser().parse(window: window, app: app))
+        XCTAssertThrowsError(try WhatsAppParser().parse(window: window, app: app)) { error in
+            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "no-conversation-content"))
+        }
     }
 
     func testWhatsAppRejectsPinnedHeadingWithoutExplicitChatHeaderSemantics() throws {
@@ -119,6 +126,17 @@ final class NativeConversationParserTests: XCTestCase {
             bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp"
         )
 
-        XCTAssertNil(try WhatsAppParser().parse(window: window, app: app))
+        XCTAssertThrowsError(try WhatsAppParser().parse(window: window, app: app)) { error in
+            XCTAssertEqual(error as? ParserRefusal,
+                           ParserRefusal(reason: "unconfirmed-conversation-identity"))
+        }
+    }
+
+    /// A refusal reason is written verbatim into the log line, so it must survive
+    /// `SafeLogToken(validating:)` — otherwise the refusal is recorded without its reason.
+    func testEveryRefusalReasonIsLogTokenSafe() {
+        for reason in ["no-conversation-content", "unconfirmed-conversation-identity"] {
+            XCTAssertEqual(SafeLogToken(validating: reason)?.value, reason)
+        }
     }
 }

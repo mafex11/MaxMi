@@ -30,15 +30,88 @@ final class ParserFallthroughTests: XCTestCase {
                         "the convenience form returns the fallback capture too")
     }
 
+    /// The 8 health-ledger marker has exactly one spelling, produced by exactly one function,
+    /// so the Capture Health window and this assertion cannot drift apart.
     func testFallbackHealthMarkerIsComposedFromTheFailedParserName() {
+        XCTAssertEqual(CaptureDispatch.fallbackParserID(failedParser: "SlackParser"),
+                       "GenericPageExtractor.v2/fallback/SlackParser")
+    }
+
+    func testTheDispatchedFallbacksParserNameFeedsTheMarker() {
         let win = window([text("sidebar noise")], title: "general - Acme - Slack")
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
                           windowTitle: "general - Acme - Slack")
         guard case .parsedByFallback(_, let failedParser) = CaptureDispatch.parseDetailed(
             window: win, app: app, registry: ParserRegistry()
-        ) else { return XCTFail() }
-        XCTAssertEqual("GenericPageExtractor.v2/fallback/\(failedParser)",
+        ) else { return XCTFail("expected a generic fallback") }
+        XCTAssertEqual(CaptureDispatch.fallbackParserID(failedParser: failedParser),
                        "GenericPageExtractor.v2/fallback/SlackParser")
+    }
+
+    // MARK: - Refusal versus not-handled (4f rule 3 refinement)
+
+    /// Returns nil: "I can't read this shape". The generic extractor stands in.
+    private struct NotHandling: SourceParser {
+        func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? { nil }
+    }
+
+    /// Throws `ParserRefusal`: "this window must not be stored at all".
+    private struct Refusing: SourceParser {
+        func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+            throw ParserRefusal(reason: "test-refusal")
+        }
+    }
+
+    /// Throws something else: a bug, not a decision. Degrade rather than lose the capture.
+    private struct Breaking: SourceParser {
+        struct Boom: Error {}
+        func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? { throw Boom() }
+    }
+
+    private func dispatch(_ parser: any SourceParser) -> CaptureDispatch.ParseResult {
+        // Readable generic content is present, so a fallback would definitely produce a capture:
+        // .noContent below can only mean the fallback was never attempted.
+        let win = window([text("readable body")], title: "Some Window")
+        let app = AppInfo(bundleID: "com.example.seam", name: "Seam", windowTitle: "Some Window")
+        return CaptureDispatch.parseDetailed(
+            window: win, app: app,
+            registry: ParserRegistry(parsers: ["com.example.seam": parser])
+        )
+    }
+
+    func testRefusingParserYieldsNoContentAndNoGenericCapture() {
+        XCTAssertEqual(dispatch(Refusing()), .noContent)
+    }
+
+    func testNilReturningParserStillFallsThroughToTheGenericExtractor() {
+        guard case .parsedByFallback(let capture, let failedParser) = dispatch(NotHandling()) else {
+            return XCTFail("expected .parsedByFallback")
+        }
+        XCTAssertEqual(failedParser, "NotHandling")
+        XCTAssertEqual(capture.content, "readable body")
+    }
+
+    func testParserThrowingANonRefusalErrorStillFallsThroughToTheGenericExtractor() {
+        guard case .parsedByFallback(let capture, let failedParser) = dispatch(Breaking()) else {
+            return XCTFail("expected .parsedByFallback")
+        }
+        XCTAssertEqual(failedParser, "Breaking")
+        XCTAssertEqual(capture.content, "readable body")
+    }
+
+    /// The gate this protects in production is `AppWiring.whatsAppIdentity`, which rejects a
+    /// `.parsedByFallback` confirmation. That method is private to the MaxMi app target and reads
+    /// `NSWorkspace.frontmostApplication` and `AXReader`, so it is not reachable from
+    /// MaxMiCaptureTests. What IS testable — and what makes the gate moot for the shipping
+    /// parser — is that WhatsApp refuses instead of falling through in the first place.
+    func testWhatsAppWithNoChatIdentityRefusesRatherThanBeingRekeyedByTheFallback() {
+        let win = window([text("Archived"), text("Some Contact", y: 60)], title: "WhatsApp")
+        let app = AppInfo(bundleID: ParserRegistry.whatsAppBundleIDs[0], name: "WhatsApp",
+                          windowTitle: "WhatsApp")
+        XCTAssertEqual(
+            CaptureDispatch.parseDetailed(window: win, app: app, registry: ParserRegistry()),
+            .noContent
+        )
     }
 
     func testNoContentIsStillReportedWhenEvenTheGenericPathFindsNothing() {

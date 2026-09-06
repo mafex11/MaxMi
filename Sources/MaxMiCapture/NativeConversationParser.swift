@@ -5,7 +5,7 @@ public struct WhatsAppParser: SourceParser {
     public init() {}
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        NativeConversationExtraction.parse(
+        try NativeConversationExtraction.parse(
             window: window,
             app: app,
             sourceApp: "WhatsApp",
@@ -20,7 +20,7 @@ public struct TeamsParser: SourceParser {
     public init() {}
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        NativeConversationExtraction.parse(
+        try NativeConversationExtraction.parse(
             window: window,
             app: app,
             sourceApp: "Microsoft Teams",
@@ -40,6 +40,10 @@ enum NativeConversationExtraction {
         "activity", "chat", "teams", "calendar", "apps", "copilot",
     ]
 
+    /// Throws `ParserRefusal` rather than returning nil when this window is a conversation
+    /// surface it will not let through. Both parsers own apps whose windows are dominated by a
+    /// sidebar chat list, so a generic fall-through would store the titles of conversations the
+    /// user never opened — worse than storing nothing (spec 4f rule 3, refusal case).
     static func parse(
         window: AXNode,
         app: AppInfo,
@@ -47,7 +51,7 @@ enum NativeConversationExtraction {
         keyPrefix: String,
         requiresConversationIdentity: Bool = false,
         allowsFallback: Bool = true
-    ) -> ParsedCapture? {
+    ) throws -> ParsedCapture {
         let boundary = mainPaneBoundary(window)
         let conversation = conversationTitle(
             in: window,
@@ -68,8 +72,16 @@ enum NativeConversationExtraction {
             lines = fallbackMainPaneLines(in: window, mainBoundary: boundary)
         }
         lines = uniqueAdjacent(lines).filter { !isChrome($0) }
-        guard !lines.isEmpty,
-              !requiresConversationIdentity || conversation != nil else { return nil }
+        // Everything on screen was app chrome: a non-chat surface (Teams' Calendar, Activity or
+        // Apps tab; WhatsApp with no chat open), not a message list this parser misread.
+        guard !lines.isEmpty else {
+            throw ParserRefusal(reason: "no-conversation-content")
+        }
+        // WhatsApp only: without a confirmed chat header there is no conversation to key on, so
+        // the content cannot be attributed to a thread at all.
+        guard !requiresConversationIdentity || conversation != nil else {
+            throw ParserRefusal(reason: "unconfirmed-conversation-identity")
+        }
 
         let content = String(lines.joined(separator: "\n").suffix(contentCap))
         let identity = conversation ?? meaningfulWindowTitle(app.windowTitle, excluding: sourceApp) ?? "unknown"
