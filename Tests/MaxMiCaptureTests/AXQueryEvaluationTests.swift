@@ -160,6 +160,51 @@ final class AXQueryEvaluationTests: XCTestCase {
             ["first", "second"])
     }
 
+    func testNestedDescendantSourcesReturnOneMatchingDescendant() {
+        let root = node("AXWindow", children: [
+            node("AXGroup", children: [
+                node("AXGroup", children: [
+                    node("AXStaticText", value: "only"),
+                ]),
+            ]),
+        ])
+
+        XCTAssertEqual(AXQuery.findAll("//AXGroup//AXStaticText", in: root).map(\.value), ["only"])
+    }
+
+    func testNestedDescendantSourcesProduceUniqueResultsInDocumentOrder() {
+        let root = node("AXWindow", children: [
+            node("AXGroup", children: [
+                node("AXStaticText", value: "before"),
+                node("AXGroup", children: [
+                    node("AXStaticText", value: "nested"),
+                ]),
+                node("AXStaticText", value: "after"),
+            ]),
+        ])
+
+        XCTAssertEqual(
+            AXQuery.findAll("//AXGroup//AXStaticText", in: root).map(\.value),
+            ["before", "nested", "after"])
+    }
+
+    #if DEBUG
+    func testNestedDescendantSourcesEvaluateLinearly() {
+        var root = node("AXStaticText", value: "only")
+        for _ in 0..<2_000 {
+            root = node("AXGroup", children: [root])
+        }
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        let matches = AXQuery.findAll("//AXGroup//AXStaticText", in: root)
+        let elapsed = start.duration(to: clock.now)
+
+        XCTAssertEqual(matches.map(\.value), ["only"])
+        XCTAssertLessThan(elapsed, .milliseconds(150))
+    }
+    #endif
+
     func testInvalidPathYieldsNoMatchesInsteadOfCrashing() {
         XCTAssertEqual(AXQuery.findAll("/AXRow[", in: tree()), [])
         XCTAssertNil(AXQuery.find("bogus", in: tree()))

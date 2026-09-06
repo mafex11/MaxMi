@@ -198,17 +198,25 @@ public enum AXQuery {
 
     public static func findAll(_ path: String, in node: AXNode) -> [AXNode] {
         guard let steps = steps(for: path) else { return [] }
-        var current = [node]
+        let root = NodeRef(path: [], node: node)
+        var current = [root]
         for step in steps {
-            var produced: [AXNode] = []
-            for source in current {
-                switch step.axis {
-                case .child:
-                    produced.append(contentsOf: source.children.filter { satisfies($0, step) })
-                case .descendant:
-                    // Pre-order, excluding `source` itself: `//Role` is "somewhere below here".
-                    appendDescendants(of: source, satisfying: step, into: &produced)
+            var produced: [NodeRef] = []
+            switch step.axis {
+            case .child:
+                for source in current {
+                    for (index, child) in source.node.children.enumerated() where satisfies(child, step) {
+                        produced.append(NodeRef(path: source.path + [index], node: child))
+                    }
                 }
+            case .descendant:
+                // One pre-order traversal of the root covers all sources without revisiting
+                // overlapping subtrees. A node is a candidate when an earlier ancestor is a source.
+                appendDescendants(
+                    from: root,
+                    sourcePaths: Set(current.map(\.path)),
+                    satisfying: step,
+                    into: &produced)
             }
             if let index = step.index {
                 current = index >= 0 && index < produced.count ? [produced[index]] : []
@@ -217,16 +225,37 @@ public enum AXQuery {
             }
             if current.isEmpty { return [] }
         }
-        return current
+        return current.map(\.node)
+    }
+
+    private struct NodeRef {
+        let path: [Int]
+        let node: AXNode
     }
 
     private static func appendDescendants(
-        of node: AXNode, satisfying step: Step, into out: inout [AXNode]
+        from root: NodeRef,
+        sourcePaths: Set<[Int]>,
+        satisfying step: Step,
+        into out: inout [NodeRef]
     ) {
-        for child in node.children {
-            if satisfies(child, step) { out.append(child) }
-            appendDescendants(of: child, satisfying: step, into: &out)
+        var path: [Int] = []
+
+        func visit(_ node: AXNode, insideSource: Int) {
+            let isSource = sourcePaths.contains(path)
+            if insideSource > 0, satisfies(node, step) {
+                out.append(NodeRef(path: path, node: node))
+            }
+
+            let childInsideSource = insideSource + (isSource ? 1 : 0)
+            for (index, child) in node.children.enumerated() {
+                path.append(index)
+                visit(child, insideSource: childInsideSource)
+                path.removeLast()
+            }
         }
+
+        visit(root.node, insideSource: 0)
     }
 
     static func satisfies(_ node: AXNode, _ step: Step) -> Bool {
