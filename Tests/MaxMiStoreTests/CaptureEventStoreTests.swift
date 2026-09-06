@@ -305,6 +305,20 @@ final class CaptureEventStoreTests: XCTestCase {
             [.contentDelta, .dialog, .navigation])
     }
 
+    func testNilThreadIDStillProducesEveryCommittedEvent() {
+        let result = CommitResult.committed(
+            versionID: "v1", contentHash: "h",
+            delta: CaptureDelta(addedChars: 3, dialogBlocks: [Block(type: .label, text: "OK")]))
+        let associatedEvents = CaptureEventDecision.events(
+            for: result, trigger: .browserNavigation, hasBrowserURL: true, threadID: "thread-1")
+        let unassociatedEvents = CaptureEventDecision.events(
+            for: result, trigger: .browserNavigation, hasBrowserURL: true, threadID: nil)
+
+        XCTAssertEqual(unassociatedEvents.map(\.kind), associatedEvents.map(\.kind))
+        XCTAssertEqual(unassociatedEvents.map(\.kind), [.contentDelta, .dialog, .navigation])
+        XCTAssertTrue(unassociatedEvents.allSatisfy { $0.threadID == nil })
+    }
+
     func testNavigationTriggerWithoutAURLWarrantsNoNavigationEvent() {
         let result = CommitResult.committed(versionID: "v1", contentHash: "h",
                                            delta: CaptureDelta(addedChars: 3))

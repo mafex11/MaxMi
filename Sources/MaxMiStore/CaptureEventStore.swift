@@ -39,6 +39,19 @@ public struct CaptureEventRecord: Sendable, Equatable {
 /// capture and none for a `.deduplicated` commit" is a rule, and the `MaxMi` executable target has
 /// no test target.
 public enum CaptureEventDecision {
+    /// One event to write for a committed capture. `threadID` is intentionally optional: the
+    /// event is still useful and attributable by `appBundle` when a post-commit thread lookup
+    /// fails or finds no row.
+    public struct Event: Sendable, Equatable {
+        public let kind: CaptureEventKind
+        public let threadID: String?
+
+        public init(kind: CaptureEventKind, threadID: String?) {
+            self.kind = kind
+            self.threadID = threadID
+        }
+    }
+
     public static func kinds(for result: CommitResult, trigger: CaptureTrigger,
                             hasBrowserURL: Bool) -> [CaptureEventKind] {
         // A deduplicated commit changed nothing, so there is nothing to record.
@@ -51,6 +64,19 @@ public enum CaptureEventDecision {
         if !delta.dialogBlocks.isEmpty { kinds.append(.dialog) }
         if trigger == .browserNavigation, hasBrowserURL { kinds.append(.navigation) }
         return kinds
+    }
+
+    /// Preserves every event kind warranted by a commit when its optional thread association is
+    /// unavailable. The writer stores nil as `capture_events.thread_id`, while still recording
+    /// the required app bundle.
+    public static func events(
+        for result: CommitResult,
+        trigger: CaptureTrigger,
+        hasBrowserURL: Bool,
+        threadID: String?
+    ) -> [Event] {
+        kinds(for: result, trigger: trigger, hasBrowserURL: hasBrowserURL)
+            .map { Event(kind: $0, threadID: threadID) }
     }
 }
 

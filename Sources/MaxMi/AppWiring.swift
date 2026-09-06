@@ -1644,14 +1644,22 @@ final class AppWiring {
             // `eligible` is the `isActivityEligible(bundleID:)` answer already bound above —
             // three `Store` reads. It is passed in, never recomputed.
             if case .committed(let versionID, _, let delta) = result {
-                if let eventThreadID = (try? store.threadID(sourceApp: parsed.sourceApp,
-                                                            sourceKey: cleanKey)) ?? nil {
-                    recordCaptureEvents(
-                        app: appInfo, eligible: eligible, threadID: eventThreadID,
-                        versionID: versionID, result: result, delta: delta, trigger: trigger,
-                        browserURL: browserURL, previousURL: previousURL, nowMs: nowMs
+                let eventThreadID: String?
+                do {
+                    eventThreadID = try store.threadID(
+                        sourceApp: parsed.sourceApp, sourceKey: cleanKey)
+                } catch {
+                    SafeLogger.shared.log(
+                        .error, subsystem: .capture, event: .captureEventThreadLookupFailed,
+                        error: error
                     )
+                    eventThreadID = nil
                 }
+                recordCaptureEvents(
+                    app: appInfo, eligible: eligible, threadID: eventThreadID,
+                    versionID: versionID, result: result, delta: delta, trigger: trigger,
+                    browserURL: browserURL, previousURL: previousURL, nowMs: nowMs
+                )
             }
 
             switch result {
@@ -1866,7 +1874,7 @@ final class AppWiring {
         // evaluation, and `finishCapture` already has the answer — so it is a parameter, not a
         // second call.
         eligible: Bool,
-        threadID: String,
+        threadID: String?,
         versionID: String,
         result: CommitResult,
         delta: CaptureDelta,
@@ -1876,17 +1884,17 @@ final class AppWiring {
         nowMs: EpochMs
     ) {
         guard eligible else { return }
-        // The rule for WHICH events a commit warrants is tested in MaxMiStore; this method only
-        // supplies the payloads for the kinds it names.
-        let kinds = CaptureEventDecision.kinds(
-            for: result, trigger: trigger, hasBrowserURL: browserURL != nil)
-        guard !kinds.isEmpty else { return }
+        // The tested decision retains all warranted event kinds when `threadID` is nil; this
+        // method only supplies their payloads.
+        let events = CaptureEventDecision.events(
+            for: result, trigger: trigger, hasBrowserURL: browserURL != nil, threadID: threadID)
+        guard !events.isEmpty else { return }
         do {
-            for kind in kinds {
-                switch kind {
+            for event in events {
+                switch event.kind {
                 case .contentDelta:
                     try store.recordCaptureEvent(
-                        kind: .contentDelta, appBundle: app.bundleID, threadID: threadID,
+                        kind: .contentDelta, appBundle: app.bundleID, threadID: event.threadID,
                         versionID: versionID, trigger: trigger, payload: delta, nowMs: nowMs
                     )
                 case .dialog:
@@ -1894,7 +1902,7 @@ final class AppWiring {
                     // did not have — the comparison happens in `CaptureDelta.between`, the one
                     // place that sees both sides.
                     try store.recordCaptureEvent(
-                        kind: .dialog, appBundle: app.bundleID, threadID: threadID,
+                        kind: .dialog, appBundle: app.bundleID, threadID: event.threadID,
                         versionID: versionID, trigger: trigger,
                         payload: DialogEventPayload(
                             blocks: DialogEventPayload.capped(delta.dialogBlocks)),
@@ -1906,7 +1914,7 @@ final class AppWiring {
                     // rather than a `!` so a future change to the rule cannot crash a capture.
                     guard let newURL = browserURL else { continue }
                     try store.recordCaptureEvent(
-                        kind: .navigation, appBundle: app.bundleID, threadID: threadID,
+                        kind: .navigation, appBundle: app.bundleID, threadID: event.threadID,
                         versionID: versionID, trigger: trigger,
                         payload: NavigationEventPayload(fromURL: previousURL, toURL: newURL),
                         nowMs: nowMs
