@@ -129,7 +129,7 @@ public enum ContentRenderer {
 
     /// `DateFormatter` is thread-safe for formatting on macOS. Held once rather than rebuilt
     /// per message: a rendered conversation can carry hundreds of messages per capture.
-    nonisolated(unsafe) private static let timestampFormatter: DateFormatter = {
+    private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
