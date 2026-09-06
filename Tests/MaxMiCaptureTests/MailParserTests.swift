@@ -8,14 +8,14 @@ final class MailParserTests: XCTestCase {
     func testParsesAccountAttributedLines() throws {
         let raw = """
         iCloud » Blinkist <hello@mail.blinkist.com> | Closes tomorrow — 75% off
-        sudhanshu@layerpath.com » vercel[bot] <notifications@github.com> | Re: [PR #2106]
-        paymafex@gmail.com » Team Razorpay <noreply@razorpay.com> | Update your KYC
+        sudhanshu@example.invalid » vercel[bot] <notifications@github.com> | Re: [PR #2106]
+        payments@example.invalid » Team Razorpay <noreply@razorpay.com> | Update your KYC
         """
         let cap = try XCTUnwrap(MailParser.makeCapture(fromScriptOutput: raw, windowTitle: "Inbox"))
         XCTAssertEqual(cap.sourceApp, "Mail")
         XCTAssertEqual(cap.sourceKey, "mail:inbox")
         XCTAssertTrue(cap.content.contains("Blinkist"))
-        XCTAssertTrue(cap.content.contains("(From: sudhanshu@layerpath.com » vercel[bot]"))
+        XCTAssertTrue(cap.content.contains("(From: sudhanshu@example.invalid » vercel[bot]"))
         XCTAssertTrue(cap.content.contains("Razorpay"))
     }
 

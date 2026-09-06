@@ -25,10 +25,10 @@ final class TerminalSegmentationTests: XCTestCase {
 
     func testUserAtHostPromptSplitsCommandsAndOutput() throws {
         let blob = """
-        sudhanshu@mac ~/code/MaxMi % swift build
+        dev@mac ~/code/MaxMi % swift build
         Compiling MaxMi
         Build complete
-        sudhanshu@mac ~/code/MaxMi % swift test
+        dev@mac ~/code/MaxMi % swift test
         2 failures
         """
         let session = try session(try TerminalParser().parseStructured(window: window(blob), app: app()))
@@ -43,9 +43,9 @@ final class TerminalSegmentationTests: XCTestCase {
         // Spelled as an array so the bare prompt's trailing space (what a shell actually leaves
         // after the marker) survives editors that strip trailing whitespace.
         let blob = [
-            "sudhanshu@mac ~/code/MaxMi % swift test",
+            "dev@mac ~/code/MaxMi % swift test",
             "2 failures",
-            "sudhanshu@mac ~/code/MaxMi % ",
+            "dev@mac ~/code/MaxMi % ",
         ].joined(separator: "\n")
         let session = try session(try TerminalParser().parseStructured(window: window(blob), app: app()))
         XCTAssertEqual(session.segments.map(\.command), ["swift test"])
@@ -72,7 +72,7 @@ final class TerminalSegmentationTests: XCTestCase {
     /// Ruling F2: the prompt match runs through the marker, so the command never carries the
     /// prompt's cwd or the `%` itself.
     func testCommandExcludesThePromptPrefix() throws {
-        let blob = "sudhanshu@mac ~/code/MaxMi % git commit -m \"ship it\"\ndone"
+        let blob = "dev@mac ~/code/MaxMi % git commit -m \"ship it\"\ndone"
         let session = try session(try TerminalParser().parseStructured(window: window(blob), app: app()))
         XCTAssertEqual(session.segments.map(\.command), ["git commit -m \"ship it\""])
         XCTAssertEqual(session.segments.map(\.output), ["done"])
@@ -81,7 +81,7 @@ final class TerminalSegmentationTests: XCTestCase {
     func testOutputBeforeTheFirstPromptBecomesACommandlessSegment() throws {
         let blob = """
         welcome banner
-        sudhanshu@mac ~/code/MaxMi % ls
+        dev@mac ~/code/MaxMi % ls
         a b c
         """
         let session = try session(try TerminalParser().parseStructured(window: window(blob), app: app()))
@@ -101,7 +101,7 @@ final class TerminalSegmentationTests: XCTestCase {
 
     func testCaptureRendersTheSegmentsAndKeepsKeyKindAndPolicy() throws {
         let blob = """
-        sudhanshu@mac ~/code/MaxMi % swift test
+        dev@mac ~/code/MaxMi % swift test
         2 failures
         """
         let capture = try XCTUnwrap(try TerminalParser().parse(window: window(blob), app: app()))
@@ -126,7 +126,7 @@ final class TerminalSegmentationTests: XCTestCase {
     func testOversizeScrollbackDropsOldestSegments() throws {
         var lines: [String] = []
         for index in 0..<400 {
-            lines.append("sudhanshu@mac ~/code/MaxMi % echo \(index)")
+            lines.append("dev@mac ~/code/MaxMi % echo \(index)")
             lines.append(String(repeating: "y", count: 40))
         }
         let session = try session(try TerminalParser().parseStructured(
