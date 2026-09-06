@@ -1,0 +1,24 @@
+{
+  "role": "AXWindow", "value": null, "title": "Attributes", "url": null,
+  "frame": {"x":100,"y":80,"width":800,"height":600}, "focused": false,
+  "children": [
+    {"role": "AXHeading", "value": "Section one", "title": null, "url": null,
+     "frame": {"x":110,"y":100,"width":400,"height":24}, "focused": false,
+     "headingLevel": 3, "children": []},
+    {"role": "AXTextField", "value": "typed text", "title": null, "url": null,
+     "frame": {"x":110,"y":140,"width":400,"height":24}, "focused": true,
+     "placeholder": "Search", "selectedText": "typed", "children": []},
+    {"role": "AXTextField", "value": null, "title": null, "url": null,
+     "frame": {"x":110,"y":180,"width":400,"height":24}, "focused": false,
+     "subrole": "AXSecureTextField", "children": []},
+    {"role": "AXRow", "value": null, "title": null, "url": null,
+     "frame": {"x":110,"y":220,"width":600,"height":20}, "focused": false,
+     "selected": true, "children": [
+       {"role": "AXStaticText", "value": "Report.pdf", "title": null, "url": null,
+        "frame": {"x":120,"y":220,"width":200,"height":16}, "focused": false, "children": []}
+     ]},
+    {"role": "AXGroup", "value": null, "title": "collapsed", "url": null,
+     "frame": {"x":110,"y":260,"width":600,"height":20}, "focused": false,
+     "hidden": true, "children": []}
+  ]
+}

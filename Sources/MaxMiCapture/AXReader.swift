@@ -7,6 +7,9 @@ import AppKit
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 public enum AXReader {
+    /// Roles whose placeholder and selected-text are worth an extra AX round trip.
+    static let textEntryRoles: Set<String> = ["AXTextArea", "AXTextField", "AXSearchField", "AXComboBox"]
+
     /// The CGWindowID of the app's currently focused window, or nil. Stable while the window lives.
     public static func focusedWindowID(pid: pid_t) -> UInt32? {
         let app = AXUIElementCreateApplication(pid)
@@ -46,6 +49,16 @@ public enum AXReader {
         return nil
     }
 
+    /// Shallow read of the app's focused UI element, for the case where the window snapshot
+    /// contains no node with `focused == true` (virtualised trees, web areas). `maxDepth: 1`
+    /// keeps this to the element plus its immediate children.
+    public static func focusedElementSnapshot(pid: pid_t) -> AXNode? {
+        let app = AXUIElementCreateApplication(pid)
+        guard let element = copyAttr(app, kAXFocusedUIElementAttribute) as! AXUIElement? else { return nil }
+        var budget = 64
+        return convert(element, depth: 0, maxDepth: 1, budget: &budget)
+    }
+
     /// A window subtree is "dormant" if it has essentially no descendants or carries no text/URL —
     /// the empty shell a Chromium/Electron app returns before its AX tree wakes.
     private static func isDormant(_ node: AXNode) -> Bool {
@@ -74,6 +87,18 @@ public enum AXReader {
         let identifier = copyAttr(el, kAXIdentifierAttribute) as? String
         let label = (copyAttr(el, kAXDescriptionAttribute) as? String)
             ?? (copyAttr(el, kAXHelpAttribute) as? String)
+        // Three unconditional extra reads: region detection needs subrole, table rows need
+        // selected, and hidden containers must never be walked for text.
+        let subrole = copyAttr(el, kAXSubroleAttribute) as? String
+        let selected = (copyAttr(el, kAXSelectedAttribute) as? Bool) ?? false
+        let hidden = (copyAttr(el, "AXHidden") as? Bool) ?? false
+        // Conditional reads: keep the per-node cost off the roles that cannot carry them.
+        let headingLevel = role == "AXHeading"
+            ? (copyAttr(el, "AXHeadingLevel") as? NSNumber)?.intValue
+            : nil
+        let isTextEntry = Self.textEntryRoles.contains(role)
+        let placeholder = isTextEntry ? copyAttr(el, kAXPlaceholderValueAttribute) as? String : nil
+        let selectedText = isTextEntry ? copyAttr(el, kAXSelectedTextAttribute) as? String : nil
         var frame: CGRect? = nil
         if let v = copyAttr(el, "AXFrame") {
             var r = CGRect.zero
@@ -89,7 +114,9 @@ public enum AXReader {
         }
         return AXNode(role: role, value: value, title: title, url: url,
                       frame: frame, focused: focused, children: children,
-                      identifier: identifier, label: label)
+                      identifier: identifier, label: label,
+                      subrole: subrole, headingLevel: headingLevel, selected: selected,
+                      placeholder: placeholder, selectedText: selectedText, hidden: hidden)
     }
 
     private static func copyAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {

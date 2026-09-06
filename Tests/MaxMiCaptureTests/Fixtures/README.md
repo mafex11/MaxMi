@@ -15,5 +15,6 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `safari-domain-only.json` | Safari address fallback shape | `BrowserTabExtractor` |
 | `slack-window.json` | Native Slack message-row shape | `SlackParser` |
 | `zen-meet.json` | Gecko web-area shape | blocked meeting URL |
+| `ax-attributes.json` | Hand-authored attribute coverage shape | `AXNode` decoding of subrole/headingLevel/selected/placeholder/selectedText/hidden |
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the minimum role/frame structure required for a regression test.
