@@ -135,6 +135,25 @@ final class AXQueryHelperTests: XCTestCase {
         XCTAssertEqual(AXQuery.collectStaticTexts(in: root), ["kept"])
     }
 
+    func testCollectStaticTextsSkipsSecureFieldSubtrees() {
+        let secureField = AXNode(
+            role: "AXTextField", value: "hunter2", title: nil, url: nil,
+            frame: CGRect(x: 0, y: 0, width: 80, height: 16), focused: false,
+            children: [text("hunter2", y: 0, x: 0)], identifier: nil, label: nil,
+            subrole: GenericPageExtractor.secureSubrole, headingLevel: nil, selected: false,
+            placeholder: nil, selectedText: nil, hidden: false, domClassList: nil,
+            domIdentifier: nil)
+        let root = node("AXGroup", children: [
+            secureField,
+            text("hello", y: 20, x: 0),
+        ])
+
+        let values = AXQuery.collectStaticTexts(in: root)
+
+        XCTAssertEqual(values, ["hello"])
+        XCTAssertFalse(values.contains("hunter2"))
+    }
+
     func testCollectStaticTextsDropsAdjacentDuplicates() {
         let row = node("AXRow", children: [
             text("Report.pdf", y: 10, x: 0),

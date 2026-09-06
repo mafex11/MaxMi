@@ -73,6 +73,7 @@ public extension AXQuery {
         var found: [AXNode] = []
         func visit(_ current: AXNode) {
             if menuRoles.contains(current.role) || current.hidden { return }
+            if current.subrole == GenericPageExtractor.secureSubrole { return }
             if current.role == "AXStaticText" { found.append(current) }
             for child in current.children { visit(child) }
         }
