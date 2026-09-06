@@ -20,6 +20,18 @@ public enum AXReader {
         return _AXUIElementGetWindow(window, &wid) == .success && wid != 0 ? wid : nil
     }
 
+    /// The title of the app's currently focused window, or nil. Two AX round trips, which is why
+    /// it is a separate call rather than part of `focusedWindowID`: only the focus-event path
+    /// needs it, and it must not slow the capture path down.
+    public static func focusedWindowTitle(pid: pid_t) -> String? {
+        let app = AXUIElementCreateApplication(pid)
+        guard let window = copyAttr(app, kAXFocusedWindowAttribute) as! AXUIElement?
+                ?? copyAttr(app, "AXMainWindow") as! AXUIElement?
+                ?? (copyAttr(app, kAXWindowsAttribute) as? [AXUIElement])?.first else { return nil }
+        let title = copyAttr(window, kAXTitleAttribute) as? String
+        return title?.isEmpty == true ? nil : title
+    }
+
     public static func snapshotFrontmostWindow(pid: pid_t, maxNodes: Int = 20_000, maxDepth: Int = 40) -> (window: AXNode, title: String?)? {
         let app = AXUIElementCreateApplication(pid)
         // Chromium/Electron apps (Warp, Slack, Notion) keep their AX tree dormant until an

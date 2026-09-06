@@ -1089,6 +1089,30 @@ final class AppWiring {
                 .error, subsystem: .activity, event: .activityStateWriteFailed, error: error
             )
         }
+
+        // A focus event has no thread and no capture attempt behind it: it fires before parsing,
+        // which is exactly why capture_events.thread_id is nullable (spec 12 Q4). Recorded after
+        // the visit so a failed event write never costs the visit. The window title is content,
+        // so the payload is encrypted like every other one.
+        do {
+            try store.recordCaptureEvent(
+                kind: .focus,
+                appBundle: app.bundleID,
+                threadID: nil,
+                versionID: nil,
+                trigger: .unknown,
+                payload: FocusEventPayload(
+                    bundleID: app.bundleID,
+                    appLabel: app.name,
+                    windowTitle: AXReader.focusedWindowTitle(pid: pid)
+                ),
+                nowMs: nowMs
+            )
+        } catch {
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .captureEventWriteFailed, error: error
+            )
+        }
     }
 
     private func isActivityEligible(bundleID: String) -> Bool {
@@ -1444,6 +1468,9 @@ final class AppWiring {
         do {
             let parsed: ParsedCapture?
             var browserTruncated = false
+            /// The URL this capture navigated TO, for a `navigation` event. Non-nil only on the
+            /// browser path — a native window has no URL to report.
+            var browserURL: String?
 
             // Browsers: engine-aware URL extraction followed by semantic web-app routing.
             if let browser = ApplicationRegistry.browser(for: app.bundleID) {
@@ -1452,6 +1479,7 @@ final class AppWiring {
                 )
                 effectiveParserName = result.parserID
                 browserTruncated = result.truncated
+                browserURL = result.url
                 guard !Denylist.isBlockedWebURL(result.url) else {
                     recordCaptureHealth(
                         app: appInfo, trigger: trigger, parser: effectiveParserName,
@@ -1575,6 +1603,12 @@ final class AppWiring {
             // parser cannot see (the tab text hitting BrowserTabExtractor's cap). The old
             // `content.count >= 8_000` guess false-positived on every 8k-32k document.
             let wasTruncated = browserTruncated || parsed.truncated
+            // Read BEFORE the commit overwrites latest_contexts. Only a browser navigation needs
+            // it, so no other capture pays for the read.
+            let previousURL: String? = trigger == .browserNavigation
+                ? ((try? store.previousContextURL(sourceApp: parsed.sourceApp,
+                                                  sourceKey: cleanKey)) ?? nil)
+                : nil
             let envelope = parsed.envelope(
                 cleanSourceKey: cleanKey,
                 parserID: effectiveParserName,
@@ -1602,6 +1636,21 @@ final class AppWiring {
                             .error, subsystem: .activity, event: .activityCaptureFailed, error: error
                         )
                     }
+                }
+            }
+
+            // Events are derived signals, so a failed write is logged and dropped — never
+            // allowed to fail the capture that produced it.
+            // `eligible` is the `isActivityEligible(bundleID:)` answer already bound above —
+            // three `Store` reads. It is passed in, never recomputed.
+            if case .committed(let versionID, _, let delta) = result {
+                if let eventThreadID = (try? store.threadID(sourceApp: parsed.sourceApp,
+                                                            sourceKey: cleanKey)) ?? nil {
+                    recordCaptureEvents(
+                        app: appInfo, eligible: eligible, threadID: eventThreadID,
+                        versionID: versionID, result: result, delta: delta, trigger: trigger,
+                        browserURL: browserURL, previousURL: previousURL, nowMs: nowMs
+                    )
                 }
             }
 
@@ -1802,6 +1851,74 @@ final class AppWiring {
             // Diagnostics must never break capture or recursively record their own failure.
             SafeLogger.shared.log(
                 .error, subsystem: .capture, event: .captureHealthWriteFailed
+            )
+        }
+    }
+
+    /// The `content_delta`, `dialog` and `navigation` events for one committed capture.
+    /// `finishCapture` is the only site that knows the app, the trigger and the previous URL
+    /// (spec 12 Q12), so this is deliberately not in the store.
+    ///
+    /// A `.deduplicated` commit writes nothing: nothing changed, so there is nothing to record.
+    private func recordCaptureEvents(
+        app: AppInfo,
+        // `isActivityEligible(bundleID:)`, evaluated once by the caller. Three `Store` reads per
+        // evaluation, and `finishCapture` already has the answer — so it is a parameter, not a
+        // second call.
+        eligible: Bool,
+        threadID: String,
+        versionID: String,
+        result: CommitResult,
+        delta: CaptureDelta,
+        trigger: CaptureTrigger,
+        browserURL: String?,
+        previousURL: String?,
+        nowMs: EpochMs
+    ) {
+        guard eligible else { return }
+        // The rule for WHICH events a commit warrants is tested in MaxMiStore; this method only
+        // supplies the payloads for the kinds it names.
+        let kinds = CaptureEventDecision.kinds(
+            for: result, trigger: trigger, hasBrowserURL: browserURL != nil)
+        guard !kinds.isEmpty else { return }
+        do {
+            for kind in kinds {
+                switch kind {
+                case .contentDelta:
+                    try store.recordCaptureEvent(
+                        kind: .contentDelta, appBundle: app.bundleID, threadID: threadID,
+                        versionID: versionID, trigger: trigger, payload: delta, nowMs: nowMs
+                    )
+                case .dialog:
+                    // Non-empty only when a `.dialog` region appeared that the previous capture
+                    // did not have — the comparison happens in `CaptureDelta.between`, the one
+                    // place that sees both sides.
+                    try store.recordCaptureEvent(
+                        kind: .dialog, appBundle: app.bundleID, threadID: threadID,
+                        versionID: versionID, trigger: trigger,
+                        payload: DialogEventPayload(
+                            blocks: DialogEventPayload.capped(delta.dialogBlocks)),
+                        nowMs: nowMs
+                    )
+                case .navigation:
+                    // `kinds` only contains `.navigation` when `browserURL != nil`, so the
+                    // force-unwrap-free fallback below is unreachable; it is written as a `guard`
+                    // rather than a `!` so a future change to the rule cannot crash a capture.
+                    guard let newURL = browserURL else { continue }
+                    try store.recordCaptureEvent(
+                        kind: .navigation, appBundle: app.bundleID, threadID: threadID,
+                        versionID: versionID, trigger: trigger,
+                        payload: NavigationEventPayload(fromURL: previousURL, toURL: newURL),
+                        nowMs: nowMs
+                    )
+                case .focus, .typing:
+                    // Written by `handleFocusChange` and `recordTypingEvent`, not by a commit.
+                    continue
+                }
+            }
+        } catch {
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .captureEventWriteFailed, error: error
             )
         }
     }

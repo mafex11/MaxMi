@@ -32,6 +32,28 @@ public struct CaptureEventRecord: Sendable, Equatable {
     }
 }
 
+/// Which events one commit warrants, in write order.
+///
+/// The rule lives here, not in `AppWiring`, so it is a unit test: `AppWiring` owns the app, the
+/// trigger and the previous URL (spec 12 Q12), but "one `content_delta` per committed changing
+/// capture and none for a `.deduplicated` commit" is a rule, and the `MaxMi` executable target has
+/// no test target.
+public enum CaptureEventDecision {
+    public static func kinds(for result: CommitResult, trigger: CaptureTrigger,
+                            hasBrowserURL: Bool) -> [CaptureEventKind] {
+        // A deduplicated commit changed nothing, so there is nothing to record.
+        guard case .committed(_, _, let delta) = result else { return [] }
+        var kinds: [CaptureEventKind] = []
+        // NOT `!delta.isEmpty`: a .tasks or .calendar delta carries no arrays, so `isEmpty` is
+        // always true for those two shapes (spec 5a) and gating on it would drop every Reminders
+        // and Calendar event.
+        if delta.hasRecordableChange { kinds.append(.contentDelta) }
+        if !delta.dialogBlocks.isEmpty { kinds.append(.dialog) }
+        if trigger == .browserNavigation, hasBrowserURL { kinds.append(.navigation) }
+        return kinds
+    }
+}
+
 extension Store {
     /// Records one capture event with an encrypted JSON payload, and bounds the ledger by AGE
     /// (30 days) rather than by row count — an activity window may reasonably look back a month.
@@ -125,5 +147,47 @@ extension Store {
             trigger: trigger,
             payloadJSON: (row["payload_ciphertext"] as String?).map(decryptOrMarker)
         )
+    }
+
+    // MARK: - Event context lookups
+
+    /// The thread id for an app + clean source key, or nil when the thread does not exist yet.
+    /// One indexed read on the existing `UNIQUE(source_app, source_key)`.
+    ///
+    /// Separate from `threadID(forKey:)`, which ignores the app and throws: an event write must
+    /// not fail a capture, and two apps can legitimately share a source key.
+    public func threadID(sourceApp: String, sourceKey: String) throws -> String? {
+        try db.dbQueue.read { d in
+            try String.fetchOne(
+                d, sql: "SELECT id FROM threads WHERE source_app=? AND source_key=?",
+                arguments: [sourceApp, sourceKey])
+        }
+    }
+
+    /// The URL currently stored for a thread, for a `navigation` event's `oldURL`. Must be read
+    /// BEFORE `commitCapture`, which overwrites the row.
+    ///
+    /// nil for a thread that does not exist, for a shape that has no URL, and for an unreadable
+    /// payload — all of which mean "no previous URL to report", never an error.
+    public func previousContextURL(sourceApp: String, sourceKey: String) throws -> String? {
+        let row = try db.dbQueue.read { d in
+            try Row.fetchOne(d, sql: """
+                SELECT c.content_ciphertext, c.structured_ciphertext, c.content_kind
+                FROM latest_contexts c JOIN threads t ON t.id = c.thread_id
+                WHERE t.source_app=? AND t.source_key=?
+                """, arguments: [sourceApp, sourceKey])
+        }
+        guard let row else { return nil }
+        let kind = (row["content_kind"] as String?)
+            .flatMap(CaptureContentKind.init(rawValue:)) ?? .generic
+        let structured = structuredOrLegacy(
+            row["structured_ciphertext"] as String?,
+            renderedContent: decryptOrMarker(row["content_ciphertext"]),
+            kind: kind)
+        switch structured {
+        case .generic(let page):    return page.url
+        case .document(let value):  return value.url
+        default:                    return nil
+        }
     }
 }

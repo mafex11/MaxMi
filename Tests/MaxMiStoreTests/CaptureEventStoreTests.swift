@@ -103,6 +103,11 @@ final class CaptureEventStoreTests: XCTestCase {
         XCTAssertEqual(try decode(TypingEvent.self, from: records[2]).insertedText, " world")
         XCTAssertEqual(try decode(NavigationEventPayload.self, from: records[3]).fromURL,
                        "https://example.com/a")
+        let navigationJSON = try XCTUnwrap(records[3].payloadJSON)
+        XCTAssertTrue(navigationJSON.contains("\"oldURL\""))
+        XCTAssertTrue(navigationJSON.contains("\"newURL\""))
+        XCTAssertFalse(navigationJSON.contains("\"fromURL\""))
+        XCTAssertFalse(navigationJSON.contains("\"toURL\""))
     }
 
     func testHourBucketAndIdentifierAreDerivedFromTheTimestamp() throws {
@@ -224,5 +229,88 @@ final class CaptureEventStoreTests: XCTestCase {
     func testDialogPayloadKeepsASingleOversizeBlock() {
         let one = [Block(type: .paragraph, text: String(repeating: "d", count: 5_000))]
         XCTAssertEqual(DialogEventPayload.capped(one).count, 1)
+    }
+
+    func testThreadIDIsScopedToTheSourceApp() throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Notes", sourceKey: "shared", sourceTitle: "N", content: "n"),
+            nowMs: t0)
+        let notes = try XCTUnwrap(store.threadID(sourceApp: "Notes", sourceKey: "shared"))
+        XCTAssertEqual(notes, try store.threadID(forKey: "shared"))
+        XCTAssertNil(try store.threadID(sourceApp: "Web", sourceKey: "shared"))
+        XCTAssertNil(try store.threadID(sourceApp: "Notes", sourceKey: "absent"))
+    }
+
+    func testPreviousContextURLReadsTheStoredGenericPageURL() throws {
+        let page = GenericPage(
+            regions: [Region(kind: .main, blocks: [Block(type: .paragraph, text: "body")])],
+            focused: nil, url: "https://example.com/a")
+        _ = try store.commitCapture(
+            CaptureEnvelope(
+                sourceApp: "Web", sourceKey: "example.com/a", sourceTitle: "A", content: "",
+                contentKind: .webpage, parserID: "test", parserVersion: 2,
+                accumulationPolicy: .replace, offscreenPolicy: .visibleOnly(),
+                trigger: .browserNavigation, truncated: false, structured: .generic(page)),
+            nowMs: t0)
+        XCTAssertEqual(try store.previousContextURL(sourceApp: "Web", sourceKey: "example.com/a"),
+                       "https://example.com/a")
+        XCTAssertNil(try store.previousContextURL(sourceApp: "Web", sourceKey: "absent"))
+    }
+
+    func testPreviousContextURLIsNilForAShapeWithoutOne() throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Notes", sourceKey: "note:one", sourceTitle: "N", content: "n"),
+            nowMs: t0)
+        XCTAssertNil(try store.previousContextURL(sourceApp: "Notes", sourceKey: "note:one"))
+    }
+
+    // MARK: - Which events a commit warrants
+
+    func testDeduplicatedCommitWarrantsNoEvents() {
+        XCTAssertTrue(CaptureEventDecision.kinds(
+            for: .deduplicated, trigger: .browserNavigation, hasBrowserURL: true).isEmpty)
+    }
+
+    func testCommittedChangingCaptureWarrantsExactlyOneContentDelta() {
+        let result = CommitResult.committed(
+            versionID: "v1", contentHash: "h",
+            delta: CaptureDelta(addedBlocks: [Block(type: .paragraph, text: "x")], addedChars: 1))
+        let kinds = CaptureEventDecision.kinds(for: result, trigger: .periodic,
+                                              hasBrowserURL: false)
+        XCTAssertEqual(kinds, [.contentDelta])
+        XCTAssertEqual(kinds.filter { $0 == .contentDelta }.count, 1)
+    }
+
+    /// The .tasks/.calendar trap: `isEmpty` is true, so gating on it would write nothing.
+    func testCharCountOnlyDeltaStillWarrantsAContentDelta() {
+        let result = CommitResult.committed(versionID: "v1", contentHash: "h",
+                                           delta: CaptureDelta(addedChars: 12))
+        XCTAssertEqual(CaptureEventDecision.kinds(for: result, trigger: .periodic,
+                                                  hasBrowserURL: false), [.contentDelta])
+    }
+
+    func testUnchangedCommitWarrantsNoContentDelta() {
+        let result = CommitResult.committed(versionID: "v1", contentHash: "h", delta: .empty)
+        XCTAssertTrue(CaptureEventDecision.kinds(for: result, trigger: .periodic,
+                                                 hasBrowserURL: false).isEmpty)
+    }
+
+    func testAppearingDialogAndBrowserNavigationAddTheirOwnKinds() {
+        let result = CommitResult.committed(
+            versionID: "v1", contentHash: "h",
+            delta: CaptureDelta(addedChars: 3, dialogBlocks: [Block(type: .label, text: "OK")]))
+        XCTAssertEqual(
+            CaptureEventDecision.kinds(for: result, trigger: .browserNavigation,
+                                       hasBrowserURL: true),
+            [.contentDelta, .dialog, .navigation])
+    }
+
+    func testNavigationTriggerWithoutAURLWarrantsNoNavigationEvent() {
+        let result = CommitResult.committed(versionID: "v1", contentHash: "h",
+                                           delta: CaptureDelta(addedChars: 3))
+        XCTAssertEqual(
+            CaptureEventDecision.kinds(for: result, trigger: .browserNavigation,
+                                       hasBrowserURL: false),
+            [.contentDelta])
     }
 }
