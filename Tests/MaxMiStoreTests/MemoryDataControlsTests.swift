@@ -269,10 +269,14 @@ final class MemoryDataControlsTests: XCTestCase {
                          content: "content \(threadKey)"),
             nowMs: atMs
         )
+        try recordCaptureEvent(atMs: atMs, threadID: try store.threadID(forKey: threadKey))
+    }
+
+    private func recordCaptureEvent(atMs: EpochMs, threadID: String?) throws {
         try store.recordCaptureEvent(
             kind: .contentDelta,
             appBundle: "com.example.web",
-            threadID: try store.threadID(forKey: threadKey),
+            threadID: threadID,
             versionID: nil,
             trigger: .periodic,
             payload: CaptureDelta(addedChars: 4),
@@ -282,19 +286,28 @@ final class MemoryDataControlsTests: XCTestCase {
 
     func testPruneDeletesCaptureEventsOlderThanTheCutoffAndCountsThem() throws {
         try seedCaptureEvent(atMs: t0, threadKey: "old")
+        try recordCaptureEvent(atMs: t0 + 100_000, threadID: try store.threadID(forKey: "old"))
         try seedCaptureEvent(atMs: t0 + 100_000, threadKey: "new")
+        try recordCaptureEvent(atMs: t0, threadID: nil)
+        try recordCaptureEvent(atMs: t0 + 100_000, threadID: nil)
 
         let result = try store.pruneMemory(olderThan: t0 + 50_000)
-        XCTAssertEqual(result.events, 1)
+        XCTAssertEqual(result.events, 3)
         let remaining = try store.recentCaptureEvents()
-        XCTAssertEqual(remaining.count, 1)
-        XCTAssertEqual(remaining.first?.atMs, t0 + 100_000)
+        let newThreadID = try store.threadID(forKey: "new")
+        XCTAssertEqual(remaining.count, 2)
+        XCTAssertTrue(remaining.contains {
+            $0.threadID == newThreadID && $0.atMs == t0 + 100_000
+        })
+        XCTAssertTrue(remaining.contains { $0.threadID == nil && $0.atMs == t0 + 100_000 })
+        XCTAssertFalse(remaining.contains { $0.threadID == nil && $0.atMs == t0 })
     }
 
     func testDeleteAllMemoryRemovesCaptureEventsAndCountsThem() throws {
         try seedCaptureEvent(atMs: t0, threadKey: "one")
+        try recordCaptureEvent(atMs: t0, threadID: nil)
         let result = try store.deleteAllMemory()
-        XCTAssertEqual(result.events, 1)
+        XCTAssertEqual(result.events, 2)
         XCTAssertTrue(try store.recentCaptureEvents().isEmpty)
     }
 

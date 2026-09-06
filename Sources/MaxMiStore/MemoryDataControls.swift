@@ -97,10 +97,13 @@ extension Store {
             let threadCount = try Int.fetchOne(database, sql: "SELECT count(*) FROM threads WHERE updated_at < ?", arguments: [cutoffMs]) ?? 0
             let versionCount = try Int.fetchOne(database, sql: "SELECT count(*) FROM versions WHERE committed_at < ?", arguments: [cutoffMs]) ?? 0
             let factCount = try Int.fetchOne(database, sql: "SELECT count(*) FROM derivatives WHERE committed_at < ?", arguments: [cutoffMs]) ?? 0
-            let eventCount = try Int.fetchOne(database, sql: "SELECT count(*) FROM capture_events WHERE at_ms < ?", arguments: [cutoffMs]) ?? 0
 
             try database.execute(sql: "CREATE TEMP TABLE maxmi_prune_threads(id TEXT PRIMARY KEY)")
             try database.execute(sql: "INSERT INTO maxmi_prune_threads SELECT id FROM threads WHERE updated_at < ?", arguments: [cutoffMs])
+            let eventCount = try Int.fetchOne(database, sql: """
+                SELECT count(*) FROM capture_events
+                WHERE at_ms < ? OR thread_id IN (SELECT id FROM maxmi_prune_threads)
+                """, arguments: [cutoffMs]) ?? 0
             try database.execute(sql: "CREATE TEMP TABLE maxmi_prune_versions(id TEXT PRIMARY KEY)")
             try database.execute(sql: """
                 INSERT INTO maxmi_prune_versions
@@ -131,6 +134,10 @@ extension Store {
             try database.execute(sql: "DELETE FROM derivatives WHERE version_id IN (SELECT id FROM maxmi_prune_versions)")
             try database.execute(sql: "DELETE FROM versions WHERE id IN (SELECT id FROM maxmi_prune_versions)")
 
+            try database.execute(sql: """
+                DELETE FROM capture_events
+                WHERE at_ms < ? OR thread_id IN (SELECT id FROM maxmi_prune_threads)
+                """, arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM latest_contexts WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)")
             try database.execute(sql: "DELETE FROM meetings WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)")
             try database.execute(sql: "DELETE FROM message_fingerprints WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)")
@@ -144,7 +151,6 @@ extension Store {
             try database.execute(sql: "DELETE FROM agent_action_items WHERE status != 'open' AND updated_at < ?", arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM agent_runs WHERE coalesce(ended_at, started_at) < ?", arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM capture_health_events WHERE at_ms < ?", arguments: [cutoffMs])
-            try database.execute(sql: "DELETE FROM capture_events WHERE at_ms < ?", arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM message_fingerprints WHERE seen_at < ?", arguments: [cutoffMs])
 
             try database.execute(sql: "DROP TABLE maxmi_prune_versions")
