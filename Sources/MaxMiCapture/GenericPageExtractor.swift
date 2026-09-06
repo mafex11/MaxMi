@@ -177,30 +177,60 @@ public enum GenericPageExtractor {
 
     /// Descendant text in visual (y, x) order, adjacent duplicates dropped. A matching node
     /// with usable text is not descended into; a matching node with empty text is.
+    ///
+    /// `order` is the same monotonic tiebreaker `BlockEntry.order` is, and for the same reason:
+    /// `sorted` is not stable, and frameless cells all collapse to (0, 0), so without it a row's
+    /// `cells` — and therefore the row's `Block.text` — would be unspecified.
     static func orderedDescendantText(_ node: AXNode, roles: Set<String>) -> [String] {
-        var found: [(y: CGFloat, x: CGFloat, text: String)] = []
+        var found: [(y: CGFloat, x: CGFloat, order: Int, text: String)] = []
+        var order = 0
         func visit(_ current: AXNode) {
             if menuRoles.contains(current.role) || current.hidden { return }
             if roles.contains(current.role) {
                 let text = readableText(current)
                 if !text.isEmpty {
-                    found.append((current.frame?.minY ?? 0, current.frame?.minX ?? 0, text))
+                    found.append((current.frame?.minY ?? 0, current.frame?.minX ?? 0, order, text))
+                    order += 1
                     return
                 }
             }
             for child in current.children { visit(child) }
         }
         for child in node.children { visit(child) }
-        let ordered = found.sorted { $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x }.map(\.text)
+        let ordered = found.sorted {
+            if $0.y != $1.y { return $0.y < $1.y }
+            if $0.x != $1.x { return $0.x < $1.x }
+            return $0.order < $1.order
+        }.map(\.text)
         return ordered.reduce(into: [String]()) { result, value in
             if result.last != value { result.append(value) }
+        }
+    }
+
+    /// Per-region dedup key. Text alone collides across shapes: a `.paragraph` reading
+    /// "Report.pdf 12 KB" is different content from the table row whose synthetic space-joined
+    /// `text` happens to match, and dropping the second would lose the row's cells.
+    static func dedupKey(_ block: Block) -> String {
+        "\(typeTag(block.type))|\(block.text)"
+    }
+
+    /// The case discriminator only. Payload is deliberately excluded so a heading republished at
+    /// a different level, or a row republished with a different `selected`, still dedups.
+    static func typeTag(_ type: BlockType) -> String {
+        switch type {
+        case .heading:   return "heading"
+        case .paragraph: return "paragraph"
+        case .listItem:  return "listItem"
+        case .label:     return "label"
+        case .tableRow:  return "tableRow"
+        case .input:     return "input"
         }
     }
 
     /// Group claims by kind in the renderer's canonical order; within a kind, concatenate
     /// claims in (y, x) order; within a claim, order blocks visually (y, then x, then emission
     /// order) — the same visual ordering `DocumentExtraction.bodyText` applied. Then drop
-    /// exact-text duplicates, first occurrence winning.
+    /// duplicates of the same shape and text (see `dedupKey`), first occurrence winning.
     static func assemble(_ claims: [Claim]) -> [Region] {
         var regions: [Region] = []
         for kind in ContentRenderer.regionOrder {
@@ -216,7 +246,7 @@ public enum GenericPageExtractor {
                     if $0.x != $1.x { return $0.x < $1.x }
                     return $0.order < $1.order
                 }
-                for entry in ordered where seen.insert(entry.block.text).inserted {
+                for entry in ordered where seen.insert(dedupKey(entry.block)).inserted {
                     blocks.append(entry.block)
                 }
             }

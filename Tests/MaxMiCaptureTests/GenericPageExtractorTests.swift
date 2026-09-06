@@ -124,6 +124,29 @@ final class GenericPageExtractorTests: XCTestCase {
         XCTAssertEqual(mainBlocks([row]).map(\.type), [.tableRow(cells: ["Report.pdf", "12 KB"], selected: false)])
     }
 
+    func testRowWithFramelessCellsKeepsCellsInEmissionOrder() {
+        let row = node("AXTableRow", frame: CGRect(x: 0, y: 10, width: 300, height: 20), children: [
+            node("AXCell", children: [node("AXStaticText", value: "a")]),
+            node("AXCell", children: [node("AXStaticText", value: "b")]),
+            node("AXCell", children: [node("AXStaticText", value: "c")]),
+        ])
+        XCTAssertEqual(mainBlocks([row]).map(\.type),
+                       [.tableRow(cells: ["a", "b", "c"], selected: false)],
+                       "frameless cells all sort at (0, 0), so emission order must break the tie")
+    }
+
+    func testDedupKeepsSameTextInDifferentBlockShapes() {
+        let row = node("AXRow", frame: CGRect(x: 0, y: 20, width: 300, height: 20), children: [
+            text("Report.pdf", y: 20, x: 0),
+            text("12 KB", y: 20, x: 100),
+        ])
+        let blocks = mainBlocks([text("Report.pdf 12 KB", y: 10), row])
+        XCTAssertEqual(blocks.map(\.type),
+                       [.paragraph, .tableRow(cells: ["Report.pdf", "12 KB"], selected: false)],
+                       "a paragraph does not dedup away a row whose joined text matches")
+        XCTAssertEqual(blocks.map(\.text), ["Report.pdf 12 KB", "Report.pdf 12 KB"])
+    }
+
     func testLabelRolesUseTitleThenLabelThenValue() {
         let blocks = mainBlocks([
             node("AXButton", title: "Send"),
