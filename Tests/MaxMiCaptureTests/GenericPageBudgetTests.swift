@@ -196,34 +196,6 @@ final class GenericPageBudgetTests: XCTestCase {
 
     private func paragraph(_ text: String) -> Block { Block(type: .paragraph, text: text) }
 
-    func testAnchorTextIsTheFocusedFieldValue() {
-        let focused = FocusedElement(role: "AXTextArea", identifier: "body",
-                                    value: "  the paragraph I am editing  ",
-                                    selectedText: nil, isSecure: false)
-        XCTAssertEqual(GenericPageExtractor.anchorText(focused), "the paragraph I am editing")
-    }
-
-    func testAnchorTextRefusesSecureBlankAndTinyValues() {
-        XCTAssertNil(GenericPageExtractor.anchorText(nil))
-        XCTAssertNil(GenericPageExtractor.anchorText(FocusedElement(
-            role: "AXTextField", identifier: nil, value: "secret", selectedText: nil,
-            isSecure: true)))
-        XCTAssertNil(GenericPageExtractor.anchorText(FocusedElement(
-            role: "AXTextArea", identifier: nil, value: "   ", selectedText: nil,
-            isSecure: false)))
-        XCTAssertNil(GenericPageExtractor.anchorText(FocusedElement(
-            role: "AXTextArea", identifier: nil, value: "x", selectedText: nil, isSecure: false)))
-    }
-
-    func testAnchorIndexPrefersAnExactTrimmedMatchThenContainment() {
-        let blocks = [paragraph("intro"), paragraph("the target line"),
-                      paragraph("wrapping the target line inside more text")]
-        XCTAssertEqual(GenericPageExtractor.anchorIndex(in: blocks, text: "the target line"), 1)
-        XCTAssertEqual(GenericPageExtractor.anchorIndex(in: blocks, text: "wrapping the target"), 2)
-        XCTAssertNil(GenericPageExtractor.anchorIndex(in: blocks, text: "absent"))
-        XCTAssertNil(GenericPageExtractor.anchorIndex(in: blocks, text: nil))
-    }
-
     func testTrimAnchoredWithoutAnAnchorIsExactlyTheOldTopOfPageBehaviour() {
         let blocks = (0..<10).map { paragraph("line \($0)") }
         let anchored = GenericPageExtractor.trimAnchored(blocks, to: 30, anchorIndex: nil)
@@ -276,6 +248,32 @@ final class GenericPageBudgetTests: XCTestCase {
         XCTAssertTrue(result.truncated)
         XCTAssertTrue(texts.contains("the line I am editing"), "\(texts)")
         XCTAssertFalse(texts.contains { $0.hasSuffix(" 0") }, "the top of the page was dropped")
+    }
+
+    func testDialogFocusedDuplicateMainTextKeepsPhaseATopOfMain() {
+        let duplicate = "the paragraph duplicated by the dialog field"
+        func children(dialogFieldFocused: Bool) -> [AXNode] {
+            var result = (0..<40).map { index in
+                text(index == 25 ? duplicate : String(repeating: "body ", count: 20) + "\(index)",
+                     y: 320 + CGFloat(index) * 18)
+            }
+            result.append(node("AXDialog",
+                               frame: CGRect(x: 900, y: 500, width: 400, height: 200),
+                               children: [
+                                node("AXTextArea", value: duplicate, identifier: "dialog-draft",
+                                     frame: CGRect(x: 920, y: 540, width: 360, height: 48),
+                                     focused: dialogFieldFocused),
+                               ]))
+            return result
+        }
+        var options = GenericPageExtractor.Options()
+        options.totalBudget = 900
+
+        let phaseATop = blocks(extract(children(dialogFieldFocused: false), options: options), .main).map(\.text)
+        let focusedInDialog = blocks(extract(children(dialogFieldFocused: true), options: options), .main).map(\.text)
+
+        XCTAssertEqual(focusedInDialog, phaseATop)
+        XCTAssertTrue(focusedInDialog.first?.hasSuffix(" 0") == true, "\(focusedInDialog)")
     }
 
     /// No focused field means no anchor, so an over-budget page still keeps its top — the Phase A

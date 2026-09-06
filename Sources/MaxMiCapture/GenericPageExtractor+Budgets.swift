@@ -22,7 +22,7 @@ extension GenericPageExtractor {
     ///   therefore also what pays for a dialog that overflows its own share.
     ///
     /// Rest regions never grow past `restShare`: a long sidebar must not crowd out a short body.
-    static func applyBudgets(_ regions: [Region], anchorText: String? = nil,
+    static func applyBudgets(_ regions: [Region], mainFocusAnchorIndex: Int? = nil,
                              options: Options) -> (regions: [Region], truncated: Bool) {
         let total = max(1, options.totalBudget)
         let mainShare = budgetShare(total, options.mainShare)
@@ -63,7 +63,7 @@ extension GenericPageExtractor {
         // and their blocks are short enough that the top of the region is the right thing to keep.
         let mainBlocks = regions.first(where: { $0.kind == .main })?.blocks ?? []
         let mainResult = trimAnchored(mainBlocks, to: mainAllowance,
-                                      anchorIndex: anchorIndex(in: mainBlocks, text: anchorText))
+                                      anchorIndex: mainFocusAnchorIndex)
         truncated = truncated || mainResult.truncated
 
         var out: [Region] = []
@@ -101,21 +101,6 @@ extension GenericPageExtractor {
             used += cost
         }
         return (kept, kept.count != blocks.count)
-    }
-
-    /// Index of the `.main` block the focused field produced, or nil.
-    ///
-    /// Exact trimmed-text match first — an `.input` block's text IS the field's value — then
-    /// containment, which covers a document body whose paragraph block holds the field value plus
-    /// surrounding text.
-    static func anchorIndex(in blocks: [Block], text: String?) -> Int? {
-        guard let text else { return nil }
-        if let exact = blocks.firstIndex(where: {
-            $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == text
-        }) {
-            return exact
-        }
-        return blocks.firstIndex { $0.text.contains(text) }
     }
 
     /// A nil or out-of-range anchor keeps Phase A's behaviour exactly: whole blocks dropped from
