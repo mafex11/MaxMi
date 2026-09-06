@@ -1480,6 +1480,13 @@ final class AppWiring {
                 switch CaptureDispatch.parseDetailed(window: window, app: appInfo, registry: registry) {
                 case .parsed(let capture):
                     parsed = capture
+                case .parsedByFallback(let capture, let failedParser):
+                    parsed = capture
+                    // Non-silent degradation: the Capture Health window shows which parsers
+                    // are failing (spec 8). capture_health_events has no free-text note column
+                    // and `reason` is only populated for skipped/failed, so the fallback is
+                    // encoded in `parser`.
+                    effectiveParserName = "GenericPageExtractor.v2/fallback/\(failedParser)"
                 case .noContent:
                     retryOrGiveUp(
                         app: appInfo, pid: pid, attemptsLeft: attemptsLeft,
