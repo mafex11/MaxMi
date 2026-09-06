@@ -189,4 +189,80 @@ public enum AXQuery {
     static func cachedPathCount() -> Int { pathCache.count() }
 
     static func resetPathCache() { pathCache.removeAll() }
+
+    // MARK: - Evaluation
+
+    public static func find(_ path: String, in node: AXNode) -> AXNode? {
+        findAll(path, in: node).first
+    }
+
+    public static func findAll(_ path: String, in node: AXNode) -> [AXNode] {
+        guard let steps = steps(for: path) else { return [] }
+        var current = [node]
+        for step in steps {
+            var produced: [AXNode] = []
+            for source in current {
+                switch step.axis {
+                case .child:
+                    produced.append(contentsOf: source.children.filter { satisfies($0, step) })
+                case .descendant:
+                    // Pre-order, excluding `source` itself: `//Role` is "somewhere below here".
+                    appendDescendants(of: source, satisfying: step, into: &produced)
+                }
+            }
+            if let index = step.index {
+                current = index >= 0 && index < produced.count ? [produced[index]] : []
+            } else {
+                current = produced
+            }
+            if current.isEmpty { return [] }
+        }
+        return current
+    }
+
+    private static func appendDescendants(
+        of node: AXNode, satisfying step: Step, into out: inout [AXNode]
+    ) {
+        for child in node.children {
+            if satisfies(child, step) { out.append(child) }
+            appendDescendants(of: child, satisfying: step, into: &out)
+        }
+    }
+
+    static func satisfies(_ node: AXNode, _ step: Step) -> Bool {
+        if let role = step.role, node.role != role { return false }
+        return step.predicates.allSatisfy { matches(node, $0) }
+    }
+
+    /// A predicate is satisfied when ANY of the attribute's values satisfies the operator, so a
+    /// multi-entry `domClassList` behaves like a CSS class check.
+    static func matches(_ node: AXNode, _ predicate: Predicate) -> Bool {
+        let caseInsensitive = predicate.attribute == .domClass
+        let expected = caseInsensitive ? predicate.expected.lowercased() : predicate.expected
+        for raw in attributeValues(node, predicate.attribute) {
+            let actual = caseInsensitive ? raw.lowercased() : raw
+            switch predicate.op {
+            case .equals: if actual == expected { return true }
+            case .prefix: if actual.hasPrefix(expected) { return true }
+            case .contains: if actual.contains(expected) { return true }
+            }
+        }
+        return false
+    }
+
+    /// An absent attribute yields no values, so it can never satisfy any operator — including
+    /// `*=""`, which would otherwise match everything.
+    static func attributeValues(_ node: AXNode, _ attribute: Attribute) -> [String] {
+        switch attribute {
+        case .role:       return [node.role]
+        case .subrole:    return node.subrole.map { [$0] } ?? []
+        case .title:      return node.title.map { [$0] } ?? []
+        // AXDescription is folded into `label` by AXReader, so both names read the same field.
+        case .description, .label: return node.label.map { [$0] } ?? []
+        case .value:      return node.value.map { [$0] } ?? []
+        case .identifier: return node.identifier.map { [$0] } ?? []
+        case .domId:      return node.domIdentifier.map { [$0] } ?? []
+        case .domClass:   return node.domClassList ?? []
+        }
+    }
 }

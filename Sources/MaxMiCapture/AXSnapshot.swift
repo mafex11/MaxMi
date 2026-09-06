@@ -111,3 +111,5 @@ public struct AXNode: Codable, Sendable {
         }
     }
 }
+
+extension AXNode: Equatable {}
