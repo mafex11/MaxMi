@@ -151,4 +151,38 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(page.regions[0].blocks.map(\.text), ["a", "b"])
         XCTAssertNil(GenericV2Content.lines([]))
     }
+
+    /// `AppWiring` used to infer truncation from `parsed.content.count >= 8_000`, which
+    /// false-positives on an 8k-32k document that was never trimmed and false-negatives on a
+    /// 32k-budget page that WAS trimmed. The extractor already knows; the parser now carries it.
+    ///
+    /// Thirty paragraphs, not forty, and the count is load-bearing: `GenericAXParser` uses the
+    /// `DocumentExtraction.contentCap` default of 8_000, and with no other region present every
+    /// share rolls into `.main`, so `mainAllowance` is 8_000 exactly. Thirty paragraphs render as
+    /// 10x201 + 20x202 + 29 separators = 6_079 characters, comfortably under it. Forty render as
+    /// 8_109 and the last assertion would be false.
+    func testGenericPageParserCarriesTruncatedFromTheExtractor() throws {
+        let paragraphs = (0..<30).map { index in
+            AXNode(role: "AXStaticText", value: String(repeating: "x", count: 200) + "\(index)",
+                   title: nil, url: nil,
+                   frame: CGRect(x: 0, y: CGFloat(index) * 20, width: 600, height: 18),
+                   focused: false, children: [])
+        }
+        let window = AXNode(role: "AXWindow", value: nil, title: "Long note", url: nil,
+                            frame: CGRect(x: 0, y: 0, width: 900, height: 900),
+                            focused: false, children: paragraphs)
+        let app = AppInfo(bundleID: "com.example.notes", name: "Notes", windowTitle: "Long note")
+
+        let full = try XCTUnwrap(GenericV2Content.page(
+            window: window, budget: 100_000, offscreenPolicy: .visibleOnly()))
+        XCTAssertFalse(full.truncated)
+
+        let clipped = try XCTUnwrap(GenericV2Content.page(
+            window: window, budget: 500, offscreenPolicy: .visibleOnly()))
+        XCTAssertTrue(clipped.truncated)
+
+        let parsed = try XCTUnwrap(GenericAXParser().parse(window: window, app: app))
+        XCTAssertFalse(parsed.truncated,
+                       "6_079 rendered chars is under the 8_000 default, so nothing was trimmed")
+    }
 }

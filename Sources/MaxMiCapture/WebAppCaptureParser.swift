@@ -119,7 +119,8 @@ public enum WebAppCaptureParser {
             parserVersion: 2,
             accumulationPolicy: accumulation,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3, maxCharacters: 64_000),
-            structured: structured
+            structured: structured,
+            truncated: truncated
         )
         return WebAppParseResult(
             capture: capture, app: app,

@@ -25,6 +25,10 @@ public struct ParsedCapture: Sendable, Equatable {
     /// The typed shape, when this parser has been migrated. nil for an unmigrated parser, which
     /// is handed a `LegacyContentAdapter` shape by `resolvedStructured`.
     public let structured: CapturedContent?
+    /// Whether this parser dropped content to stay inside its budget. The parser is the only
+    /// thing that knows: `AppWiring` cannot infer it from the rendered length (Phase A ledger,
+    /// Task 16 deferred item).
+    public let truncated: Bool
 
     public init(
         sourceApp: String,
@@ -35,7 +39,8 @@ public struct ParsedCapture: Sendable, Equatable {
         parserVersion: Int = 1,
         accumulationPolicy: CaptureAccumulationPolicy = .rollingText,
         offscreenPolicy: OffscreenCapturePolicy = .visibleOnly(),
-        structured: CapturedContent? = nil
+        structured: CapturedContent? = nil,
+        truncated: Bool = false
     ) {
         self.sourceApp = sourceApp; self.sourceKey = sourceKey
         self.sourceTitle = sourceTitle; self.content = content
@@ -44,6 +49,7 @@ public struct ParsedCapture: Sendable, Equatable {
         self.accumulationPolicy = accumulationPolicy
         self.offscreenPolicy = offscreenPolicy
         self.structured = structured
+        self.truncated = truncated
     }
 
     /// The typed shape this capture will be stored as (spec 4f rule 2). A convenience for

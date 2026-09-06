@@ -1571,8 +1571,10 @@ final class AppWiring {
                 break
             }
             let nowMs = epochNowMs()
-            let wasTruncated = browserTruncated
-                || (parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil)
+            // The parser reports its own budgeting; `browserTruncated` adds the one fact the
+            // parser cannot see (the tab text hitting BrowserTabExtractor's cap). The old
+            // `content.count >= 8_000` guess false-positived on every 8k-32k document.
+            let wasTruncated = browserTruncated || parsed.truncated
             let envelope = parsed.envelope(
                 cleanSourceKey: cleanKey,
                 parserID: effectiveParserName,

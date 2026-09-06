@@ -11,25 +11,29 @@ public struct GenericAXParser: SourceParser {
         // No url, default budget, and no focused element: only AppWiring knows the pid that
         // AXReader.focusedElementSnapshot needs, and Phase B's TypingObserver wires it.
         // nil = no readable content, so no empty threads.
-        GenericV2Content.page(window: window, offscreenPolicy: Self.profile(for: app).offscreen)
+        GenericV2Content.page(window: window, offscreenPolicy: Self.profile(for: app).offscreen)?.content
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = try parseStructured(window: window, app: app) else { return nil }
-        let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "window"
         let profile = Self.profile(for: app)
+        // Called directly rather than through `parseStructured` so one AX walk yields BOTH the
+        // content and the truncation flag.
+        guard let page = GenericV2Content.page(window: window, offscreenPolicy: profile.offscreen)
+        else { return nil }
+        let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "window"
         return ParsedCapture(
             sourceApp: app.name,
             sourceKey: "\(app.bundleID):\(title)",
             sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(structured, style: .full),
+            content: ContentRenderer.render(page.content, style: .full),
             contentKind: profile.kind,
             parserVersion: 2,
             // Whole-page semantics (spec 4d): each extraction is the current state of the
             // window, so it supersedes the previous one rather than merging into it.
             accumulationPolicy: .replace,
             offscreenPolicy: profile.offscreen,
-            structured: structured
+            structured: page.content,
+            truncated: page.truncated
         )
     }
 

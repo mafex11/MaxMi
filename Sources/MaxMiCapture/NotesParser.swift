@@ -12,20 +12,23 @@ public struct NotesParser: SourceParser {
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
         GenericV2Content.page(window: window,
                               budget: StructuredEntityExtraction.pageBudget,
-                              offscreenPolicy: Self.offscreen)
+                              offscreenPolicy: Self.offscreen)?.content
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = try parseStructured(window: window, app: app) else { return nil }
+        guard let page = GenericV2Content.page(window: window,
+                                              budget: StructuredEntityExtraction.pageBudget,
+                                              offscreenPolicy: Self.offscreen) else { return nil }
         let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "untitled"
         return ParsedCapture(sourceApp: "Notes", sourceKey: "notes:\(docSlug(title))",
                              sourceTitle: app.windowTitle,
-                             content: ContentRenderer.render(structured, style: .full),
+                             content: ContentRenderer.render(page.content, style: .full),
                              contentKind: .document, parserVersion: 2,
                              // Whole-page semantics (spec 4d): one extraction is the window's
                              // current state, so it supersedes the previous one.
                              accumulationPolicy: .replace,
                              offscreenPolicy: Self.offscreen,
-                             structured: structured)
+                             structured: page.content,
+                             truncated: page.truncated)
     }
 }
