@@ -217,6 +217,50 @@ final class StructuredAccumulatorTests: XCTestCase {
         XCTAssertEqual(result.delta.removedCount, 1)
     }
 
+    func testBoundingAGenericPageKeepsASingleOverCapBlock() {
+        let big = Block(type: .paragraph, text: String(repeating: "x", count: 2_000))
+        let page = CapturedContent.generic(GenericPage(
+            regions: [Region(kind: .main, blocks: [big])], focused: nil, url: nil))
+        let bounded = CaptureAccumulator.bound(page, to: 500)
+        guard case .generic(let result) = bounded else { return XCTFail() }
+        XCTAssertEqual(result.regions.map(\.kind), [.main], "the last region is never removed")
+        XCTAssertEqual(result.regions.first?.blocks.map(\.text), [big.text],
+                       "a soft cap keeps one over-cap block rather than emptying the page")
+        XCTAssertFalse(ContentRenderer.render(bounded, style: .full).isEmpty)
+    }
+
+    func testBoundingAGenericPageShedsChromeBeforeMainContent() {
+        let mainBlocks = (0..<10).map { Block(type: .paragraph, text: "main line \($0)") }
+        let sidebarBlocks = (0..<10).map { Block(type: .label, text: "sidebar item \($0)") }
+        let page = CapturedContent.generic(GenericPage(regions: [
+            Region(kind: .main, blocks: mainBlocks),
+            Region(kind: .sidebar, blocks: sidebarBlocks),
+        ], focused: nil, url: nil))
+        let cap = ContentRenderer.render(page, style: .full).count - 60
+        let bounded = CaptureAccumulator.bound(page, to: cap)
+        guard case .generic(let result) = bounded else { return XCTFail() }
+        XCTAssertEqual(result.regions.first(where: { $0.kind == .main })?.blocks.map(\.text),
+                       mainBlocks.map(\.text), "main content is what the user is reading")
+        let sidebar = result.regions.first(where: { $0.kind == .sidebar })?.blocks ?? []
+        XCTAssertLessThan(sidebar.count, sidebarBlocks.count, "chrome pays first")
+        XCTAssertEqual(sidebar.last?.text, "sidebar item 9", "and pays oldest-first")
+        XCTAssertLessThanOrEqual(ContentRenderer.render(bounded, style: .full).count, cap)
+    }
+
+    func testBoundingAMultiRegionGenericPageFitsTheCapIncludingHeadersAndURL() {
+        let page = CapturedContent.generic(GenericPage(regions: [
+            Region(kind: .main, blocks: (0..<30).map { Block(type: .paragraph, text: "main line \($0)") }),
+            Region(kind: .sidebar, blocks: (0..<10).map { Block(type: .label, text: "sidebar \($0)") }),
+            Region(kind: .footer, blocks: [Block(type: .label, text: "footer note")]),
+        ], focused: nil, url: "https://example.com/a"))
+        let bounded = CaptureAccumulator.bound(page, to: 200)
+        XCTAssertLessThanOrEqual(ContentRenderer.render(bounded, style: .full).count, 200,
+                                 "region headers and the URL line are part of the accounting")
+        guard case .generic(let result) = bounded else { return XCTFail() }
+        XCTAssertEqual(result.regions.map(\.kind), [.main], "a tight cap sheds every chrome region")
+        XCTAssertEqual(result.regions.first?.blocks.last?.text, "main line 29", "newest survive")
+    }
+
     func testCaptureDeltaEmptyAndCharCounts() {
         XCTAssertTrue(CaptureDelta.empty.isEmpty)
         XCTAssertFalse(CaptureDelta.empty.isFirstCapture)

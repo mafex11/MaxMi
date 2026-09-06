@@ -116,8 +116,9 @@ extension CaptureAccumulator {
     }
 
     /// Bounds the RENDERED form, trimming whole blocks/messages/segments from the front
-    /// (oldest first) — never mid-item, and never below one item. Public because the migrated
-    /// parsers cap their own output the same way instead of each reinventing it.
+    /// (oldest first) — never mid-item, and never below one item. `.generic` pages shed chrome
+    /// regions before `.main` content; see `boundGeneric`. Public because the migrated parsers
+    /// cap their own output the same way instead of each reinventing it.
     public static func bound(_ content: CapturedContent, to maxCharacters: Int) -> CapturedContent {
         let cap = max(0, maxCharacters)
         guard ContentRenderer.render(content, style: .full).count > cap else { return content }
@@ -142,24 +143,61 @@ extension CaptureAccumulator {
             return .document(Document(title: value.title, blocks: kept,
                                       author: value.author, url: value.url))
         case .generic(let page):
-            var regions = page.regions
-            var urlCost = 0
-            if let url = page.url, !url.isEmpty { urlCost = "URL: \(url)".count + 1 }
-            // Drop from the front of the first region, then drop that region and continue.
-            while !regions.isEmpty {
-                let candidate = GenericPage(regions: regions, focused: page.focused, url: page.url)
-                if ContentRenderer.render(.generic(candidate), style: .full).count <= cap { break }
-                let first = regions[0]
-                let others = regions.dropFirst().reduce(0) { $0 + ContentRenderer.renderBlocks($1.blocks).count + 1 }
-                let allowance = max(0, cap - urlCost - others)
-                let kept = dropOldest(first.blocks, cost: { ContentRenderer.renderBlock($0).count },
-                                      cap: allowance)
-                if kept.count == first.blocks.count { regions.removeFirst(); continue }
-                regions[0] = Region(kind: first.kind, blocks: kept)
-                if kept.count <= 1 && regions.count > 1 { break }
-            }
-            return .generic(GenericPage(regions: regions, focused: page.focused, url: page.url))
+            return .generic(boundGeneric(page, to: cap))
         }
+    }
+
+    /// Trims a page's CHROME before its content: kinds are shed in reverse
+    /// `ContentRenderer.regionOrder` (`.unknown` first, `.dialog` last) and `.main` only after
+    /// every other kind is gone, because the user is reading `.main`. Within a kind, later
+    /// regions and older (front) blocks go first. Soft cap: the last surviving region keeps its
+    /// last block and `.main` always keeps one, so a single block longer than the cap is retained
+    /// rather than the page rendering as an empty string.
+    static func boundGeneric(_ page: GenericPage, to cap: Int) -> GenericPage {
+        var regions = page.regions
+        // Rendered cost of each block including the newline that joins it. Computed once:
+        // trimming only ever removes entries.
+        var costs = regions.map { $0.blocks.map { ContentRenderer.renderBlock($0).count + 1 } }
+        var blockTotal = costs.reduce(0) { $0 + $1.reduce(0, +) }
+        let urlCost: Int = {
+            guard let url = page.url, !url.isEmpty else { return 0 }
+            return "URL: \(url)".count + 1
+        }()
+        // Region headers are part of the rendered size, and a header disappears with the last
+        // block of its kind, so they are re-totalled whenever a region empties.
+        func headerTotal() -> Int {
+            ContentRenderer.regionOrder.reduce(0) { total, kind in
+                guard let header = ContentRenderer.regionHeader(kind),
+                      regions.contains(where: { $0.kind == kind && !$0.blocks.isEmpty })
+                else { return total }
+                return total + header.count + 1
+            }
+        }
+        var headers = headerTotal()
+        // Chunks are joined by a single newline, so the very last join is not paid for.
+        func size() -> Int { max(0, urlCost + blockTotal + headers - 1) }
+        guard size() > cap else { return page }
+
+        for kind in ContentRenderer.regionOrder.reversed().filter({ $0 != .main }) + [.main] {
+            guard size() > cap else { break }
+            for index in regions.indices.reversed() where regions[index].kind == kind {
+                while size() > cap, !regions[index].blocks.isEmpty {
+                    let othersHaveBlocks = regions.indices.contains {
+                        $0 != index && !regions[$0].blocks.isEmpty
+                    }
+                    // The last block of the last surviving region stays, and `.main` never
+                    // empties: an over-cap page is still worth more than nothing.
+                    if regions[index].blocks.count == 1, kind == .main || !othersHaveBlocks { break }
+                    blockTotal -= costs[index].removeFirst()
+                    regions[index] = Region(kind: kind,
+                                            blocks: Array(regions[index].blocks.dropFirst()))
+                    if regions[index].blocks.isEmpty { headers = headerTotal() }
+                }
+            }
+        }
+        let kept = regions.filter { !$0.blocks.isEmpty }
+        return GenericPage(regions: kept.isEmpty ? regions : kept,
+                           focused: page.focused, url: page.url)
     }
 
     /// Drops items from the FRONT until the joined cost fits, always keeping at least one.
