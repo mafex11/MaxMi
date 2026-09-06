@@ -980,6 +980,12 @@ Nothing below was silently redesigned. Each item states what the brief assumed, 
 **Amendments (2026-09-06, final review)**
 
 - §4e — the note apps (Notes, Notion, Obsidian) use the 32_000 page budget, not the 8_000 default, and their `accessibilityScroll` ceiling matches it, so a long note is bounded exactly like a Pages or Word document. Viewport-anchored trimming for `.document` (keeping what the user is looking at rather than the top of the page) is a Phase B item. `.dialog` is trimmed only as a last resort, after its rollover from `main` and `rest` is exhausted (Task 7 ruling).
+- §4a/§4e/§8 — "the value is never read" now covers the SELECTION too: `AXReader.convert` reads `subrole` first and skips `AXValue`, `AXPlaceholderValue` and `AXSelectedText` entirely for an `AXSecureTextField`, and `FocusedElement.init` nils both `value` and `selectedText` when `isSecure`. `orderedDescendantText` skips secure nodes as well, so a table cell is not a way around the rule.
+- §4e — `AXColumn` joins the skip/dead-end roles: it republishes the same `AXCell`s its rows already emitted, so walking it printed every web-table cell a second time as a loose paragraph. Row cells are collected from `AXCell`, `AXStaticText`, `AXTextField` and `AXTextArea` (Finder's name column is an editable field) but never `AXImage`.
+- §4b — `ContentRenderer.renderEvent` omits the `" — "` separator when `dateString` is empty, and `.mainOnly` iterates `regionOrder` per kind instead of sorting regions, so two regions of the same kind have a defined order.
+- §4d — the browser generic path declares `.replace`, not `.rollingText`: a typed page is not legacy-shaped, so the string accumulator never ran for it anyway. It also throws `ExtractionError.emptyContent` when the extracted page has no regions, mirroring `GenericV2Content.page` returning nil, and `Store.commitCapture` refuses a commit whose accumulated render is empty for a thread that already holds content — an empty render must never replace a real capture.
+- §4d — clarified (no behaviour change) that conversation union by `Message.id` COLLAPSES an identical message repeated in one window: sender + time + text is the identity, so two indistinguishable bubbles are one message. A browser test asserting the opposite was rewritten to this contract.
+- §4f — `ParsedCapture.resolvedStructured` is internal: nothing outside `MaxMiCapture` resolves a nil `structured`.
 
 ## 13. Rollout
 
