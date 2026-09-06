@@ -115,7 +115,7 @@ public struct Document: Codable, Sendable, Equatable {
 }
 
 public struct Message: Codable, Sendable, Equatable {
-    /// Stable fingerprint. See `Message.makeID`.
+    /// A stable identity — the source's native message ID when one exists (e.g. Mail's messageID), otherwise the `makeID` fingerprint.
     public let id: String
     public let sender: String
     public let text: String
@@ -210,7 +210,7 @@ Encoding uses a fixed `JSONEncoder` with `.sortedKeys` and `.withoutEscapingSlas
 
 - `ParsedCapture` gains `public let structured: CapturedContent?`, defaulting to `nil` in `init`. Optional, so the twenty-odd existing parser construction sites keep compiling unchanged; a migrated parser sets it, an unmigrated one leaves it nil.
 - `CaptureEnvelope` gains `public let structured: CapturedContent` — **non-optional**. Everything downstream of dispatch (store, prompts, timeline) can therefore rely on it existing.
-- `ParsedCapture.envelope(cleanSourceKey:parserID:trigger:truncated:)` gains a `structured:` argument and `CaptureDispatch` is the single place that resolves nil → `LegacyContentAdapter.adapt(renderedContent: content, kind: contentKind)` (§4f). `CaptureEnvelope.legacy(sourceApp:sourceKey:sourceTitle:content:)` does the same.
+- `ParsedCapture.envelope(cleanSourceKey:parserID:trigger:truncated:)` gains a `structured:` argument. Nil resolution on the write path happens in exactly one place, `CaptureEnvelope.init`: both `ParsedCapture.envelope(...)` (via `CaptureDispatch`, §4f) and `CaptureEnvelope.legacy(sourceApp:sourceKey:sourceTitle:content:)` route through it, and it resolves nil → `LegacyContentAdapter.adapt(renderedContent: content, kind: contentKind)`. On the read path, `structured_ciphertext` NULL/undecodable resolves via `LegacyContentAdapter` in the store (§4c); no other site resolves nil.
 - When `structured` is non-nil, `content` is `ContentRenderer.render(structured, style: .full)`.
 
 `CaptureContentKind` keeps all ten existing cases (`webpage, conversation, document, terminal, email, calendar, task, meeting, voiceNote, generic`) — it is pinned by the `latest_contexts.content_kind` CHECK constraint and by MCP. `ParsedCapture.contentKind` stays authoritative and defaults to `structured.kind`.
@@ -263,7 +263,7 @@ ALTER TABLE latest_contexts  ADD COLUMN structured_ciphertext TEXT;
 
 ```swift
 public enum LegacyContentAdapter {
-    /// One `.main` region of `.paragraph` blocks, one per non-empty line.
+    /// One `.main` region of `.paragraph` blocks, one per line, including empty lines, so that `ContentRenderer.render(LegacyContentAdapter.adapt(s, kind:), .full) == s` holds byte-for-byte.
     public static func adapt(renderedContent: String, kind: CaptureContentKind) -> CapturedContent
 }
 ```
@@ -301,7 +301,7 @@ Merge semantics by shape (the incoming shape wins; a shape change is a replace):
 - `.terminal` — append: if `incoming.cwd == previous.cwd` **and** the previous segment list is a prefix of the incoming one under `(command, output)` equality, keep previous and append the new tail segments; otherwise replace. `isRunning` is always taken from incoming.
 - `.tasks` / `.calendar` — replace.
 
-Bounding always applies `maxCharacters` to the *rendered* form, trimming whole blocks/messages/segments from the front (oldest first) — never mid-block.
+For `.conversation` and `.terminal` accumulation, bounding applies `maxCharacters` to the *rendered* form by trimming whole messages/segments from the front (oldest first, keeping the newest) — never mid-block. This front-trimming (keep-newest) policy is specific to accumulation in this section; it is not how `GenericPageExtractor` bounds its output — that budget trimming (§4e) drops blocks from the *end* of each region, keeping the top of the page.
 
 `changed` is `previous != content`. `delta` is computed as specified in §5a. `StoreAPI.commitCapture` (`StoreAPI.swift:68`) calls the structured overload, writes `accumulated.rendered` where it writes `accumulated.content` today, writes the encrypted envelope into `structured_ciphertext` on both the `latest_contexts` upsert and the `versions` insert, and passes `accumulated.delta` back out. `CommitResult.committed` gains the delta:
 
@@ -348,7 +348,7 @@ public enum GenericPageExtractor {
 | `AXStaticText`, `AXParagraph` | `.paragraph` |
 | `AXTextArea`, `AXTextField`, `AXSearchField`, `AXComboBox` | `.input(placeholder:)` carrying the node's `value`; placeholder from `AXPlaceholderValue` |
 | subrole `AXSecureTextField` | `.input(placeholder: nil)` with text `"«secure field»"` — **the value is never read** |
-| `AXListItem`, `AXTreeItem` | `.listItem(depth:)`, depth = count of ancestor list/outline containers |
+| `AXListItem`, `AXTreeItem` | `.listItem(depth:)`, depth = number of enclosing list ancestors minus one; items in the outermost list have depth 0 and render with no indent |
 | `AXRow`, `AXTableRow` | **one** `.tableRow(cells:selected:)`; cells = texts of descendant `AXCell`/`AXStaticText` in visual `(y, x)` order, adjacent duplicates dropped; `selected` from `AXSelected` |
 | `AXButton`, `AXLink`, `AXMenuItem`, `AXCheckBox`, `AXRadioButton` (incl. subrole `AXTabButton`), `AXImage` | `.label` from `title ?? label ?? value` |
 | `AXScrollBar`, `AXSplitter`, `AXGrowArea` | skipped entirely (subtree included) |
@@ -375,7 +375,7 @@ public static func focusedElementSnapshot(pid: pid_t) -> AXNode?   // AXFocusedU
 
 `FocusedElement.isSecure` is `subrole == "AXSecureTextField"`; when true, `value` is `nil`. `selectedText` comes from `AXSelectedText`.
 
-**Budgets.** `main` gets `totalBudget × mainShare`, `dialog` gets `× dialogShare`, all other regions share `× restShare` proportionally to their unbounded rendered size. Unused share rolls into `main`. Trimming removes whole blocks from the **end** of each region's block list — except `.dialog`, which is never trimmed (a dialog is short and is usually the single most important thing on screen; if a dialog exceeds its share, it takes the space from `main`). `Result.truncated` is true when any block was dropped.
+**Budgets.** `totalBudget = 8_000` is the default; a parser may pass a larger budget to preserve its current cap (browser path 16_000; Word/Pages/Outlook/Spark 32_000). `main` gets `totalBudget × mainShare`, `dialog` gets `× dialogShare`, all other regions share `× restShare` proportionally to their unbounded rendered size. Unused share rolls into `main`. Trimming removes whole blocks from the **end** of each region's block list — keeping the top of the page, the opposite of the keep-newest front-trimming §4d uses for `.conversation`/`.terminal` accumulation — except `.dialog`, which is never trimmed (a dialog is short and is usually the single most important thing on screen; if a dialog exceeds its share, it takes the space from `main`). `Result.truncated` is true when any block was dropped.
 
 **AX attribute additions (Phase A, `AXReader.swift`).** Region detection and the role model need attributes `AXReader` does not read today. `AXNode` gains:
 
@@ -418,7 +418,8 @@ Phase A migration table:
 | Parser | Phase A target | Notes |
 |---|---|---|
 | `SlackParser`, `TeamsParser`, `WhatsAppParser` (`NativeConversationExtraction`) | `.conversation` | sender/body already separated; `channel` from the existing key derivation, `isGroup` from the existing header semantics |
-| `MailParser`, `OutlookParser`, `SparkParser` | `.conversation` | `channel` = subject; one `Message` per `MailRecord` (`From`/`Date`/body already parsed). `contentKind` stays `.email` |
+| `MailParser` | `.conversation` | `channel` = subject; one `Message` per `MailRecord` (`From`/`Date`/body already parsed). `contentKind` stays `.email` |
+| `OutlookParser`, `SparkParser` | `.generic` | no `MailRecord` source exists for Outlook/Spark; they produce `.generic` with `contentKind` `.email` in Phase A. Typed `.conversation` for them is deferred to a later phase |
 | `CalendarParser`, `FantasticalParser` | `.calendar` | |
 | `RemindersParser`, `MicrosoftToDoParser`, `TodoistParser`, `OmniFocusParser`, `TogglParser` | `.tasks` | |
 | `TerminalParser` | `.terminal` | segmentation per §7; failure → one segment, `command: nil` |
@@ -966,6 +967,15 @@ Nothing below was silently redesigned. Each item states what the brief assumed, 
 **Q14 — `CloudProcessingState`'s gate is inert.** `CapturePrivacyStore.cloudReviewInitialized()` hardcodes `false` (`CapturePrivacyStore.swift:79`), which disables the `pendingReview`/`allowed`/`localOnly` gate that `AppWiring.swift:1570-1574` consults before writing activity evidence. **Decision:** informational only — M8 does not change it. The consent gate in §5c and §8 relies on `ActivityConsent` + `activityEnabled()` rather than `CloudProcessingState` for exactly this reason. Recorded so the inert gate is not mistaken for M8 breakage.
 
 **Q15 — Minimi embeds raw content too; MaxMi still does not.** Live traffic shows Minimi embedding **both** each extracted memory sentence **and** the full raw rendered content of every capture, 1:1, plus a single profile query phrase. MaxMi embeds facts only (`CapturePipeline.process` → `relay.embed(text: d.content)` per derivative). M8 keeps facts-only: adding a second embedding per capture roughly doubles embedding spend and needs a new `vec0` table alongside `derivative_embeddings`, and the retrieval win is unproven for us. **Decision:** facts-only embedding in M8; raw-content embedding is an optional later enhancement, explicitly out of scope here.
+
+**Amendments (2026-09-06, pre-flight)**
+
+- §4a — `Message.id` doc comment now states it is the source's native message ID when one exists (e.g. Mail's `messageID`), otherwise the `makeID` fingerprint, instead of implying it is always the fingerprint.
+- §4c — `LegacyContentAdapter` now emits one `.paragraph` block per line **including empty lines**, so `render(adapt(s, kind:), .full) == s` holds byte-for-byte (was "non-empty line", which broke the round-trip invariant).
+- §4d/§4e — clarified that §4d's keep-newest front-trimming applies only to `.conversation`/`.terminal` accumulation, while `GenericPageExtractor`'s per-region budget trimming (§4e) drops blocks from the end of each region, keeping the top of the page — the two trimming policies are independent and were previously easy to conflate.
+- §4e — `.listItem` depth is now defined precisely as the number of enclosing list ancestors minus one, with the outermost list at depth 0 and no indent, replacing the ambiguous "count of ancestor list/outline containers".
+- §4e — `Options.totalBudget` is now documented as an 8_000 default that individual parsers may override with a larger budget to preserve their existing cap (browser path 16_000; Word/Pages/Outlook/Spark 32_000).
+- §4f — Outlook and Spark now produce `.generic` with `contentKind` `.email` in Phase A, since no `MailRecord` source exists for them; typed `.conversation` for both is deferred to a later phase. Also clarified nil-`structured` resolution: the write path resolves in `CaptureEnvelope.init` (the one place both `ParsedCapture.envelope` and `CaptureEnvelope.legacy` route through), the read path resolves a NULL/undecodable `structured_ciphertext` via `LegacyContentAdapter` in the store, and no other site resolves nil.
 
 ## 13. Rollout
 
