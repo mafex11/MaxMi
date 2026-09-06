@@ -55,6 +55,9 @@ public struct ActivityTimeline: Codable, Sendable, Equatable {
 /// module never sees JSON.
 public struct TimelineRawEvent: Sendable, Equatable {
     public let kind: CaptureEventKind
+    /// Bundle identifier of the app that emitted the event. An event belongs only to a visit with
+    /// this same bundle identifier.
+    public let appBundle: String
     public let atMs: EpochMs
     public let threadID: String?
     public let trigger: CaptureTrigger
@@ -65,9 +68,10 @@ public struct TimelineRawEvent: Sendable, Equatable {
     /// `kind == .navigation` only.
     public let toURL: String?
 
-    public init(kind: CaptureEventKind, atMs: EpochMs, threadID: String?, trigger: CaptureTrigger,
-                delta: CaptureDelta?, typing: TypingEvent?, toURL: String?) {
+    public init(kind: CaptureEventKind, appBundle: String, atMs: EpochMs, threadID: String?,
+                trigger: CaptureTrigger, delta: CaptureDelta?, typing: TypingEvent?, toURL: String?) {
         self.kind = kind
+        self.appBundle = appBundle
         self.atMs = atMs
         self.threadID = threadID
         self.trigger = trigger
@@ -118,19 +122,20 @@ public struct TimelineBuilder: Sendable {
     }
 
     /// Every visit in the window becomes an entry — a focused app with no capture events is still
-    /// activity — and every event is attached to the visit whose span contains it. Adjacent
-    /// entries of the same thread (or, when neither has a thread, the same app) are coalesced.
+    /// activity — and every event is attached only to the visit with the same bundle whose span
+    /// contains it. Adjacent entries of the same bundle and thread (or, when neither has a
+    /// thread, the same bundle) are coalesced.
     ///
     /// Visits never overlap in practice: `AppWiring.handleFocusChange` closes all open visits
     /// before opening one. An event inside two overlapping visits would be attached to both,
     /// which is the honest answer for a state that cannot occur.
     public func build(fromMs: EpochMs, toMs: EpochMs) throws -> ActivityTimeline {
-        let visits = try repo.appVisits(fromMs: fromMs, toMs: toMs).sorted {
-            if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
-            if $0.appLabel != $1.appLabel { return $0.appLabel < $1.appLabel }
-            return $0.bundleID < $1.bundleID
+        let visits = Self.stablySorted(try repo.appVisits(fromMs: fromMs, toMs: toMs)) {
+            $0.startedAt
         }
-        let events = try repo.captureEvents(fromMs: fromMs, toMs: toMs).sorted { $0.atMs < $1.atMs }
+        let events = Self.stablySorted(try repo.captureEvents(fromMs: fromMs, toMs: toMs)) {
+            $0.atMs
+        }
         let metadata = try repo.threadMetadata(
             threadIDs: Array(Set(events.compactMap(\.threadID))).sorted())
 
@@ -142,16 +147,29 @@ public struct TimelineBuilder: Sendable {
                 bundleID: visit.bundleID,
                 entry: Self.entry(
                     appLabel: visit.appLabel, startMs: visit.startedAt, endMs: endMs,
-                    events: events.filter { $0.atMs >= visit.startedAt && $0.atMs <= endMs },
+                    events: events.filter {
+                        $0.appBundle == visit.bundleID
+                            && $0.atMs >= visit.startedAt
+                            && $0.atMs <= endMs
+                    },
                     metadata: metadata))
         }
-        return ActivityTimeline(fromMs: fromMs, toMs: toMs, entries: Self.coalesce(raw))
+        let entries = Self.stablySorted(Self.coalesce(raw)) { $0.startMs }
+        return ActivityTimeline(fromMs: fromMs, toMs: toMs, entries: entries)
+    }
+
+    static func stablySorted<T>(_ values: [T], startMs: (T) -> EpochMs) -> [T] {
+        values.enumerated().sorted {
+            if startMs($0.element) != startMs($1.element) {
+                return startMs($0.element) < startMs($1.element)
+            }
+            return $0.offset < $1.offset
+        }.map(\.element)
     }
 
     /// A built entry plus the bundle id it came from. `TimelineEntry`'s field list is pinned by
-    /// spec 5d and carries no bundle id, but coalescing needs one (spec 5d again: threadless
-    /// entries merge on the bundle, not on the display name), so it rides alongside and is dropped
-    /// as soon as coalescing is done.
+    /// spec 5d and carries no bundle id, but coalescing requires exact bundle identity for every
+    /// pair, so it rides alongside and is dropped as soon as coalescing is done.
     struct BuiltEntry: Equatable {
         let bundleID: String
         let entry: TimelineEntry
@@ -213,26 +231,27 @@ public struct TimelineBuilder: Sendable {
                 out.append(candidate)
                 continue
             }
-            // The bundle id of a merged pair is the same on both sides — `mergeable` only merges a
-            // threadless pair when they match, and a threaded pair is the same thread, hence the
-            // same app.
+            // `mergeable` requires equal bundle IDs, so either bundle ID is valid for the merged
+            // entry.
             out[out.count - 1] = BuiltEntry(bundleID: candidate.bundleID,
                                             entry: merge(previous.entry, candidate.entry))
         }
         return out.map(\.entry)
     }
 
-    /// Same thread, or — when NEITHER has a thread — the same BUNDLE. A threadless entry never
-    /// absorbs a threaded one: "the user was in the editor" and "the user edited this document"
-    /// are different facts.
+    /// Entries must have the same bundle. Within one bundle, they merge for the same thread or,
+    /// when NEITHER has a thread, for the same app visit. A threadless entry never absorbs a
+    /// threaded one: "the user was in the editor" and "the user edited this document" are
+    /// different facts.
     ///
     /// The bundle id, not `appLabel`: `activity_app_visits` stores the pair per visit, not 1:1
     /// across apps, so two bundles can present one display name and must stay two entries
     /// (spec 5d).
     static func mergeable(_ lhs: BuiltEntry, _ rhs: BuiltEntry) -> Bool {
+        guard lhs.bundleID == rhs.bundleID else { return false }
         if let left = lhs.entry.threadID, let right = rhs.entry.threadID { return left == right }
         if lhs.entry.threadID == nil, rhs.entry.threadID == nil {
-            return lhs.bundleID == rhs.bundleID
+            return true
         }
         return false
     }
@@ -263,6 +282,12 @@ public struct TimelineBuilder: Sendable {
     /// dropped: an over-budget single entry is still reported, the same soft-cap rule Phase A's
     /// budgeting applies to a page's first block.
     public static func render(_ timeline: ActivityTimeline, budgetChars: Int) -> String {
+        assert(
+            zip(timeline.entries, timeline.entries.dropFirst()).allSatisfy {
+                $0.startMs <= $1.startMs
+            },
+            "ActivityTimeline entries must be chronological."
+        )
         var lines = timeline.entries.map(line)
         guard !lines.isEmpty else { return "" }
         var omitted = false
@@ -320,7 +345,7 @@ public struct TimelineBuilder: Sendable {
 
     /// `DateFormatter` is thread-safe for formatting on macOS, and a timeline can carry hundreds
     /// of entries — the same reasoning `ContentRenderer.timestampFormatter` records.
-    private nonisolated(unsafe) static let timeFormatter: DateFormatter = {
+    private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current

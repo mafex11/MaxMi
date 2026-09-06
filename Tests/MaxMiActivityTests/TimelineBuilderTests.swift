@@ -33,15 +33,18 @@ final class TimelineBuilderTests: XCTestCase {
         return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
 
-    private func deltaEvent(atMs: EpochMs, threadID: String?, delta: CaptureDelta) -> TimelineRawEvent {
-        TimelineRawEvent(kind: .contentDelta, atMs: atMs, threadID: threadID, trigger: .periodic,
-                         delta: delta, typing: nil, toURL: nil)
+    private func deltaEvent(appBundle: String = "a", atMs: EpochMs, threadID: String?,
+                            delta: CaptureDelta) -> TimelineRawEvent {
+        TimelineRawEvent(kind: .contentDelta, appBundle: appBundle, atMs: atMs,
+                         threadID: threadID, trigger: .periodic, delta: delta, typing: nil,
+                         toURL: nil)
     }
 
-    private func typingEvent(atMs: EpochMs, threadID: String?, text: String) -> TimelineRawEvent {
+    private func typingEvent(appBundle: String = "a", atMs: EpochMs, threadID: String?,
+                             text: String) -> TimelineRawEvent {
         TimelineRawEvent(
-            kind: .typing, atMs: atMs, threadID: threadID, trigger: .accessibilityChanged,
-            delta: nil,
+            kind: .typing, appBundle: appBundle, atMs: atMs, threadID: threadID,
+            trigger: .accessibilityChanged, delta: nil,
             typing: TypingEvent(insertedText: text, fieldRole: "AXTextArea",
                                 fieldIdentifier: "composer", totalLength: text.count,
                                 replaced: false),
@@ -81,7 +84,7 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(timeline.entries.first?.endMs, t0 + 600_000)
     }
 
-    func testEntriesAreChronologicalRegardlessOfRepositoryOrder() throws {
+    func testEntriesAndRenderedTextAreChronologicalRegardlessOfRepositoryOrder() throws {
         let repo = StubTimelineRepository(visits: [
             (bundleID: "c", appLabel: "Third", startedAt: t0 + 200_000, endedAt: t0 + 300_000),
             (bundleID: "a", appLabel: "First", startedAt: t0, endedAt: t0 + 100_000),
@@ -89,6 +92,15 @@ final class TimelineBuilderTests: XCTestCase {
         ])
         let timeline = try TimelineBuilder(repo: repo).build(fromMs: t0, toMs: t0 + 600_000)
         XCTAssertEqual(timeline.entries.map(\.appLabel), ["First", "Second", "Third"])
+        XCTAssertEqual(
+            TimelineBuilder.render(timeline, budgetChars: 4_000)
+                .split(separator: "\n")
+                .map(String.init),
+            [
+                "\(hhmm(t0))–\(hhmm(t0 + 100_000)) First",
+                "\(hhmm(t0 + 100_000))–\(hhmm(t0 + 200_000)) Second",
+                "\(hhmm(t0 + 200_000))–\(hhmm(t0 + 300_000)) Third",
+            ])
     }
 
     func testEventsAttachToTheVisitContainingThem() throws {
@@ -101,7 +113,7 @@ final class TimelineBuilderTests: XCTestCase {
                 deltaEvent(atMs: t0 + 50_000, threadID: "t1",
                            delta: CaptureDelta(addedBlocks: [Block(type: .paragraph, text: "one")],
                                                addedChars: 3)),
-                deltaEvent(atMs: t0 + 150_000, threadID: "t2",
+                deltaEvent(appBundle: "b", atMs: t0 + 150_000, threadID: "t2",
                            delta: CaptureDelta(addedMessages: [message("Ana", "hello")],
                                                addedChars: 5)),
             ],
@@ -118,6 +130,27 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(entries.map(\.newItemCount), [1, 1])
     }
 
+    func testEventWithDifferentBundleInsideVisitIsNotAttached() throws {
+        let repo = StubTimelineRepository(
+            visits: [(bundleID: "a", appLabel: "Editor", startedAt: t0, endedAt: t0 + 100_000)],
+            events: [
+                deltaEvent(appBundle: "b", atMs: t0 + 50_000, threadID: "t1",
+                           delta: CaptureDelta(addedBlocks: [
+                               Block(type: .paragraph, text: "wrong app"),
+                           ], addedChars: 9)),
+            ],
+            metadata: [
+                "t1": TimelineThreadMeta(sourceApp: "Editor", sourceTitle: "Draft",
+                                         kind: .document, url: nil, cwd: nil),
+            ])
+
+        let entry = try XCTUnwrap(
+            TimelineBuilder(repo: repo).build(fromMs: t0, toMs: t0 + 600_000).entries.first)
+        XCTAssertNil(entry.threadID)
+        XCTAssertEqual(entry.kind, .generic)
+        XCTAssertEqual(entry.newItemCount, 0)
+    }
+
     func testEventsOutsideEveryVisitAreDropped() throws {
         let repo = StubTimelineRepository(
             visits: [(bundleID: "a", appLabel: "First", startedAt: t0, endedAt: t0 + 10_000)],
@@ -128,7 +161,7 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertNil(entries.first?.threadID)
     }
 
-    func testAdjacentSameThreadVisitsCoalesce() throws {
+    func testAdjacentSameThreadVisitsOfTheSameBundleCoalesce() throws {
         let repo = StubTimelineRepository(
             visits: [
                 (bundleID: "a", appLabel: "Editor", startedAt: t0, endedAt: t0 + 100_000),
@@ -155,6 +188,29 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(entry.typedCount, 2)
         XCTAssertEqual(entry.typedSample, "def", "the latest sample wins")
         XCTAssertEqual(entry.deltaSummary, "two", "the latest delta summary wins")
+    }
+
+    func testAdjacentSameThreadVisitsOfDifferentBundlesDoNotCoalesce() throws {
+        let repo = StubTimelineRepository(
+            visits: [
+                (bundleID: "a", appLabel: "Chat", startedAt: t0, endedAt: t0 + 100_000),
+                (bundleID: "b", appLabel: "Chat", startedAt: t0 + 100_001, endedAt: t0 + 200_000),
+            ],
+            events: [
+                deltaEvent(appBundle: "a", atMs: t0 + 50_000, threadID: "t1",
+                           delta: CaptureDelta(addedChars: 1)),
+                deltaEvent(appBundle: "b", atMs: t0 + 150_000, threadID: "t1",
+                           delta: CaptureDelta(addedChars: 1)),
+            ],
+            metadata: [
+                "t1": TimelineThreadMeta(sourceApp: "Chat", sourceTitle: "#shared",
+                                         kind: .conversation, url: nil, cwd: nil),
+            ])
+
+        let entries = try TimelineBuilder(repo: repo).build(fromMs: t0, toMs: t0 + 600_000).entries
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries.map(\.threadID), ["t1", "t1"])
+        XCTAssertEqual(entries.map(\.startMs), [t0, t0 + 100_001])
     }
 
     func testAdjacentThreadlessVisitsOfTheSameAppCoalesce() throws {
@@ -239,7 +295,7 @@ final class TimelineBuilderTests: XCTestCase {
                         TerminalSegment(command: "swift test", output: "2 failures", isRunning: false),
                         TerminalSegment(command: "git status", output: "clean", isRunning: false),
                     ], addedChars: 40)),
-                deltaEvent(atMs: t0 + 110_000, threadID: "t2", delta: CaptureDelta(
+                deltaEvent(appBundle: "b", atMs: t0 + 110_000, threadID: "t2", delta: CaptureDelta(
                     addedMessages: [message("Ana", "one"), message("Bo", "two")], addedChars: 6)),
             ],
             metadata: [
