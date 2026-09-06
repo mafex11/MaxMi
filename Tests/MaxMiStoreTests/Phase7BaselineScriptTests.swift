@@ -66,7 +66,7 @@ final class Phase7BaselineScriptTests: XCTestCase {
 
         XCTAssertEqual(result.status, 0, result.stderr)
         XCTAssertTrue(result.stdout.contains("phase7_baseline_version=1"))
-        XCTAssertTrue(result.stdout.contains("latest_migration=v10"))
+        XCTAssertTrue(result.stdout.contains("latest_migration=v11"))
         XCTAssertTrue(result.stdout.contains("integrity=ok"))
         XCTAssertTrue(result.stdout.contains("threads=1"))
         XCTAssertTrue(result.stdout.contains("versions=1"))

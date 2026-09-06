@@ -1,7 +1,7 @@
 import GRDB
 
 enum Migrations {
-    static let currentIdentifier = "v10"
+    static let currentIdentifier = "v11"
 
     static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
@@ -309,6 +309,32 @@ enum Migrations {
             try db.execute(sql: """
             ALTER TABLE versions        ADD COLUMN structured_ciphertext TEXT;
             ALTER TABLE latest_contexts ADD COLUMN structured_ciphertext TEXT;
+            """)
+        }
+        m.registerMigration("v11") { db in
+            // `app_bundle` is nullable PLAINTEXT, exactly like `activity_app_visits.app_bundle`
+            // above: a bundle id is an identifier, not content, and it is the only way to check
+            // spec 11 criterion 4 ("nothing is written for a denylisted, excluded, or
+            // non-consented app") without decrypting a payload. Not indexed — the only query is
+            // the criterion check and `idx_capture_events_at` already covers its time bound.
+            // `thread_id` is nullable because a focus event fires before any thread exists for
+            // that window (spec 12 Q4). `version_id` is SET NULL so version pruning keeps the
+            // event. `payload_ciphertext` is TEXT because FieldCipher.encrypt returns the
+            // "enc:v1:" prefixed base64 String (spec 12 Q2).
+            try db.execute(sql: """
+            CREATE TABLE capture_events (
+              id                 TEXT PRIMARY KEY,
+              app_bundle         TEXT,
+              thread_id          TEXT REFERENCES threads(id) ON DELETE CASCADE,
+              version_id         TEXT REFERENCES versions(id) ON DELETE SET NULL,
+              at_ms              INTEGER NOT NULL,
+              kind               TEXT NOT NULL CHECK(kind IN ('focus','navigation','content_delta','typing','dialog')),
+              trigger            TEXT NOT NULL,
+              payload_ciphertext TEXT,
+              hour_bucket        INTEGER NOT NULL
+            );
+            CREATE INDEX idx_capture_events_at     ON capture_events(at_ms DESC, id DESC);
+            CREATE INDEX idx_capture_events_thread ON capture_events(thread_id, at_ms DESC);
             """)
         }
         return m

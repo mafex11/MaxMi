@@ -37,7 +37,7 @@ final class RuntimeDiagnosticsTests: XCTestCase {
         let snapshot = try store.runtimeDiagnostics(nowMs: 2)
         let encoded = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
 
-        XCTAssertEqual(snapshot.latestMigration.value, "v10")
+        XCTAssertEqual(snapshot.latestMigration.value, "v11")
         XCTAssertTrue(snapshot.integrityOK)
         XCTAssertEqual(snapshot.threads, 1)
         XCTAssertEqual(snapshot.versions, 1)
