@@ -47,7 +47,8 @@ final class GenericAXParserTests: XCTestCase {
         let cap = try XCTUnwrap(try GenericAXParser().parse(window: win, app: cursor))
         XCTAssertTrue(cap.content.contains("struct CaptureEnvelope"))
         XCTAssertEqual(cap.contentKind, .document)
-        XCTAssertEqual(cap.accumulationPolicy, .rollingText)
+        // v2 pages carry whole-page semantics (spec 4d), so they replace rather than roll.
+        XCTAssertEqual(cap.accumulationPolicy, .replace)
         XCTAssertEqual(cap.offscreenPolicy.mode, .accessibilityScroll)
     }
 }

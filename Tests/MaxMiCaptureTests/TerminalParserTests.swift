@@ -28,7 +28,7 @@ final class TerminalParserTests: XCTestCase {
     func testKeyFromCwdInContent() {
         let p = TerminalParser()
         // a shell prompt line carrying the cwd
-        let content = "some output\nsudhanshu@mac ~/code/personal/MaxMi % git status\n"
+        let content = "some output\ndev@mac ~/code/personal/MaxMi % git status\n"
         XCTAssertEqual(p.terminalKey(app: app(nil), content: content), "terminal:warp/maxmi")
     }
     func testKeyUsesMostRecentCwd() {
@@ -50,7 +50,7 @@ final class TerminalParserTests: XCTestCase {
     }
     func testAbsoluteUsersPath() {
         let p = TerminalParser()
-        XCTAssertEqual(p.terminalKey(app: app(nil), content: "x\n/Users/sudhanshu/code/Yuki $ npm test\n"),
+        XCTAssertEqual(p.terminalKey(app: app(nil), content: "x\n/Users/dev/code/Yuki $ npm test\n"),
                        "terminal:warp/yuki")
     }
 

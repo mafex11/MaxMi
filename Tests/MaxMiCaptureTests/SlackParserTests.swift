@@ -1,4 +1,5 @@
 import XCTest
+import MaxMiCore
 @testable import MaxMiCapture
 
 final class SlackParserTests: XCTestCase {
@@ -20,6 +21,13 @@ final class SlackParserTests: XCTestCase {
                                   frame: CGRect(x: 240, y: 0, width: 10, height: 10), focused: false, children: [])])])
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("c - w - Slack")))
         XCTAssertLessThanOrEqual(cap.content.count, 8000, "single oversize message must not bypass the cap")
+        XCTAssertTrue(cap.content.hasSuffix(String(repeating: "x", count: 100)),
+                      "the TAIL of the oversize message survives")
+        let structured = try XCTUnwrap(cap.structured)
+        XCTAssertEqual(cap.content, ContentRenderer.render(structured, style: .full),
+                       "the cap is applied to the structured value, not to the rendered string")
+        guard case .conversation(let conversation) = structured else { return XCTFail() }
+        XCTAssertEqual(conversation.messages.count, 1, "the message is trimmed, never dropped")
     }
 
     func testKeyFromTitleAndSenderAttributedMessages() throws {
@@ -27,8 +35,8 @@ final class SlackParserTests: XCTestCase {
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
         XCTAssertEqual(cap.sourceApp, "Slack")
         XCTAssertEqual(cap.sourceKey, "slack:acme/general")
-        XCTAssertTrue(cap.content.contains("Alice: shipped the build"))
-        XCTAssertTrue(cap.content.contains("Bob: deploy looks green"))
+        XCTAssertTrue(cap.content.contains("(From: Alice): shipped the build"))
+        XCTAssertTrue(cap.content.contains("(From: Bob): deploy looks green"))
         // message ordering top->bottom
         XCTAssertLessThan(cap.content.range(of: "Alice")!.lowerBound, cap.content.range(of: "Bob")!.lowerBound)
     }
@@ -50,8 +58,8 @@ final class SlackParserTests: XCTestCase {
         let win = try fixture("slack-window")
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
         // message-area rows (x>=240) present
-        XCTAssertTrue(cap.content.contains("Alice: shipped the build"))
-        XCTAssertTrue(cap.content.contains("Bob: deploy looks green"))
+        XCTAssertTrue(cap.content.contains("(From: Alice): shipped the build"))
+        XCTAssertTrue(cap.content.contains("(From: Bob): deploy looks green"))
         // sidebar row (x<240) excluded
         XCTAssertFalse(cap.content.contains("random-channel"), "sidebar chrome must not appear in message content")
     }
@@ -85,10 +93,12 @@ final class SlackParserTests: XCTestCase {
         let oldestMsg = allMessages.first!
         XCTAssertFalse(cap.content.contains(oldestMsg), "Oldest message should be dropped")
 
-        // 4. Content does not start or end mid-word — all kept lines are complete
+        // 4. Content does not start or end mid-word — all kept lines are complete. Each row here
+        // holds a single static text, so it becomes an unknown-sender message (spec §4b).
+        let expected = allMessages.map { "(From: unknown): \($0)" }
         let keptLines = cap.content.components(separatedBy: "\n")
         for line in keptLines {
-            XCTAssertTrue(allMessages.contains(line), "Each kept line should be a complete original message")
+            XCTAssertTrue(expected.contains(line), "Each kept line should be a complete original message")
         }
     }
     func testSidebarFilterIsWindowRelative() throws {
@@ -101,7 +111,7 @@ final class SlackParserTests: XCTestCase {
             node("AXRow", nil, 840, 100, [node("AXStaticText", "Zoe", 840, 100), node("AXStaticText", "hi team", 860, 100)]),
         ])
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
-        XCTAssertTrue(cap.content.contains("Zoe: hi team"), "message row (winX+240) kept")
+        XCTAssertTrue(cap.content.contains("(From: Zoe): hi team"), "message row (winX+240) kept")
         XCTAssertFalse(cap.content.contains("sidebar-channel"), "sidebar row (winX+10) excluded even when window is not flush-left")
     }
 }

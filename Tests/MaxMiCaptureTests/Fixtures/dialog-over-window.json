@@ -1,0 +1,32 @@
+{
+  "role": "AXWindow", "value": null, "title": "Cloudflare WARP", "url": null,
+  "frame": {"x":200,"y":150,"width":900,"height":650}, "focused": false,
+  "children": [
+    {"role": "AXGroup", "value": null, "title": null, "url": null,
+     "frame": {"x":200,"y":150,"width":900,"height":650}, "focused": false, "children": [
+       {"role": "AXStaticText", "value": "Main body line one", "title": null, "url": null,
+        "frame": {"x":220,"y":200,"width":400,"height":16}, "focused": false, "children": []},
+       {"role": "AXStaticText", "value": "Main body line two", "title": null, "url": null,
+        "frame": {"x":220,"y":220,"width":400,"height":16}, "focused": false, "children": []},
+       {"role": "AXStaticText", "value": "Main body line three", "title": null, "url": null,
+        "frame": {"x":220,"y":240,"width":400,"height":16}, "focused": false, "children": []},
+       {"role": "AXStaticText", "value": "Main body line four", "title": null, "url": null,
+        "frame": {"x":220,"y":260,"width":400,"height":16}, "focused": false, "children": []},
+       {"role": "AXStaticText", "value": "Main body line five", "title": null, "url": null,
+        "frame": {"x":220,"y":280,"width":400,"height":16}, "focused": false, "children": []},
+       {"role": "AXStaticText", "value": "Main body line six", "title": null, "url": null,
+        "frame": {"x":220,"y":300,"width":400,"height":16}, "focused": false, "children": []}
+     ]},
+    {"role": "AXSheet", "value": null, "title": null, "url": null,
+     "frame": {"x":450,"y":300,"width":400,"height":200}, "focused": false, "children": [
+       {"role": "AXStaticText", "value": "Quit Cloudflare WARP?", "title": null, "url": null,
+        "frame": {"x":470,"y":330,"width":360,"height":16}, "focused": false, "children": []},
+       {"role": "AXStaticText", "value": "Open tunnels will disconnect.", "title": null, "url": null,
+        "frame": {"x":470,"y":354,"width":360,"height":16}, "focused": false, "children": []},
+       {"role": "AXButton", "value": null, "title": "Quit", "url": null,
+        "frame": {"x":470,"y":420,"width":80,"height":24}, "focused": false, "children": []},
+       {"role": "AXButton", "value": null, "title": "Cancel", "url": null,
+        "frame": {"x":560,"y":420,"width":80,"height":24}, "focused": false, "children": []}
+     ]}
+  ]
+}

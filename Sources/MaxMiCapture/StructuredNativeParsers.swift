@@ -6,12 +6,18 @@ public struct CalendarParser: SourceParser {
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.calendar(window: window, app: app, sourceApp: "Calendar", prefix: "calendar")
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.calendarContent(window: window, app: app, sourceApp: "Calendar")?.content
+    }
 }
 
 public struct FantasticalParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.calendar(window: window, app: app, sourceApp: "Fantastical", prefix: "fantastical")
+    }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.calendarContent(window: window, app: app, sourceApp: "Fantastical")?.content
     }
 }
 
@@ -20,12 +26,18 @@ public struct RemindersParser: SourceParser {
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.task(window: window, app: app, sourceApp: "Reminders", prefix: "reminder")
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.taskContent(window: window, app: app, sourceApp: "Reminders")?.content
+    }
 }
 
 public struct MicrosoftToDoParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.task(window: window, app: app, sourceApp: "Microsoft To Do", prefix: "todo")
+    }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.taskContent(window: window, app: app, sourceApp: "Microsoft To Do")?.content
     }
 }
 
@@ -34,6 +46,9 @@ public struct TodoistParser: SourceParser {
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.task(window: window, app: app, sourceApp: "Todoist", prefix: "todoist")
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.taskContent(window: window, app: app, sourceApp: "Todoist")?.content
+    }
 }
 
 public struct OmniFocusParser: SourceParser {
@@ -41,12 +56,18 @@ public struct OmniFocusParser: SourceParser {
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.task(window: window, app: app, sourceApp: "OmniFocus", prefix: "omnifocus")
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.taskContent(window: window, app: app, sourceApp: "OmniFocus")?.content
+    }
 }
 
 public struct TogglParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.task(window: window, app: app, sourceApp: "Toggl", prefix: "toggl")
+    }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.taskContent(window: window, app: app, sourceApp: "Toggl")?.content
     }
 }
 
@@ -58,6 +79,9 @@ public struct WordParser: SourceParser {
             titleSuffixes: [" - Microsoft Word", " — Microsoft Word"]
         )
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.documentContent(window: window)
+    }
 }
 
 public struct PagesParser: SourceParser {
@@ -68,6 +92,9 @@ public struct PagesParser: SourceParser {
             titleSuffixes: [" - Pages", " — Pages"]
         )
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.documentContent(window: window)
+    }
 }
 
 public struct OutlookParser: SourceParser {
@@ -75,12 +102,18 @@ public struct OutlookParser: SourceParser {
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.email(window: window, app: app, sourceApp: "Outlook", prefix: "outlook")
     }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.emailContent(window: window)
+    }
 }
 
 public struct SparkParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         StructuredEntityExtraction.email(window: window, app: app, sourceApp: "Spark", prefix: "spark")
+    }
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        StructuredEntityExtraction.emailContent(window: window)
     }
 }
 
@@ -101,12 +134,13 @@ enum StructuredEntityExtraction {
         "reminders", "completed", "flagged", "all", "scheduled", "add list", "settings",
     ]
 
-    static func calendar(
-        window: AXNode,
-        app: AppInfo,
-        sourceApp: String,
-        prefix: String
-    ) -> ParsedCapture? {
+    struct Extracted {
+        let content: CapturedContent
+        let sourceKey: String
+        let sourceTitle: String
+    }
+
+    static func calendarContent(window: AXNode, app: AppInfo, sourceApp: String) -> Extracted? {
         let root = preferredDetailRoot(in: window, hints: ["event", "detail", "popover"])
         let fields = orderedFields(in: root)
         guard !fields.isEmpty else { return nil }
@@ -118,35 +152,50 @@ enum StructuredEntityExtraction {
         let when = firstValue(fields, metadataHints: ["date", "time", "start", "end"])
             ?? fields.first(where: { looksLikeDateOrTime($0.value) })?.value
         let location = firstValue(fields, metadataHints: ["location", "place"])
-        let calendarName = firstValue(fields, metadataHints: ["calendar-name", "account"])
+        // No organizer is exposed by these detail views, so the account/calendar name — the
+        // closest thing to "who owns this event" — lands in `organizer`.
+        let organizer = firstValue(fields, metadataHints: ["organizer", "invitee", "calendar-name", "account"])
+        let hasConference = fields.contains { field in
+            let value = field.value.lowercased()
+            return value.contains("zoom.us") || value.contains("meet.google.com")
+                || value.contains("teams.microsoft.com") || value.contains("join with")
+        }
+        // Everything the four named fields did not claim becomes the detail body, exactly as
+        // the v1 `Details:` block did.
         let details = remainingValues(
-            fields, excluding: [title, when, location, calendarName].compactMap { $0 }
+            fields, excluding: [title, when, location, organizer].compactMap { $0 }
         )
+        let event = CalendarEvent(
+            title: title,
+            dateString: when ?? "",
+            start: nil, end: nil,
+            organizer: organizer,
+            location: location,
+            hasConference: hasConference,
+            notes: details.isEmpty ? nil : details.joined(separator: "\n")
+        )
+        let identity = [title, when ?? "", organizer ?? ""].joined(separator: "|")
+        return Extracted(content: .calendar([event]),
+                         sourceKey: "event:\(shortHash(identity))",
+                         sourceTitle: title)
+    }
 
-        var lines = ["Event: \(title)"]
-        if let when { lines.append("When: \(when)") }
-        if let location { lines.append("Location: \(location)") }
-        if let calendarName { lines.append("Calendar: \(calendarName)") }
-        if !details.isEmpty { lines.append("Details:\n" + details.joined(separator: "\n")) }
-        let identity = [title, when ?? "", calendarName ?? ""].joined(separator: "|")
+    static func calendar(window: AXNode, app: AppInfo, sourceApp: String, prefix: String) -> ParsedCapture? {
+        guard let extracted = calendarContent(window: window, app: app, sourceApp: sourceApp) else { return nil }
         return ParsedCapture(
             sourceApp: sourceApp,
-            sourceKey: "\(prefix):event:\(shortHash(identity))",
-            sourceTitle: title,
-            content: bounded(lines.joined(separator: "\n")),
+            sourceKey: "\(prefix):\(extracted.sourceKey)",
+            sourceTitle: extracted.sourceTitle,
+            content: ContentRenderer.render(extracted.content, style: .full),
             contentKind: .calendar,
             parserVersion: 2,
             accumulationPolicy: .replace,
-            offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
+            offscreenPolicy: .visibleOnly(maxCharacters: 32_000),
+            structured: extracted.content
         )
     }
 
-    static func task(
-        window: AXNode,
-        app: AppInfo,
-        sourceApp: String,
-        prefix: String
-    ) -> ParsedCapture? {
+    static func taskContent(window: AXNode, app: AppInfo, sourceApp: String) -> Extracted? {
         let root = preferredDetailRoot(in: window, hints: ["task", "reminder", "detail"])
         let fields = orderedFields(in: root)
         guard !fields.isEmpty else { return nil }
@@ -159,31 +208,56 @@ enum StructuredEntityExtraction {
             ?? fields.first(where: { looksLikeDateOrTime($0.value) })?.value
         let project = firstValue(fields, metadataHints: ["list", "project", "section"])
         let statusField = fields.first { $0.role == "AXCheckBox" || $0.metadata.contains("completed") }
-        let status: String
-        if let value = statusField?.value.lowercased(), ["1", "true", "yes", "checked"].contains(value) {
-            status = "completed"
-        } else {
-            status = "open"
-        }
+        let checked = ["1", "true", "yes", "checked"].contains(statusField?.value.lowercased() ?? "")
+        let status: TaskStatus = statusField == nil ? .unknown : (checked ? .completed : .open)
         let details = remainingValues(
             fields, excluding: [title, due, project, statusField?.value].compactMap { $0 }
         )
-
-        var lines = ["Task: \(title)", "Status: \(status)"]
-        if let project { lines.append("List: \(project)") }
-        if let due { lines.append("Due: \(due)") }
-        if !details.isEmpty { lines.append("Details:\n" + details.joined(separator: "\n")) }
+        let item = TaskItem(
+            title: title,
+            status: status,
+            due: nil,
+            dueString: due,
+            project: project,
+            tags: [],
+            notes: details.isEmpty ? nil : details.joined(separator: "\n")
+        )
         let identity = [title, project ?? ""].joined(separator: "|")
+        return Extracted(content: .tasks([item]),
+                         sourceKey: "task:\(shortHash(identity))",
+                         sourceTitle: title)
+    }
+
+    static func task(window: AXNode, app: AppInfo, sourceApp: String, prefix: String) -> ParsedCapture? {
+        guard let extracted = taskContent(window: window, app: app, sourceApp: sourceApp) else { return nil }
         return ParsedCapture(
             sourceApp: sourceApp,
-            sourceKey: "\(prefix):task:\(shortHash(identity))",
-            sourceTitle: title,
-            content: bounded(lines.joined(separator: "\n")),
+            sourceKey: "\(prefix):\(extracted.sourceKey)",
+            sourceTitle: extracted.sourceTitle,
+            content: ContentRenderer.render(extracted.content, style: .full),
             contentKind: .task,
             parserVersion: 2,
             accumulationPolicy: .replace,
-            offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
+            offscreenPolicy: .visibleOnly(maxCharacters: 32_000),
+            structured: extracted.content
         )
+    }
+
+    /// Preserves the 32_000 cap `DocumentExtraction.bodyText` applied here.
+    static let pageBudget = 32_000
+    // Whole-page `.replace` accumulation bounds ONE capture to `pageBudget`, so the scroll
+    // ceiling is `pageBudget` too — a larger one would be unreachable and its truncation branch
+    // dead. Unioning blocks across scrolls so a long document can exceed it is a Phase D
+    // candidate, alongside the anchored document parsers.
+    static let documentOffscreen: OffscreenCapturePolicy =
+        .accessibilityScroll(maxSteps: 6, maxCharacters: pageBudget)
+    static let emailOffscreen: OffscreenCapturePolicy =
+        .accessibilityScroll(maxSteps: 4, maxCharacters: pageBudget)
+
+    /// Generic v2 over the whole window. The anchored document parsers land in Phase D.
+    static func documentContent(window: AXNode) -> CapturedContent? {
+        GenericV2Content.page(window: window, budget: pageBudget,
+                              offscreenPolicy: documentOffscreen)
     }
 
     static func document(
@@ -193,8 +267,7 @@ enum StructuredEntityExtraction {
         prefix: String,
         titleSuffixes: [String]
     ) -> ParsedCapture? {
-        let content = DocumentExtraction.bodyText(in: window, maxCharacters: 32_000)
-        guard !content.isEmpty else { return nil }
+        guard let structured = documentContent(window: window) else { return nil }
         var title = app.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         for suffix in titleSuffixes where title.hasSuffix(suffix) {
             title.removeLast(suffix.count)
@@ -204,12 +277,19 @@ enum StructuredEntityExtraction {
             sourceApp: sourceApp,
             sourceKey: "\(prefix):\(docSlug(title))",
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(structured, style: .full),
             contentKind: .document,
             parserVersion: 2,
-            accumulationPolicy: .rollingText,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 6, maxCharacters: 96_000)
+            // Whole-page semantics (spec 4d): each extraction is the window's current state.
+            accumulationPolicy: .replace,
+            offscreenPolicy: documentOffscreen,
+            structured: structured
         )
+    }
+
+    static func emailContent(window: AXNode) -> CapturedContent? {
+        GenericV2Content.page(window: window, budget: pageBudget,
+                              offscreenPolicy: emailOffscreen)
     }
 
     static func email(
@@ -218,18 +298,20 @@ enum StructuredEntityExtraction {
         sourceApp: String,
         prefix: String
     ) -> ParsedCapture? {
-        let content = DocumentExtraction.bodyText(in: window, maxCharacters: 32_000)
-        guard !content.isEmpty else { return nil }
+        guard let structured = emailContent(window: window) else { return nil }
         let title = meaningfulWindowTitle(app.windowTitle, excluding: [sourceApp]) ?? "message"
         return ParsedCapture(
             sourceApp: sourceApp,
             sourceKey: "\(prefix):message:\(shortHash(title))",
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(structured, style: .full),
+            // Outlook and Spark expose no sender or date, so they stay a page — but the kind
+            // is still .email (spec 12 Q3).
             contentKind: .email,
             parserVersion: 2,
-            accumulationPolicy: .rollingText,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
+            accumulationPolicy: .replace,
+            offscreenPolicy: emailOffscreen,
+            structured: structured
         )
     }
 
@@ -309,10 +391,6 @@ enum StructuredEntityExtraction {
 
     private static func shortHash(_ value: String) -> String {
         String(ContentHash.sha256Hex(value).prefix(24))
-    }
-
-    private static func bounded(_ value: String) -> String {
-        String(value.suffix(32_000))
     }
 
     private static func isChrome(_ value: String) -> Bool {

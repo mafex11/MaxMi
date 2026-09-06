@@ -17,7 +17,8 @@ final class BrowserCapturePipelineTests: XCTestCase {
         XCTAssertEqual(result.capture.sourceKey, "https://app.slack.com/client/T123/C456")
         XCTAssertEqual(result.capture.contentKind, .conversation)
         XCTAssertEqual(result.capture.accumulationPolicy, .appendItems)
-        XCTAssertEqual(result.capture.content, "Alex: Morning update\nSam: Reviewing the browser parser")
+        XCTAssertEqual(result.capture.content,
+                       "(From: Alex): Morning update\n(From: Sam): Reviewing the browser parser")
         XCTAssertEqual(result.quality, .high)
         XCTAssertTrue(result.parserID.contains("gecko/slack/webArea/quality-high"))
     }
@@ -29,7 +30,7 @@ final class BrowserCapturePipelineTests: XCTestCase {
         )
         XCTAssertEqual(result.webApp, .gmail)
         XCTAssertEqual(result.capture.contentKind, .email)
-        XCTAssertEqual(result.capture.accumulationPolicy, .rollingText)
+        XCTAssertEqual(result.capture.accumulationPolicy, .replace)
         XCTAssertEqual(result.capture.sourceApp, "Web")
         XCTAssertTrue(result.capture.sourceKey.hasPrefix("https://mail.google.com/"))
     }
@@ -49,7 +50,28 @@ final class BrowserCapturePipelineTests: XCTestCase {
         }
     }
 
-    func testConversationKeepsRepeatedMessagesAtDifferentPositions() {
+    func testAWebAreaThatRendersNoRegionsIsRefused() throws {
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        // Text is present but the web area has collapsed to zero size, so nothing on the page is
+        // on screen: the tab text still reads, the typed page comes out with no regions at all.
+        let text = AXNode(role: "AXStaticText", value: "Loading", title: nil, url: nil,
+                          frame: CGRect(x: 0, y: 0, width: 200, height: 16),
+                          focused: false, children: [])
+        let webArea = AXNode(role: "AXWebArea", value: nil, title: "Docs",
+                             url: "https://example.com/docs", frame: .zero,
+                             focused: false, children: [text])
+        let window = AXNode(role: "AXWindow", value: nil, title: "Docs", url: nil,
+                            frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                            focused: false, children: [webArea])
+        XCTAssertThrowsError(try BrowserCapturePipeline.parse(
+            window: window, windowTitle: "Docs", browser: browser
+        )) { XCTAssertEqual($0 as? ExtractionError, .emptyContent) }
+    }
+
+    /// Spec §4d: a conversation is unioned by `Message.id` (sender + time + text), so two
+    /// indistinguishable bubbles are ONE message — a web row carries no timestamp to tell
+    /// them apart.
+    func testConversationCollapsesRepeatedIdenticalMessages() {
         func text(_ value: String, y: CGFloat) -> AXNode {
             AXNode(
                 role: "AXStaticText", value: value, title: nil, url: nil,
@@ -71,7 +93,9 @@ final class BrowserCapturePipelineTests: XCTestCase {
 
         XCTAssertEqual(
             WebAppCaptureParser.messageLines(in: root),
-            ["Alex: yes", "Alex: yes"]
+            ["Alex: yes"]
         )
+        XCTAssertEqual(WebAppCaptureParser.messages(in: root).count, 1,
+                       "the typed shape agrees with the rendered lines")
     }
 }

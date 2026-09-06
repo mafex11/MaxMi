@@ -17,10 +17,10 @@ final class StructuredNativeParserTests: XCTestCase {
         XCTAssertTrue(capture.sourceKey.hasPrefix("calendar:event:"))
         XCTAssertEqual(capture.contentKind, .calendar)
         XCTAssertEqual(capture.accumulationPolicy, .replace)
-        XCTAssertTrue(capture.content.contains("Event: Design review"))
-        XCTAssertTrue(capture.content.contains("When: Tuesday, 3:00 PM"))
-        XCTAssertTrue(capture.content.contains("Location: Studio room"))
-        XCTAssertTrue(capture.content.contains("Calendar: Work"))
+        XCTAssertEqual(capture.content, """
+        Tuesday, 3:00 PM — Design review @Studio room / Work
+        Details: Review the interaction flow.
+        """)
     }
 
     func testFantasticalUsesSameEventContractWithDistinctIdentity() throws {
@@ -42,9 +42,13 @@ final class StructuredNativeParserTests: XCTestCase {
         XCTAssertEqual(capture.sourceTitle, "Submit project notes")
         XCTAssertEqual(capture.contentKind, .task)
         XCTAssertEqual(capture.accumulationPolicy, .replace)
-        XCTAssertTrue(capture.content.contains("Status: open"))
-        XCTAssertTrue(capture.content.contains("List: Work"))
-        XCTAssertTrue(capture.content.contains("Due: Tomorrow, 5:00 PM"))
+        // The fixture's task-notes AXTextArea ("Attach the final screenshots.") is leftover
+        // detail text, so it survives as TaskItem.notes and renders as an indented
+        // continuation line (brief literal omits it; corrected to match the fixture).
+        XCTAssertEqual(capture.content, """
+        - [ ] Submit project notes (due Tomorrow, 5:00 PM) [Work]
+          Attach the final screenshots.
+        """)
     }
 
     func testCompletedReminderState() throws {
@@ -62,10 +66,10 @@ final class StructuredNativeParserTests: XCTestCase {
         )
         let app = AppInfo(bundleID: "com.apple.reminders", name: "Reminders", windowTitle: nil)
         let capture = try XCTUnwrap(try RemindersParser().parse(window: detail, app: app))
-        XCTAssertTrue(capture.content.contains("Status: completed"))
+        XCTAssertTrue(capture.content.hasPrefix("- [x] "))
     }
 
-    func testPagesDocumentUsesStableTitleAndLargerRollingPolicy() throws {
+    func testPagesDocumentUsesStableTitleAndWholePagePolicy() throws {
         let app = AppInfo(
             bundleID: "com.apple.iWork.Pages", name: "Pages", windowTitle: "Project brief — Pages"
         )
@@ -74,9 +78,13 @@ final class StructuredNativeParserTests: XCTestCase {
         ))
         XCTAssertEqual(capture.sourceKey, "pages:project-brief")
         XCTAssertEqual(capture.contentKind, .document)
-        XCTAssertEqual(capture.accumulationPolicy, .rollingText)
+        // Generic v2 emits the whole window, so each extraction supersedes the previous one.
+        XCTAssertEqual(capture.accumulationPolicy, .replace)
         XCTAssertEqual(capture.offscreenPolicy.maxSteps, 6)
+        XCTAssertEqual(try XCTUnwrap(capture.structured).kind, .generic)
         XCTAssertTrue(capture.content.contains("Implementation notes"))
+        // v2 sees the heading level `DocumentExtraction.bodyText` discarded.
+        XCTAssertTrue(capture.content.contains("# Project brief"))
     }
 
     func testOutlookVisibleMessageUsesEmailProfile() throws {

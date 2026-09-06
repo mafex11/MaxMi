@@ -16,7 +16,7 @@ public struct DiscordParser: SourceParser {
                                       "Forward", "React", "Add a reaction", "Text Channel"]
     public init() {}
 
-    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
         let lines = messageLines(in: window)
         guard !lines.isEmpty else { return nil }
         var kept: [String] = []
@@ -27,15 +27,26 @@ public struct DiscordParser: SourceParser {
             kept.insert(line, at: 0)
             total += add
         }
-        let content = String(kept.joined(separator: "\n").suffix(Self.contentCap))
+        // Discord's own chrome filter and tree-order collection are kept: the generic v2 walk
+        // would re-emit "Add Reaction" and friends as labels, and Discord's AXFrame values are
+        // unreliable, so v2's frame-based rules are unsafe here. Phase D replaces this.
+        return GenericV2Content.lines(kept)
+    }
+
+    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        guard let structured = try parseStructured(window: window, app: app) else { return nil }
         return ParsedCapture(
             sourceApp: "Discord",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(structured, style: .full),
             contentKind: .conversation,
+            parserVersion: 2,
+            // Unchanged from v1: the wrapped `.lines` page is legacy-shaped, so accumulation
+            // still appends across windows until the anchored parser lands in Phase D.
             accumulationPolicy: .appendItems,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 3)
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+            structured: structured
         )
     }
 

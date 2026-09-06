@@ -12,18 +12,29 @@ public struct MessagesParser: SourceParser {
     static let contentCap = 8000
     public init() {}
 
-    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
         let lines = conversationLines(in: window)
         guard !lines.isEmpty else { return nil }
-        let content = String(lines.joined(separator: "\n").suffix(Self.contentCap))
+        // Bubble order comes from the y sort in conversationLines; Phase D adds sender sides.
+        return GenericV2Content.lines(lines).map {
+            CaptureAccumulator.bound($0, to: Self.contentCap)
+        }
+    }
+
+    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        guard let structured = try parseStructured(window: window, app: app) else { return nil }
         return ParsedCapture(
             sourceApp: "Messages",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(structured, style: .full),
             contentKind: .conversation,
+            parserVersion: 2,
+            // Unchanged from v1: the wrapped `.lines` page is legacy-shaped, so accumulation
+            // still appends across windows until the anchored parser lands in Phase D.
             accumulationPolicy: .appendItems,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 3)
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+            structured: structured
         )
     }
 

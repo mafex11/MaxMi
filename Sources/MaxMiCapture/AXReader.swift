@@ -7,6 +7,9 @@ import AppKit
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 public enum AXReader {
+    /// Roles whose placeholder and selected-text are worth an extra AX round trip.
+    static let textEntryRoles: Set<String> = ["AXTextArea", "AXTextField", "AXSearchField", "AXComboBox"]
+
     /// The CGWindowID of the app's currently focused window, or nil. Stable while the window lives.
     public static func focusedWindowID(pid: pid_t) -> UInt32? {
         let app = AXUIElementCreateApplication(pid)
@@ -46,6 +49,20 @@ public enum AXReader {
         return nil
     }
 
+    /// Shallow read of the app's focused UI element, for the case where the window snapshot
+    /// contains no node with `focused == true` (virtualised trees, web areas). `maxDepth: 1`
+    /// keeps this to the element plus its immediate children.
+    public static func focusedElementSnapshot(pid: pid_t) -> AXNode? {
+        let app = AXUIElementCreateApplication(pid)
+        // Same dormant-tree problem as snapshotFrontmostWindow: a Chromium/Electron app exposes no
+        // focused element until an assistive client asks. This may run before (or without) a window
+        // snapshot, so it cannot rely on that call having already woken the process.
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        guard let element = copyAttr(app, kAXFocusedUIElementAttribute) as! AXUIElement? else { return nil }
+        var budget = 64
+        return convert(element, depth: 0, maxDepth: 1, budget: &budget)
+    }
+
     /// A window subtree is "dormant" if it has essentially no descendants or carries no text/URL —
     /// the empty shell a Chromium/Electron app returns before its AX tree wakes.
     private static func isDormant(_ node: AXNode) -> Bool {
@@ -63,7 +80,12 @@ public enum AXReader {
     private static func convert(_ el: AXUIElement, depth: Int, maxDepth: Int, budget: inout Int) -> AXNode {
         budget -= 1
         let role = copyAttr(el, kAXRoleAttribute) as? String ?? "?"
-        let rawValue = copyAttr(el, kAXValueAttribute)
+        // Read FIRST so a secure field's value, placeholder and selection are never read at all:
+        // masking after the fact would still have put the secret in this process's memory and in
+        // `AXNode`, where any consumer could pick it up.
+        let subrole = copyAttr(el, kAXSubroleAttribute) as? String
+        let isSecure = subrole == GenericPageExtractor.secureSubrole
+        let rawValue = isSecure ? nil : copyAttr(el, kAXValueAttribute)
         let value = (rawValue as? String) ?? (rawValue as? NSNumber)?.stringValue
         let title = copyAttr(el, kAXTitleAttribute) as? String
         // AXURL (WebKit/Gecko) then AXDocument (Chromium) — spec §5 primary URL source.
@@ -74,6 +96,18 @@ public enum AXReader {
         let identifier = copyAttr(el, kAXIdentifierAttribute) as? String
         let label = (copyAttr(el, kAXDescriptionAttribute) as? String)
             ?? (copyAttr(el, kAXHelpAttribute) as? String)
+        // Two more unconditional extra reads (subrole is read above): table rows need selected,
+        // and hidden is recorded so consumers can skip offscreen containers — `convert` itself
+        // still descends into them.
+        let selected = (copyAttr(el, kAXSelectedAttribute) as? Bool) ?? false
+        let hidden = (copyAttr(el, "AXHidden") as? Bool) ?? false
+        // Conditional reads: keep the per-node cost off the roles that cannot carry them.
+        let headingLevel = role == "AXHeading"
+            ? (copyAttr(el, "AXHeadingLevel") as? NSNumber)?.intValue
+            : nil
+        let isTextEntry = Self.textEntryRoles.contains(role) && !isSecure
+        let placeholder = isTextEntry ? copyAttr(el, kAXPlaceholderValueAttribute) as? String : nil
+        let selectedText = isTextEntry ? copyAttr(el, kAXSelectedTextAttribute) as? String : nil
         var frame: CGRect? = nil
         if let v = copyAttr(el, "AXFrame") {
             var r = CGRect.zero
@@ -89,7 +123,9 @@ public enum AXReader {
         }
         return AXNode(role: role, value: value, title: title, url: url,
                       frame: frame, focused: focused, children: children,
-                      identifier: identifier, label: label)
+                      identifier: identifier, label: label,
+                      subrole: subrole, headingLevel: headingLevel, selected: selected,
+                      placeholder: placeholder, selectedText: selectedText, hidden: hidden)
     }
 
     private static func copyAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {

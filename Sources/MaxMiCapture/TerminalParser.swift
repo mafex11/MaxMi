@@ -10,29 +10,121 @@ import MaxMiCore
 /// terminal from creating a near-identical version on every capture tick (content-hash
 /// dedup in commitCapture only catches EXACTLY-equal content; a terminal changes by one
 /// line constantly).
+///
+/// The blob IS re-segmented into `{command, output, isRunning}` pairs here by prompt-line
+/// detection (`promptPatterns`), which is a heuristic on rendered text: a scrollback whose
+/// prompt matches neither shape stays one commandless segment. Phase D replaces this with an
+/// anchored parser that reads the emulator's own command boundaries.
 public struct TerminalParser: SourceParser {
     static let contentCap = 8000
     public init() {}
 
+    /// Prompt shapes, tried in order. The FIRST one that any line matches becomes the splitter
+    /// for the whole scrollback. Each pattern spans the WHOLE prompt through its marker, so the
+    /// text after the match is the command alone — never the prompt's cwd.
+    static let promptPatterns = [
+        "^\\S+@\\S+(?:\\s\\S+)*\\s[%$❯]\\s",   // user@host <path> % command
+        "^[~/]\\S*(?:\\s\\S+)*\\s[%$❯]\\s",    // ~/path ❯ command
+    ]
+
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        guard let blob = largestTextArea(in: window), !blob.isEmpty else { return nil }
+        return structured(fromScrollback: blob, app: app)
+    }
+
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        let blob = largestTextArea(in: window)
-        guard let blob, !blob.isEmpty else { return nil }
-        // Newest-anchored hard cap: keep the tail (most recent output), bound the size.
-        let content = String(blob.suffix(Self.contentCap))
+        // One AX walk per capture: `parse` reads the blob itself (the thread key needs the raw
+        // prompt lines) and shares the segmentation with `parseStructured`.
+        guard let blob = largestTextArea(in: window), !blob.isEmpty else { return nil }
+        let session = structured(fromScrollback: blob, app: app)
         return ParsedCapture(
             sourceApp: app.name,                 // "Warp", "Terminal", "iTerm2"
-            sourceKey: terminalKey(app: app, content: content),
+            sourceKey: terminalKey(app: app, content: blob),
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(session, style: .full),
             contentKind: .terminal,
+            parserVersion: 2,
             accumulationPolicy: .appendItems,
-            offscreenPolicy: .visibleOnly(maxCharacters: 64_000)
+            offscreenPolicy: .visibleOnly(maxCharacters: 64_000),
+            structured: session
         )
+    }
+
+    /// The typed session for one scrollback blob.
+    func structured(fromScrollback blob: String, app: AppInfo) -> CapturedContent {
+        let session = TerminalSession(
+            cwd: sessionCwd(fromTitle: app.windowTitle),
+            segments: Self.segments(fromScrollback: blob)
+        )
+        // Newest-anchored hard cap on the STRUCTURED value: the rendered text is derived from it,
+        // so capping the string afterwards would just be undone by the renderer.
+        return CaptureAccumulator.bound(.terminal(session), to: Self.contentCap)
+    }
+
+    /// Split the scrollback on prompt lines. Failure to recognise any prompt yields one segment
+    /// with `command: nil` — a full-screen TUI has no command structure to find.
+    static func segments(fromScrollback blob: String) -> [TerminalSegment] {
+        let lines = blob.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let pattern = promptPatterns.first(where: { candidate in
+            lines.contains { $0.range(of: candidate, options: .regularExpression) != nil }
+        }) else {
+            return [TerminalSegment(command: nil, output: blob, isRunning: false)]
+        }
+
+        var segments: [TerminalSegment] = []
+        var pendingCommand: String?
+        var pendingOutput: [String] = []
+
+        func flush(isRunning: Bool) {
+            let output = joinedOutput(pendingOutput)
+            guard pendingCommand != nil || !output.isEmpty else { return }
+            segments.append(TerminalSegment(command: pendingCommand, output: output, isRunning: isRunning))
+        }
+
+        for line in lines {
+            if let range = line.range(of: pattern, options: .regularExpression) {
+                // A new prompt means whatever came before it has finished.
+                flush(isRunning: false)
+                pendingOutput = []
+                let command = String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                pendingCommand = command.isEmpty ? nil : command
+            } else {
+                pendingOutput.append(line)
+            }
+        }
+        // A BARE trailing prompt (no command, no output after it) means the previous command
+        // finished, and it is already flushed with `isRunning: false`. Anything left over — a
+        // command awaiting output, or output still arriving — is still running.
+        if pendingCommand != nil || !joinedOutput(pendingOutput).isEmpty {
+            flush(isRunning: true)
+        }
+        return segments.isEmpty
+            ? [TerminalSegment(command: nil, output: blob, isRunning: false)]
+            : segments
+    }
+
+    /// Join output lines and drop trailing blank lines, so a segment's bytes are deterministic.
+    static func joinedOutput(_ lines: [String]) -> String {
+        var lines = lines
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The session's cwd: the window title when it LOOKS like a path (`~`/`/` prefix), else nil.
+    /// Deliberately narrower than `terminalKey`'s cwd sniffing — a title like "✳ Review audit"
+    /// or a path buried in command output is not a working directory. Phase D's anchored parser
+    /// reads the real absolute cwd instead.
+    func sessionCwd(fromTitle title: String?) -> String? {
+        guard let title = title?.trimmingCharacters(in: .whitespaces),
+              title.hasPrefix("~") || title.hasPrefix("/") else { return nil }
+        return workingDirectory(fromTitle: title)
     }
 
     /// Terminal scrollback lives in one big AXTextArea. Return the LONGEST text-area value
     /// (Warp = one; some emulators expose a couple — take the richest).
-    private func largestTextArea(in root: AXNode) -> String? {
+    func largestTextArea(in root: AXNode) -> String? {
         var best: String?
         func walk(_ n: AXNode) {
             if n.role == "AXTextArea", let v = n.value, !v.isEmpty {

@@ -22,6 +22,9 @@ public struct ParsedCapture: Sendable, Equatable {
     public let parserVersion: Int
     public let accumulationPolicy: CaptureAccumulationPolicy
     public let offscreenPolicy: OffscreenCapturePolicy
+    /// The typed shape, when this parser has been migrated. nil for an unmigrated parser, which
+    /// is handed a `LegacyContentAdapter` shape by `resolvedStructured`.
+    public let structured: CapturedContent?
 
     public init(
         sourceApp: String,
@@ -31,7 +34,8 @@ public struct ParsedCapture: Sendable, Equatable {
         contentKind: CaptureContentKind = .generic,
         parserVersion: Int = 1,
         accumulationPolicy: CaptureAccumulationPolicy = .rollingText,
-        offscreenPolicy: OffscreenCapturePolicy = .visibleOnly()
+        offscreenPolicy: OffscreenCapturePolicy = .visibleOnly(),
+        structured: CapturedContent? = nil
     ) {
         self.sourceApp = sourceApp; self.sourceKey = sourceKey
         self.sourceTitle = sourceTitle; self.content = content
@@ -39,13 +43,22 @@ public struct ParsedCapture: Sendable, Equatable {
         self.parserVersion = max(1, parserVersion)
         self.accumulationPolicy = accumulationPolicy
         self.offscreenPolicy = offscreenPolicy
+        self.structured = structured
+    }
+
+    /// The typed shape this capture will be stored as (spec 4f rule 2). A convenience for
+    /// in-process callers; `CaptureEnvelope.init` is the single write-path resolution site.
+    /// Deliberately not public: nothing outside this module should resolve nil `structured`.
+    var resolvedStructured: CapturedContent {
+        structured ?? LegacyContentAdapter.adapt(renderedContent: content, kind: contentKind)
     }
 
     public func envelope(
         cleanSourceKey: String,
         parserID: String,
         trigger: CaptureTrigger,
-        truncated: Bool
+        truncated: Bool,
+        structured: CapturedContent? = nil
     ) -> CaptureEnvelope {
         CaptureEnvelope(
             sourceApp: sourceApp,
@@ -58,13 +71,22 @@ public struct ParsedCapture: Sendable, Equatable {
             accumulationPolicy: accumulationPolicy,
             offscreenPolicy: offscreenPolicy,
             trigger: trigger,
-            truncated: truncated
+            truncated: truncated,
+            structured: structured ?? self.structured
         )
     }
 }
 
 /// Turns a window's AX tree into a capture, or nil if it can't handle it.
-/// Throwing is treated identically to nil by the caller (log + skip), never a crash.
+/// Throwing is treated identically to nil by the caller (log + fall through), never a crash.
 public protocol SourceParser: Sendable {
     func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture?
+    /// The structured shape, or nil = NOT_HANDLED. A migrated parser implements this as its
+    /// single source of truth and reduces `parse` to a render wrapper, so one capture is one
+    /// AX walk. An unmigrated parser implements only `parse`.
+    func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent?
+}
+
+public extension SourceParser {
+    func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? { nil }
 }

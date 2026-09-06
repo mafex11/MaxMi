@@ -49,6 +49,8 @@ public enum SafeLogEventName: String, Sendable {
     case privacyStateWriteFailed = "privacy_state_write_failed"
     case parserNoContent = "parser_no_content"
     case parserFailed = "parser_failed"
+    /// A parser declined to store this window at all — no generic fallback is attempted.
+    case parserRefused = "parser_refused"
     case captureCommitFailed = "capture_commit_failed"
     case capturePauseReadFailed = "capture_pause_read_failed"
     case capturePauseWriteFailed = "capture_pause_write_failed"

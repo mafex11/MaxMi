@@ -15,7 +15,7 @@ final class EncryptionAtRestTests: XCTestCase {
 
     @discardableResult
     func commit(_ content: String, url: String = "https://e.com/p") throws -> (vid: String, tid: String) {
-        guard case .committed(let vid, _) = try store.commitCapture(
+        guard case .committed(let vid, _, _) = try store.commitCapture(
             CaptureInput(sourceApp: "Web", sourceKey: url, sourceTitle: "T", content: content), nowMs: t0)
         else { fatalError() }
         return (vid, try store.threadID(forKey: url))

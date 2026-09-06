@@ -20,7 +20,7 @@ final class LocalMemorySearchTests: XCTestCase {
     }
 
     func testSearchMatchesFactAndDeduplicatesThread() throws {
-        guard case .committed(let versionID, _) = try store.commitCapture(
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
             envelope(key: "doc:two", title: "Roadmap", content: "General roadmap notes"), nowMs: t0
         ) else { return XCTFail("expected commit") }
         let threadID = try store.threadID(forKey: "doc:two")

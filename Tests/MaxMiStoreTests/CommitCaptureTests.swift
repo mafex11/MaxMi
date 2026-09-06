@@ -17,7 +17,7 @@ final class CommitCaptureTests: XCTestCase {
     var h11: EpochMs { h10 + 3_600_000 }
 
     func testNewPageCreatesThreadAndPendingVersion() throws {
-        guard case .committed(let vid, let hash) = try store.commitCapture(input("hello world"), nowMs: h10)
+        guard case .committed(let vid, let hash, _) = try store.commitCapture(input("hello world"), nowMs: h10)
         else { return XCTFail() }
         try db.dbQueue.read { d in
             XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM threads"), 1)
@@ -36,10 +36,10 @@ final class CommitCaptureTests: XCTestCase {
         }
     }
     func testWithinHourRewritesInPlaceAndResetsPending() throws {
-        guard case .committed(let v1, _) = try store.commitCapture(input("first"), nowMs: h10) else { return XCTFail() }
+        guard case .committed(let v1, _, _) = try store.commitCapture(input("first"), nowMs: h10) else { return XCTFail() }
         // simulate pipeline finishing on v1
         try db.dbQueue.write { try $0.execute(sql: "UPDATE versions SET extract_status='completed'") }
-        guard case .committed(let v2, _) = try store.commitCapture(input("first plus more"), nowMs: h10 + 60_000) else { return XCTFail() }
+        guard case .committed(let v2, _, _) = try store.commitCapture(input("first plus more"), nowMs: h10 + 60_000) else { return XCTFail() }
         XCTAssertEqual(v1, v2, "same hour -> same row")
         try db.dbQueue.read { d in
             let row = try Row.fetchOne(d, sql: "SELECT * FROM versions")!

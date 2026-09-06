@@ -29,7 +29,7 @@ final class MemoryQueriesTests: XCTestCase {
     func seed(_ facts: [(String, Int)], url: String = "https://gintama.example", title: String = "Gin Tama",
               sourceApp: String = "Web", at: EpochMs? = nil) throws {
         let capturedAt = at ?? t0
-        guard case .committed(let vid, _) = try store.commitCapture(
+        guard case .committed(let vid, _, _) = try store.commitCapture(
             CaptureInput(sourceApp: sourceApp, sourceKey: url, sourceTitle: title, content: "c\(url)"),
             nowMs: capturedAt) else { fatalError() }
         let realTid = try store.threadID(forKey: url)

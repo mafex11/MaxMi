@@ -19,7 +19,7 @@ public struct CaptureInput: Sendable {
 
 public enum CommitResult: Equatable, Sendable {
     case deduplicated
-    case committed(versionID: String, contentHash: String)
+    case committed(versionID: String, contentHash: String, delta: CaptureDelta)
 }
 
 public final class Store {
@@ -32,6 +32,22 @@ public final class Store {
     /// Decrypt for reads; integrity/malformed failures become a marker, never a throw.
     func decryptOrMarker(_ stored: String) -> String {
         (try? cipher.decrypt(stored)) ?? "[unreadable memory]"
+    }
+
+    /// A NULL column, a decrypt failure, a JSON decode failure, and a schema version newer than
+    /// this build are all the same case: fall back to the legacy adaptation of the rendered
+    /// content. Never a throw, never a lost capture.
+    func structuredOrLegacy(
+        _ stored: String?,
+        renderedContent: String,
+        kind: CaptureContentKind
+    ) -> CapturedContent {
+        guard let stored,
+              let plain = try? cipher.decrypt(stored),
+              let content = CapturedContentEnvelope.decode(plain) else {
+            return LegacyContentAdapter.adapt(renderedContent: renderedContent, kind: kind)
+        }
+        return content
     }
 
     /// Split content into items, fingerprint each (normalized), record novel ones.
@@ -90,29 +106,43 @@ public final class Store {
             }
 
             // 2. Accumulate the raw latest context independently from semantic versions.
-            let previousContext = try Row.fetchOne(d, sql:
-                "SELECT content_ciphertext, content_hash FROM latest_contexts WHERE thread_id=?",
-                arguments: [threadID])
+            let previousContext = try Row.fetchOne(d, sql: """
+                SELECT content_ciphertext, content_hash, structured_ciphertext, content_kind
+                FROM latest_contexts WHERE thread_id=?
+                """, arguments: [threadID])
             let previousStored = previousContext?["content_ciphertext"] as String?
             let previousContextHash = previousContext?["content_hash"] as String?
             let previous = previousStored.flatMap { try? cipher.decrypt($0) }
+            let previousStructured: CapturedContent? = previous.map { rendered in
+                let kind = (previousContext?["content_kind"] as String?)
+                    .flatMap(CaptureContentKind.init(rawValue:)) ?? .generic
+                return structuredOrLegacy(previousContext?["structured_ciphertext"] as String?,
+                                          renderedContent: rendered, kind: kind)
+            }
             let accumulated = CaptureAccumulator.merge(
-                previous: previous,
-                incoming: envelope.content,
+                previous: previousStructured,
+                incoming: envelope.structured,
                 policy: envelope.accumulationPolicy,
                 maxCharacters: envelope.offscreenPolicy.maxCharacters
             )
-            let accumulatedHash = ContentHash.sha256Hex(accumulated.content)
-            let accumulatedStored = try cipher.encrypt(accumulated.content)
+            // An empty render is not new information, and under `.replace` accumulation it would
+            // wipe a thread that already holds a real capture (a browser page whose AX tree went
+            // blank for one poll, a window mid-relayout). Refused before any write, so both the
+            // latest context and this hour's version keep the last non-empty render.
+            if accumulated.rendered.isEmpty, previous?.isEmpty == false { return .deduplicated }
+            let accumulatedHash = ContentHash.sha256Hex(accumulated.rendered)
+            let accumulatedStored = try cipher.encrypt(accumulated.rendered)
+            let structuredStored = try cipher.encrypt(
+                try CapturedContentEnvelope.encode(accumulated.content))
             let contextTruncated = envelope.truncated
-                || accumulated.content.count >= envelope.offscreenPolicy.maxCharacters
+                || accumulated.rendered.count >= envelope.offscreenPolicy.maxCharacters
             try d.execute(sql: """
                 INSERT INTO latest_contexts (
                   thread_id, version_id, content_ciphertext, content_hash, content_kind,
                   parser_id, parser_version, accumulation_policy, offscreen_mode,
                   offscreen_max_steps, offscreen_max_chars, trigger, captured_at,
-                  character_count, truncated
-                ) VALUES (?,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  character_count, truncated, structured_ciphertext
+                ) VALUES (?,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                   content_ciphertext=excluded.content_ciphertext,
                   content_hash=excluded.content_hash,
@@ -126,13 +156,14 @@ public final class Store {
                   trigger=excluded.trigger,
                   captured_at=excluded.captured_at,
                   character_count=excluded.character_count,
-                  truncated=excluded.truncated
+                  truncated=excluded.truncated,
+                  structured_ciphertext=excluded.structured_ciphertext
                 """, arguments: [
                     threadID, accumulatedStored, accumulatedHash, envelope.contentKind.rawValue,
                     envelope.parserID, envelope.parserVersion, envelope.accumulationPolicy.rawValue,
                     envelope.offscreenPolicy.mode.rawValue, envelope.offscreenPolicy.maxSteps,
                     envelope.offscreenPolicy.maxCharacters, envelope.trigger.rawValue, nowMs,
-                    accumulated.content.count, contextTruncated ? 1 : 0,
+                    accumulated.rendered.count, contextTruncated ? 1 : 0, structuredStored,
                 ])
             if previousContextHash != nil, previousContextHash != accumulatedHash {
                 try d.execute(sql: """
@@ -152,7 +183,7 @@ public final class Store {
                 return .deduplicated
             }
 
-            let versionContent = accumulated.content
+            let versionContent = accumulated.rendered
             let versionHash = ContentHash.sha256Hex(versionContent)
             let words = versionContent.split(whereSeparator: \.isWhitespace).count
             let storedContent = try cipher.encrypt(versionContent)
@@ -167,22 +198,26 @@ public final class Store {
                                              arguments: [threadID, bucket]) {
                 try d.execute(sql: """
                     UPDATE versions SET content=?, content_hash=?, word_count=?, committed_at=?,
-                                        extract_status='pending', is_frozen=0, metadata=? WHERE id=?
-                    """, arguments: [storedContent, versionHash, words, nowMs, metadata, vid])
+                                        extract_status='pending', is_frozen=0, metadata=?,
+                                        structured_ciphertext=? WHERE id=?
+                    """, arguments: [storedContent, versionHash, words, nowMs, metadata,
+                                     structuredStored, vid])
                 versionID = vid
             } else {
                 let vid = Ident.uuidv7(nowMs: nowMs)
                 try d.execute(sql: """
                     INSERT INTO versions (
                       id, thread_id, hour_bucket, content, content_hash, word_count,
-                      is_frozen, committed_at, extract_status, metadata
-                    ) VALUES (?,?,?,?,?,?,0,?,'pending',?)
-                    """, arguments: [vid, threadID, bucket, storedContent, versionHash, words, nowMs, metadata])
+                      is_frozen, committed_at, extract_status, metadata, structured_ciphertext
+                    ) VALUES (?,?,?,?,?,?,0,?,'pending',?,?)
+                    """, arguments: [vid, threadID, bucket, storedContent, versionHash, words,
+                                     nowMs, metadata, structuredStored])
                 versionID = vid
             }
             try d.execute(sql: "UPDATE latest_contexts SET version_id=? WHERE thread_id=?",
                           arguments: [versionID, threadID])
-            return .committed(versionID: versionID, contentHash: versionHash)
+            return .committed(versionID: versionID, contentHash: versionHash,
+                              delta: accumulated.delta)
         }
     }
 

@@ -19,7 +19,7 @@ final class QueryAPITests: XCTestCase {
 
     @discardableResult
     func seedThread(url: String, title: String?, facts: [(String, Int)], at: EpochMs) throws -> String {
-        guard case .committed(let vid, _) = try store.commitCapture(
+        guard case .committed(let vid, _, _) = try store.commitCapture(
             CaptureInput(sourceApp: "Web", sourceKey: url, sourceTitle: title, content: "content for \(url)"),
             nowMs: at) else { fatalError() }
         let tid = try db.dbQueue.read { try String.fetchOne($0,

@@ -9,30 +9,50 @@ public struct SlackParser: SourceParser {
     static let sidebarMaxX: CGFloat = 240   // rows left of this are sidebar/nav chrome, not messages
     public init() {}
 
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        let messages = messages(in: window, windowX: window.frame?.origin.x ?? 0)
+        guard !messages.isEmpty else { return nil }
+        let conversation = Conversation(
+            channel: channel(fromTitle: app.windowTitle),
+            isGroup: isGroup(fromTitle: app.windowTitle),
+            messages: messages
+        )
+        // Newest-anchored HARD cap on the STRUCTURED value: the rendered text is derived from it,
+        // so capping the string afterwards would be undone by CaptureEnvelope, and one
+        // pathological message must not bloat a version unboundedly.
+        return CaptureAccumulator.boundHard(.conversation(conversation), to: Self.contentCap)
+    }
+
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        let winX = window.frame?.origin.x ?? 0
-        let lines = messageLines(in: window, windowX: winX)
-        guard !lines.isEmpty else { return nil }
-        var kept: [String] = []
-        var total = 0
-        for line in lines.reversed() {
-            let add = line.count + 1  // +1 for the joining newline
-            if total + add > Self.contentCap && !kept.isEmpty { break }
-            kept.insert(line, at: 0)
-            total += add
-        }
-        // Hard cap: a single newest message longer than the cap is kept but bounded
-        // (its tail), so one pathological line can't bloat a version unboundedly.
-        let content = String(kept.joined(separator: "\n").suffix(Self.contentCap))
+        guard let structured = try parseStructured(window: window, app: app) else { return nil }
         return ParsedCapture(
             sourceApp: "Slack",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: content,
+            content: ContentRenderer.render(structured, style: .full),
             contentKind: .conversation,
+            parserVersion: 2,
             accumulationPolicy: .appendItems,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 3)
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+            structured: structured
         )
+    }
+
+    /// "<view> - <workspace> - Slack" -> "<view>"; else the whole title.
+    func channel(fromTitle title: String?) -> String {
+        guard let title, !title.isEmpty else { return "unknown" }
+        let parts = title.components(separatedBy: " - ")
+        if parts.count >= 3, parts.last == "Slack" { return parts[0] }
+        return title
+    }
+
+    /// A "<view> - <workspace> - Slack" title is a channel view and therefore multi-party. That
+    /// is the only group signal this AX walk exposes; Phase D's anchored parser reads the
+    /// member list instead.
+    func isGroup(fromTitle title: String?) -> Bool {
+        guard let title else { return false }
+        let parts = title.components(separatedBy: " - ")
+        return parts.count >= 3 && parts.last == "Slack"
     }
 
     /// "<view> - <workspace> - Slack" -> "slack:<workspace>/<view>"; else "slack:<title>".
@@ -49,16 +69,23 @@ public struct SlackParser: SourceParser {
         return "slack:\(slug(title))"
     }
 
-    /// Collect AXRow message text in visual order. Within a row, first static text
-    /// is treated as sender, the rest as the message body.
-    private func messageLines(in root: AXNode, windowX: CGFloat) -> [String] {
+    /// Collect AXRow messages in visual order. Within a row, the first static text is the
+    /// sender and the rest is the body.
+    func messages(in root: AXNode, windowX: CGFloat) -> [Message] {
         var rows: [(y: CGFloat, texts: [String])] = []
         collectRows(root, into: &rows, windowX: windowX)
         return rows.sorted { $0.y < $1.y }.compactMap { row in
-            let ts = row.texts.filter { !$0.isEmpty }
-            guard !ts.isEmpty else { return nil }
-            if ts.count >= 2 { return "\(ts[0]): \(ts.dropFirst().joined(separator: " "))" }
-            return ts[0]
+            let texts = row.texts.filter { !$0.isEmpty }
+            guard !texts.isEmpty else { return nil }
+            let sender = texts.count >= 2 ? texts[0] : "unknown"
+            let text = texts.count >= 2 ? texts.dropFirst().joined(separator: " ") : texts[0]
+            return Message(
+                id: Message.makeID(sender: sender, timeString: nil, text: text),
+                sender: sender, text: text, timestamp: nil, timeString: nil,
+                // Slack's AX rows carry no "sent by me" marker (no bubble side, no
+                // self-authored role), so every message defaults to a peer message.
+                isUser: false, isDraft: false
+            )
         }
     }
 

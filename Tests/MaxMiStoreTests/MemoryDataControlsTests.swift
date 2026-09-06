@@ -94,7 +94,7 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: archivesURL
         )
-        XCTAssertEqual(result.migrationIdentifier, "v9")
+        XCTAssertEqual(result.migrationIdentifier, "v10")
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.preservedDatabaseURL.path))
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
@@ -156,11 +156,9 @@ final class MemoryDataControlsTests: XCTestCase {
 
         let v8 = try MaxMiDatabase(path: v8URL.path, migrate: false)
         try Migrations.migrator.migrate(v8.dbQueue, upTo: "v8")
-        let v8Store = Store(db: v8, cipher: AESGCMFieldCipher.testCipher)
-        _ = try v8Store.commitCapture(
-            CaptureInput(sourceApp: "Web", sourceKey: "v8", sourceTitle: "", content: "encrypted"),
-            nowMs: t0
-        )
+        // Seeded with the v8 column set on purpose: `Store.commitCapture` writes the CURRENT
+        // schema (v10 `structured_ciphertext`), so it cannot be used to fill an old backup.
+        try seedV8Row(v8, content: "encrypted")
         try v8.dbQueue.inDatabase { try $0.execute(sql: "PRAGMA journal_mode = DELETE") }
         try v8.dbQueue.close()
 
@@ -171,14 +169,14 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: root.appendingPathComponent("Backups", isDirectory: true)
         )
-        XCTAssertEqual(result.migrationIdentifier, "v9")
+        XCTAssertEqual(result.migrationIdentifier, "v10")
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
         defer { try? restored.dbQueue.close() }
         try restored.dbQueue.read { database in
             XCTAssertEqual(
                 try String.fetchOne(database, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v9"
+                "v10"
             )
             let ciphertext = try String.fetchOne(database, sql: "SELECT content FROM versions")
             XCTAssertTrue(ciphertext?.hasPrefix("enc:v1:") == true)
@@ -234,5 +232,34 @@ final class MemoryDataControlsTests: XCTestCase {
             try String.fetchAll($0, sql: "SELECT source_key FROM threads")
         }
         XCTAssertEqual(keys, ["selected"])
+    }
+
+    /// One thread + version + latest_context written with the v8 column set only, encrypted with
+    /// the same cipher a real capture would use.
+    private func seedV8Row(_ database: MaxMiDatabase, content: String) throws {
+        let cipher = AESGCMFieldCipher.testCipher
+        let ciphertext = try cipher.encrypt(content)
+        let hash = ContentHash.sha256Hex(content)
+        try database.dbQueue.write { d in
+            try d.execute(sql: """
+                INSERT INTO threads (id, source_app, source_key, source_title, last_tree_hash,
+                                     created_at, updated_at)
+                VALUES ('thread-v8','Web','v8','',?,?,?)
+                """, arguments: [hash, t0, t0])
+            try d.execute(sql: """
+                INSERT INTO versions (id, thread_id, hour_bucket, content, content_hash,
+                                      word_count, is_frozen, committed_at, extract_status, metadata)
+                VALUES ('version-v8','thread-v8',?,?,?,1,0,?,'pending',NULL)
+                """, arguments: [HourBucket.bucket(forMs: t0), ciphertext, hash, t0])
+            try d.execute(sql: """
+                INSERT INTO latest_contexts (
+                  thread_id, version_id, content_ciphertext, content_hash, content_kind,
+                  parser_id, parser_version, accumulation_policy, offscreen_mode,
+                  offscreen_max_steps, offscreen_max_chars, trigger, captured_at,
+                  character_count, truncated
+                ) VALUES ('thread-v8','version-v8',?,?,'generic','legacy',1,'replace',
+                          'visibleOnly',0,32000,'unknown',?,?,0)
+                """, arguments: [ciphertext, hash, t0, content.count])
+        }
     }
 }

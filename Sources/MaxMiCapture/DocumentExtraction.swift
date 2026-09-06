@@ -5,6 +5,11 @@ import Foundation
 enum DocumentExtraction {
     static let contentCap = 8000
 
+    /// LEGACY (M8 Phase A). Superseded by `GenericPageExtractor` everywhere: the document and
+    /// email parsers now extract typed pages via `GenericV2Content.page`, so nothing in the
+    /// capture path calls this any more. Kept only as the reference for `contentCap` and its
+    /// ordering tests. Do not use it in new code.
+    ///
     /// AXTextArea + AXStaticText values in visual order (y then x), newest-anchored
     /// hard cap. Returns "" if there is no text (caller returns nil → no empty thread).
     static func bodyText(in root: AXNode, maxCharacters: Int = contentCap) -> String {

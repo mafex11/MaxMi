@@ -19,35 +19,114 @@ public struct MailParser: SourceParser {
     static let fieldSeparator = "\u{1E}"
     public init() {}
 
+    struct Extracted {
+        let content: CapturedContent
+        let sourceKey: String
+        let sourceTitle: String?
+    }
+
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         guard let raw = Self.runAppleScript(Self.script) else { return nil }
         return Self.makeCapture(fromScriptOutput: raw, windowTitle: app.windowTitle)
     }
 
-    /// Pure transform from raw osascript output → ParsedCapture (nil if no usable lines).
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        guard let raw = Self.runAppleScript(Self.script) else { return nil }
+        return Self.extract(fromScriptOutput: raw, windowTitle: app.windowTitle)?.content
+    }
+
+    /// Pure transform from raw osascript output → ParsedCapture (nil if no usable records).
     /// Separated from the Process call so it's unit-testable without a live Mail app.
     static func makeCapture(fromScriptOutput raw: String, windowTitle: String?) -> ParsedCapture? {
+        guard let extracted = extract(fromScriptOutput: raw, windowTitle: windowTitle) else { return nil }
+        let isThread = extracted.sourceKey != "mail:inbox"
+        return ParsedCapture(
+            sourceApp: "Mail",
+            sourceKey: extracted.sourceKey,
+            sourceTitle: extracted.sourceTitle,
+            content: ContentRenderer.render(extracted.content, style: .full),
+            // Not derivable from the .conversation shape — Mail stays .email (spec 12 Q3).
+            contentKind: .email,
+            parserVersion: 2,
+            accumulationPolicy: .rollingText,
+            offscreenPolicy: isThread
+                ? .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
+                : .accessibilityScroll(maxSteps: 3),
+            structured: extracted.content
+        )
+    }
+
+    static func extract(fromScriptOutput raw: String, windowTitle: String?) -> Extracted? {
         if raw.hasPrefix(structuredHeader) {
-            return makeSelectedMessageCapture(fromScriptOutput: raw, windowTitle: windowTitle)
+            return selectedMessageContent(fromScriptOutput: raw, windowTitle: windowTitle)
         }
+        guard let content = inboxContent(fromScriptOutput: raw) else { return nil }
+        return Extracted(content: content, sourceKey: "mail:inbox", sourceTitle: windowTitle)
+    }
+
+    /// The per-account inbox listing: "account » sender | subject" per line.
+    static func inboxContent(fromScriptOutput raw: String) -> CapturedContent? {
         let lines = raw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         guard !lines.isEmpty else { return nil }
-        let content = String(lines.joined(separator: "\n").suffix(contentCap))
-        return ParsedCapture(sourceApp: "Mail", sourceKey: "mail:inbox",
-                             sourceTitle: windowTitle, content: content,
-                             contentKind: .email, parserVersion: 2,
-                             accumulationPolicy: .rollingText,
-                             offscreenPolicy: .accessibilityScroll(maxSteps: 3))
+        let messages = lines.map { line -> Message in
+            var sender = "unknown"
+            var text = line
+            if let separator = line.range(of: " | ") {
+                sender = String(line[..<separator.lowerBound])
+                text = String(line[separator.upperBound...])
+            }
+            return Message(
+                id: Message.makeID(sender: sender, timeString: nil, text: text),
+                sender: sender, text: text, timestamp: nil, timeString: nil,
+                isUser: false, isDraft: false
+            )
+        }
+        return CaptureAccumulator.bound(
+            .conversation(Conversation(channel: "Inbox", isGroup: false, messages: messages)),
+            to: contentCap
+        )
     }
 
-    static func makeSelectedMessageCapture(
-        fromScriptOutput raw: String,
-        windowTitle: String?
-    ) -> ParsedCapture? {
+    /// One `Message` per `MailRecord`; `channel` is the subject (spec 4f).
+    static func selectedMessageContent(fromScriptOutput raw: String, windowTitle: String?) -> Extracted? {
+        let records = mailRecords(fromScriptOutput: raw)
+        guard !records.isEmpty else { return nil }
+        let messages = records.map { record in
+            Message(
+                id: record.messageID.isEmpty
+                    ? Message.makeID(sender: record.sender, timeString: record.date, text: record.body)
+                    : record.messageID,
+                sender: record.sender.isEmpty ? "unknown" : record.sender,
+                text: record.body,
+                timestamp: nil,
+                timeString: record.date.isEmpty ? nil : record.date,
+                isUser: false,
+                isDraft: false
+            )
+        }
+        let subject = records.first(where: { !$0.subject.isEmpty })?.subject
+        let identities = records.map {
+            $0.messageID.isEmpty ? "\($0.sender)|\($0.subject)" : $0.messageID
+        }.joined(separator: "|")
+        let conversation = Conversation(
+            channel: subject ?? windowTitle ?? "message",
+            isGroup: false,
+            messages: messages
+        )
+        return Extracted(
+            content: CaptureAccumulator.bound(.conversation(conversation), to: contentCap),
+            sourceKey: "mail:thread:\(String(ContentHash.sha256Hex(identities).prefix(24)))",
+            sourceTitle: subject ?? windowTitle
+        )
+    }
+
+    /// The record split, unchanged — extracted from the old makeSelectedMessageCapture so both
+    /// the typed path and the tests can use it.
+    static func mailRecords(fromScriptOutput raw: String) -> [MailRecord] {
         let payload = raw.dropFirst(structuredHeader.count)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let records = payload.components(separatedBy: recordSeparator).compactMap { record -> MailRecord? in
+        return payload.components(separatedBy: recordSeparator).compactMap { record -> MailRecord? in
             let fields = record.components(separatedBy: fieldSeparator)
             guard fields.count >= 5 else { return nil }
             let body = fields.dropFirst(4).joined(separator: fieldSeparator)
@@ -59,32 +138,6 @@ public struct MailParser: SourceParser {
             guard !sender.isEmpty || !subject.isEmpty || !body.isEmpty else { return nil }
             return MailRecord(messageID: messageID, sender: sender, subject: subject, date: date, body: body)
         }
-        guard !records.isEmpty else { return nil }
-
-        let rendered = records.map { record in
-            var lines: [String] = []
-            if !record.sender.isEmpty { lines.append("From: \(record.sender)") }
-            if !record.subject.isEmpty { lines.append("Subject: \(record.subject)") }
-            if !record.date.isEmpty { lines.append("Date: \(record.date)") }
-            if !record.body.isEmpty { lines.append(record.body) }
-            return lines.joined(separator: "\n")
-        }.joined(separator: "\n\n---\n\n")
-
-        let identities = records.map {
-            $0.messageID.isEmpty ? "\($0.sender)|\($0.subject)" : $0.messageID
-        }.joined(separator: "|")
-        let keyHash = String(ContentHash.sha256Hex(identities).prefix(24))
-        let title = records.first(where: { !$0.subject.isEmpty })?.subject ?? windowTitle
-        return ParsedCapture(
-            sourceApp: "Mail",
-            sourceKey: "mail:thread:\(keyHash)",
-            sourceTitle: title,
-            content: String(rendered.suffix(contentCap)),
-            contentKind: .email,
-            parserVersion: 2,
-            accumulationPolicy: .rollingText,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
-        )
     }
 
     struct MailRecord {

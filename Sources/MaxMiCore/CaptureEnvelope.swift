@@ -61,6 +61,9 @@ public struct CaptureEnvelope: Sendable, Equatable {
     public let offscreenPolicy: OffscreenCapturePolicy
     public let trigger: CaptureTrigger
     public let truncated: Bool
+    /// The typed shape this capture is stored as. Non-optional: everything downstream of
+    /// dispatch (store, prompts, timeline) can rely on it existing.
+    public let structured: CapturedContent
 
     public init(
         sourceApp: String,
@@ -73,12 +76,12 @@ public struct CaptureEnvelope: Sendable, Equatable {
         accumulationPolicy: CaptureAccumulationPolicy,
         offscreenPolicy: OffscreenCapturePolicy,
         trigger: CaptureTrigger,
-        truncated: Bool
+        truncated: Bool,
+        structured: CapturedContent? = nil
     ) {
         self.sourceApp = sourceApp
         self.sourceKey = sourceKey
         self.sourceTitle = sourceTitle
-        self.content = content
         self.contentKind = contentKind
         self.parserID = parserID
         self.parserVersion = max(1, parserVersion)
@@ -86,6 +89,16 @@ public struct CaptureEnvelope: Sendable, Equatable {
         self.offscreenPolicy = offscreenPolicy
         self.trigger = trigger
         self.truncated = truncated
+        // The single place nil is resolved. Every path — CaptureDispatch, the browser
+        // pipeline in AppWiring, and CaptureEnvelope.legacy — builds an envelope, so this
+        // initializer is the only point that covers all of them.
+        if let structured {
+            self.structured = structured
+            self.content = ContentRenderer.render(structured, style: .full)
+        } else {
+            self.structured = LegacyContentAdapter.adapt(renderedContent: content, kind: contentKind)
+            self.content = content
+        }
     }
 
     public static func legacy(
@@ -266,9 +279,10 @@ public enum CaptureAccumulator {
         return Double(shared) / Double(min(left.count, right.count))
     }
 
-    private static func bound(_ content: String, to limit: Int) -> String {
+    /// Retain the identity-bearing beginning and the more recent tail. Internal (not private)
+    /// because `ContentRenderer.render(_, .compact:)` is defined as exactly this policy.
+    static func bound(_ content: String, to limit: Int) -> String {
         guard content.count > limit else { return content }
-        // Retain the identity-bearing beginning and the more recent tail.
         let headCount = limit / 3
         let tailCount = limit - headCount - 3
         return String(content.prefix(headCount)) + "\n…\n" + String(content.suffix(tailCount))

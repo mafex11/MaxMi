@@ -12,17 +12,20 @@ public struct BrowserCaptureResult: Sendable, Equatable {
 
 /// Pure browser capture pipeline used by the app and fixture tests.
 public enum BrowserCapturePipeline {
+    /// `contentBudget` is forwarded to `WebAppCaptureParser.parse` and exists only so a test can
+    /// drive the budget without a 16k fixture; production always uses the default.
     public static func parse(
         window: AXNode,
         windowTitle: String?,
-        browser: ApplicationDescriptor
+        browser: ApplicationDescriptor,
+        contentBudget: Int = WebAppCaptureParser.contentCap
     ) throws -> BrowserCaptureResult {
         let tab = try BrowserTabExtractor.extract(
             window: window,
             windowTitle: windowTitle,
             engine: browser.browserEngine
         )
-        let web = WebAppCaptureParser.parse(tab: tab, window: window)
+        let web = try WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: contentBudget)
         let quality: BrowserCaptureQuality
         if web.preservedBoundaries {
             quality = .high
@@ -41,7 +44,11 @@ public enum BrowserCapturePipeline {
             capture: web.capture,
             parserID: parserID,
             quality: quality,
-            truncated: tab.truncated || web.capture.content.count >= WebAppCaptureParser.contentCap,
+            // Three independent ways content can have been dropped: the tab text hit the
+            // extractor's cap, bounding the typed shape shed blocks or messages, or the rendered
+            // form is sitting on the cap.
+            truncated: tab.truncated || web.truncated
+                || web.capture.content.count >= WebAppCaptureParser.contentCap,
             webApp: web.app
         )
     }

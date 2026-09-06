@@ -1,0 +1,61 @@
+{
+  "role": "AXWindow", "value": null, "title": "Inventory", "url": null,
+  "frame": {"x":420,"y":260,"width":900,"height":600}, "focused": false,
+  "children": [
+    {"role": "AXTable", "value": null, "title": null, "url": null,
+     "frame": {"x":420,"y":300,"width":900,"height":400}, "focused": false, "children": [
+       {"role": "AXRow", "value": null, "title": null, "url": null,
+        "frame": {"x":420,"y":300,"width":900,"height":20}, "focused": false, "children": [
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":428,"y":300,"width":400,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "Widget", "title": null, "url": null,
+              "frame": {"x":428,"y":300,"width":400,"height":16}, "focused": false, "children": []}
+           ]},
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":900,"y":300,"width":200,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "17 in stock", "title": null, "url": null,
+              "frame": {"x":900,"y":300,"width":200,"height":16}, "focused": false, "children": []}
+           ]}
+        ]},
+       {"role": "AXRow", "value": null, "title": null, "url": null,
+        "frame": {"x":420,"y":324,"width":900,"height":20}, "focused": false, "children": [
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":428,"y":324,"width":400,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "Sprocket", "title": null, "url": null,
+              "frame": {"x":428,"y":324,"width":400,"height":16}, "focused": false, "children": []}
+           ]},
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":900,"y":324,"width":200,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "4 in stock", "title": null, "url": null,
+              "frame": {"x":900,"y":324,"width":200,"height":16}, "focused": false, "children": []}
+           ]}
+        ]},
+       {"role": "AXColumn", "value": null, "title": null, "url": null,
+        "frame": {"x":428,"y":300,"width":400,"height":44}, "focused": false, "children": [
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":428,"y":300,"width":400,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "Widget", "title": null, "url": null,
+              "frame": {"x":428,"y":300,"width":400,"height":16}, "focused": false, "children": []}
+           ]},
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":428,"y":324,"width":400,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "Sprocket", "title": null, "url": null,
+              "frame": {"x":428,"y":324,"width":400,"height":16}, "focused": false, "children": []}
+           ]}
+        ]},
+       {"role": "AXColumn", "value": null, "title": null, "url": null,
+        "frame": {"x":900,"y":300,"width":200,"height":44}, "focused": false, "children": [
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":900,"y":300,"width":200,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "17 in stock", "title": null, "url": null,
+              "frame": {"x":900,"y":300,"width":200,"height":16}, "focused": false, "children": []}
+           ]},
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":900,"y":324,"width":200,"height":20}, "focused": false, "children": [
+             {"role": "AXStaticText", "value": "4 in stock", "title": null, "url": null,
+              "frame": {"x":900,"y":324,"width":200,"height":16}, "focused": false, "children": []}
+           ]}
+        ]}
+     ]}
+  ]
+}

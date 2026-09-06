@@ -161,6 +161,18 @@ public enum BrowserTabExtractor {
         }.max { lhs, rhs in lhs.score < rhs.score }
     }
 
+    /// The web area the generic structured path should walk. Thin wrapper over the same scoring
+    /// `extract` uses, so both paths agree on which frame is the page. nil when the window
+    /// exposes no web area at all, which the caller reads as "walk the whole window".
+    static func primaryWebArea(
+        in root: AXNode,
+        windowTitle: String?,
+        engine: BrowserEngine? = nil
+    ) -> AXNode? {
+        bestWebArea(from: nodes(in: root) { $0.role == "AXWebArea" },
+                    windowTitle: windowTitle, engine: engine)
+    }
+
     private static func bestWebArea(
         from webAreas: [AXNode],
         windowTitle: String?,

@@ -16,7 +16,7 @@ final class LazyToolsTests: XCTestCase {
             CaptureInput(sourceApp: "TestApp", sourceKey: "test://url", sourceTitle: "Test Thread", content: "test content"),
             nowMs: nowMs
         )
-        guard case .committed(let versionID, _) = result else {
+        guard case .committed(let versionID, _, _) = result else {
             XCTFail("Failed to commit capture")
             return
         }
@@ -105,7 +105,7 @@ final class LazyToolsTests: XCTestCase {
             CaptureInput(sourceApp: "TestApp", sourceKey: "test://url", sourceTitle: "Test Thread", content: "test content"),
             nowMs: nowMs
         )
-        guard case .committed(let versionID, _) = result else {
+        guard case .committed(let versionID, _, _) = result else {
             XCTFail("Failed to commit capture")
             return
         }

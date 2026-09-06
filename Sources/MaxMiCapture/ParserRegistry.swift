@@ -54,15 +54,43 @@ public struct ParserRegistry: Sendable {
         parsers = p
     }
 
+    /// Test seam: a registry with an explicit parser table. `CaptureDispatch`'s not-handled /
+    /// refused / threw branches have to be exercised against parsers that do exactly one of those
+    /// things, and no shipping parser throws a non-refusal error to borrow for that.
+    init(parsers: [String: any SourceParser]) {
+        self.parsers = parsers
+    }
+
     public func parser(for bundleID: String) -> (any SourceParser)? {
         parsers[bundleID]
+    }
+}
+
+/// Thrown by a parser that will not let this window be stored at all, as distinct from returning
+/// nil, which only means "I can't read this shape" and lets the generic extractor stand in.
+///
+/// A conversation parser uses this when a generic capture would be actively wrong: WhatsApp with
+/// no confirmed chat header would otherwise store the sidebar list of every unopened chat.
+public struct ParserRefusal: Error, Sendable, Equatable {
+    /// A fixed, token-safe slug — never captured content, since it is logged verbatim.
+    /// Must satisfy `SafeLogToken(validating:)` or it is dropped from the log line.
+    public let reason: String
+
+    public init(reason: String) {
+        self.reason = reason
     }
 }
 
 public enum CaptureDispatch {
     public enum ParseResult: Sendable, Equatable {
         case parsed(ParsedCapture)
+        /// A registered parser returned nil or threw, and the generic extractor stood in.
+        /// `failedParser` is the type name, for the capture-health marker.
+        case parsedByFallback(ParsedCapture, failedParser: String)
         case noContent
+        /// No longer produced by `parseDetailed` — a parser throwing now falls through to the
+        /// generic extractor. Kept because `AppWiring` still switches on it and
+        /// `CaptureHealthStore` still records `.parserFailed` for other callers.
         case failed
     }
 
@@ -73,51 +101,79 @@ public enum CaptureDispatch {
     }
 
     /// Decide what to store for a frontmost app's window. Returns nil = skip.
-    /// registeredParser nil => use generic. A registered parser returning nil/throwing
-    /// => nil (NEVER fall through to generic) — the no-silent-fallback rule.
     public static func parse(window: AXNode, app: AppInfo, registry: ParserRegistry) -> ParsedCapture? {
-        guard case .parsed(let parsed) = parseDetailed(window: window, app: app, registry: registry) else {
-            return nil
+        switch parseDetailed(window: window, app: app, registry: registry) {
+        case .parsed(let parsed):                 return parsed
+        case .parsedByFallback(let parsed, _):    return parsed
+        case .noContent, .failed:                 return nil
         }
-        return parsed
     }
 
-    /// Diagnostic form of `parse`: distinguishes empty/not-handled from a parser failure
+    /// Diagnostic form of `parse`: distinguishes empty/not-handled from a generic fallback
     /// without ever carrying captured content into logs or the health ledger.
+    ///
+    /// A registered parser that returns nil or throws now FALLS THROUGH to
+    /// `GenericPageExtractor` (spec 4f rule 3). This deliberately reverses the old
+    /// no-silent-fallback rule: a broken or over-narrow parser must degrade to a worse
+    /// capture, not to no capture. It stays non-silent because the caller records
+    /// "GenericPageExtractor.v2/fallback/<ParserTypeName>" in `capture_health_events.parser`.
     public static func parseDetailed(window: AXNode, app: AppInfo, registry: ParserRegistry) -> ParseResult {
         if let parser = registry.parser(for: app.bundleID) {
-            // No-silent-fallback: registered parser owns this app. nil/throw -> skip, never generic.
+            let parserName = String(describing: type(of: parser))
             do {
-                guard let result = try parser.parse(window: window, app: app) else {
-                    SafeLogger.shared.log(
-                        .info,
-                        subsystem: .capture,
-                        event: .parserNoContent,
-                        fields: SafeLogFields(
-                            parserID: SafeLogToken(validating: String(describing: type(of: parser)))
-                        )
-                    )
-                    return .noContent
+                if let result = try parser.parse(window: window, app: app) {
+                    return .parsed(result)
                 }
-                return .parsed(result)
+                SafeLogger.shared.log(
+                    .info,
+                    subsystem: .capture,
+                    event: .parserNoContent,
+                    fields: SafeLogFields(parserID: SafeLogToken(validating: parserName))
+                )
+            } catch let refusal as ParserRefusal {
+                // REFUSE, not NOT-HANDLED: the parser has decided a generic capture of this
+                // window would be wrong, so rule 3 does not apply and nothing is stored.
+                SafeLogger.shared.log(
+                    .info,
+                    subsystem: .capture,
+                    event: .parserRefused,
+                    fields: SafeLogFields(
+                        parserID: SafeLogToken(validating: parserName),
+                        outcome: SafeLogToken(validating: refusal.reason)
+                    )
+                )
+                return .noContent
             } catch {
                 SafeLogger.shared.log(
                     .error,
                     subsystem: .capture,
                     event: .parserFailed,
                     error: error,
-                    fields: SafeLogFields(
-                        parserID: SafeLogToken(validating: String(describing: type(of: parser)))
-                    )
+                    fields: SafeLogFields(parserID: SafeLogToken(validating: parserName))
                 )
-                return .failed
             }
+            // The fallback re-keys this window as "bundleID:windowTitle", so an app whose
+            // dedicated parser split it into per-thread keys collapses into one coarse thread
+            // while it is degraded. Accepted for Phase A; Phase D revisits fallback keying.
+            guard let fallback = genericCapture(window: window, app: app) else { return .noContent }
+            return .parsedByFallback(fallback, failedParser: parserName)
         }
+        guard let result = genericCapture(window: window, app: app) else { return .noContent }
+        return .parsed(result)
+    }
+
+    /// The `capture_health_events.parser` marker for a degraded capture (spec 8). Composed here
+    /// rather than at each call site so the health ledger and its tests agree on one spelling.
+    public static func fallbackParserID(failedParser: String) -> String {
+        "GenericPageExtractor.v2/fallback/\(failedParser)"
+    }
+
+    /// `GenericPageExtractor` is pure and total, so the only nil here is "no readable content".
+    /// A throw is therefore not expected — it is logged rather than swallowed so that if the
+    /// generic path ever does start throwing, it does not disappear as a silent skip.
+    private static func genericCapture(window: AXNode, app: AppInfo) -> ParsedCapture? {
         do {
-            guard let result = try GenericAXParser().parse(window: window, app: app) else {
-                return .noContent
-            }
-            return .parsed(result)
+            return try GenericAXParser().parse(window: window, app: app)
         } catch {
             SafeLogger.shared.log(
                 .error,
@@ -126,7 +182,7 @@ public enum CaptureDispatch {
                 error: error,
                 fields: SafeLogFields(parserID: SafeLogToken(validating: "GenericAXParser"))
             )
-            return .failed
+            return nil
         }
     }
 

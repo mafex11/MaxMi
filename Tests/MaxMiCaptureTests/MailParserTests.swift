@@ -8,14 +8,14 @@ final class MailParserTests: XCTestCase {
     func testParsesAccountAttributedLines() throws {
         let raw = """
         iCloud » Blinkist <hello@mail.blinkist.com> | Closes tomorrow — 75% off
-        sudhanshu@layerpath.com » vercel[bot] <notifications@github.com> | Re: [PR #2106]
-        paymafex@gmail.com » Team Razorpay <noreply@razorpay.com> | Update your KYC
+        sudhanshu@example.invalid » vercel[bot] <notifications@github.com> | Re: [PR #2106]
+        payments@example.invalid » Team Razorpay <noreply@razorpay.com> | Update your KYC
         """
         let cap = try XCTUnwrap(MailParser.makeCapture(fromScriptOutput: raw, windowTitle: "Inbox"))
         XCTAssertEqual(cap.sourceApp, "Mail")
         XCTAssertEqual(cap.sourceKey, "mail:inbox")
         XCTAssertTrue(cap.content.contains("Blinkist"))
-        XCTAssertTrue(cap.content.contains("layerpath.com » vercel[bot]"))
+        XCTAssertTrue(cap.content.contains("(From: sudhanshu@example.invalid » vercel[bot]"))
         XCTAssertTrue(cap.content.contains("Razorpay"))
     }
 
@@ -37,7 +37,7 @@ final class MailParserTests: XCTestCase {
     func testBlankLinesFiltered() throws {
         let raw = "iCloud » A <a@x.com> | subj A\n\n\nExchange » B <b@y.com> | subj B\n"
         let cap = try XCTUnwrap(MailParser.makeCapture(fromScriptOutput: raw, windowTitle: nil))
-        XCTAssertEqual(cap.content, "iCloud » A <a@x.com> | subj A\nExchange » B <b@y.com> | subj B")
+        XCTAssertEqual(cap.content, "(From: iCloud » A <a@x.com>): subj A\n(From: Exchange » B <b@y.com>): subj B")
     }
 
     func testSelectedVisibleMessageIncludesBodyAndStableHashedKey() throws {
@@ -50,12 +50,8 @@ final class MailParserTests: XCTestCase {
         XCTAssertEqual(capture.sourceTitle, "Project update")
         XCTAssertTrue(capture.sourceKey.hasPrefix("mail:thread:"))
         XCTAssertFalse(capture.sourceKey.contains("Taylor"))
-        XCTAssertEqual(capture.content, """
-        From: Taylor <t@example.com>
-        Subject: Project update
-        Date: Tuesday, 14 July 2026
-        The milestone is ready for review.
-        """)
+        XCTAssertEqual(capture.content,
+                       "(From: Taylor <t@example.com>)(sent Tuesday, 14 July 2026): The milestone is ready for review.")
         XCTAssertEqual(capture.parserVersion, 2)
     }
 
@@ -64,6 +60,6 @@ final class MailParserTests: XCTestCase {
         let rs = MailParser.recordSeparator
         let raw = "\(MailParser.structuredHeader)\na\(fs)Alex\(fs)Topic\(fs)Monday\(fs)First body\(rs)b\(fs)Sam\(fs)Re: Topic\(fs)Tuesday\(fs)Reply body\(rs)"
         let capture = try XCTUnwrap(MailParser.makeCapture(fromScriptOutput: raw, windowTitle: nil))
-        XCTAssertTrue(capture.content.contains("First body\n\n---\n\nFrom: Sam"))
+        XCTAssertTrue(capture.content.contains("): First body\n(From: Sam"))
     }
 }

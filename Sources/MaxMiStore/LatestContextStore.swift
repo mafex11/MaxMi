@@ -8,6 +8,9 @@ public struct LatestContextRecord: Sendable, Equatable {
     public let sourceKey: String
     public let sourceTitle: String?
     public let content: String
+    /// The typed shape. Rows written before schema v10, and rows whose payload cannot be read,
+    /// resolve to `LegacyContentAdapter.adapt(renderedContent: content, kind: contentKind)`.
+    public let structured: CapturedContent
     public let contentKind: CaptureContentKind
     public let parserID: String
     public let parserVersion: Int
@@ -32,7 +35,8 @@ extension Store {
                 let pattern = "%\(query)%"
                 rows = try Row.fetchAll(d, sql: """
                     SELECT c.thread_id, t.source_app, t.source_key, t.source_title,
-                           c.content_ciphertext, c.content_kind, c.parser_id, c.parser_version,
+                           c.content_ciphertext, c.structured_ciphertext, c.content_kind,
+                           c.parser_id, c.parser_version,
                            c.accumulation_policy, c.offscreen_mode, c.offscreen_max_steps,
                            c.offscreen_max_chars, c.trigger, c.captured_at,
                            c.character_count, c.truncated, c.display_summary_ciphertext,
@@ -47,7 +51,8 @@ extension Store {
             } else {
                 rows = try Row.fetchAll(d, sql: """
                     SELECT c.thread_id, t.source_app, t.source_key, t.source_title,
-                           c.content_ciphertext, c.content_kind, c.parser_id, c.parser_version,
+                           c.content_ciphertext, c.structured_ciphertext, c.content_kind,
+                           c.parser_id, c.parser_version,
                            c.accumulation_policy, c.offscreen_mode, c.offscreen_max_steps,
                            c.offscreen_max_chars, c.trigger, c.captured_at,
                            c.character_count, c.truncated, c.display_summary_ciphertext,
@@ -57,36 +62,7 @@ extension Store {
                     LIMIT ?
                     """, arguments: [boundedLimit])
             }
-            return rows.compactMap { row in
-                guard
-                    let kind = CaptureContentKind(rawValue: row["content_kind"]),
-                    let accumulation = CaptureAccumulationPolicy(rawValue: row["accumulation_policy"]),
-                    let offscreenMode = OffscreenCaptureMode(rawValue: row["offscreen_mode"]),
-                    let trigger = CaptureTrigger(rawValue: row["trigger"])
-                else { return nil }
-                return LatestContextRecord(
-                    id: row["thread_id"],
-                    sourceApp: row["source_app"],
-                    sourceKey: row["source_key"],
-                    sourceTitle: row["source_title"],
-                    content: decryptOrMarker(row["content_ciphertext"]),
-                    contentKind: kind,
-                    parserID: row["parser_id"],
-                    parserVersion: row["parser_version"],
-                    accumulationPolicy: accumulation,
-                    offscreenPolicy: OffscreenCapturePolicy(
-                        mode: offscreenMode,
-                        maxSteps: row["offscreen_max_steps"],
-                        maxCharacters: row["offscreen_max_chars"]
-                    ),
-                    trigger: trigger,
-                    capturedAtMs: row["captured_at"],
-                    characterCount: row["character_count"],
-                    truncated: (row["truncated"] as Int) != 0,
-                    displaySummary: (row["display_summary_ciphertext"] as String?).map(decryptOrMarker),
-                    summaryStatus: row["summary_status"]
-                )
-            }
+            return rows.compactMap(record(from:))
         }
     }
 
@@ -130,7 +106,8 @@ extension Store {
             arguments.append(boundedOffset)
             let rows = try Row.fetchAll(d, sql: """
                 SELECT c.thread_id, t.source_app, t.source_key, t.source_title,
-                       c.content_ciphertext, c.content_kind, c.parser_id, c.parser_version,
+                       c.content_ciphertext, c.structured_ciphertext, c.content_kind,
+                       c.parser_id, c.parser_version,
                        c.accumulation_policy, c.offscreen_mode, c.offscreen_max_steps,
                        c.offscreen_max_chars, c.trigger, c.captured_at,
                        c.character_count, c.truncated, c.display_summary_ciphertext,
@@ -152,12 +129,15 @@ extension Store {
             let offscreenMode = OffscreenCaptureMode(rawValue: row["offscreen_mode"]),
             let trigger = CaptureTrigger(rawValue: row["trigger"])
         else { return nil }
+        let content = decryptOrMarker(row["content_ciphertext"])
         return LatestContextRecord(
             id: row["thread_id"],
             sourceApp: row["source_app"],
             sourceKey: row["source_key"],
             sourceTitle: row["source_title"],
-            content: decryptOrMarker(row["content_ciphertext"]),
+            content: content,
+            structured: structuredOrLegacy(row["structured_ciphertext"],
+                                           renderedContent: content, kind: kind),
             contentKind: kind,
             parserID: row["parser_id"],
             parserVersion: row["parser_version"],
