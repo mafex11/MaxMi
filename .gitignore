@@ -19,3 +19,6 @@ captures/
 *.db-wal
 *.db-shm
 .superpowers/
+
+# SDD worktrees
+.worktrees/
