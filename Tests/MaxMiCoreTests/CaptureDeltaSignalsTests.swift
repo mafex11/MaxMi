@@ -29,6 +29,25 @@ final class CaptureDeltaSignalsTests: XCTestCase {
         XCTAssertTrue(delta.hasRecordableChange)
     }
 
+    func testSameLengthTaskCompletionIsRecordable() {
+        let before = CapturedContent.tasks([
+            TaskItem(title: "Ship M8 Phase B", status: .open, due: nil, dueString: nil,
+                     project: nil, tags: [], notes: nil),
+        ])
+        let after = CapturedContent.tasks([
+            TaskItem(title: "Ship M8 Phase B", status: .completed, due: nil, dueString: nil,
+                     project: nil, tags: [], notes: nil),
+        ])
+
+        let delta = CaptureDelta.between(previous: before, merged: after)
+
+        XCTAssertTrue(delta.isEmpty)
+        XCTAssertEqual(delta.addedChars, 0)
+        XCTAssertEqual(delta.removedChars, 0)
+        XCTAssertTrue(delta.contentChanged)
+        XCTAssertTrue(delta.hasRecordableChange)
+    }
+
     func testCalendarDeltaHasRecordableChangeOnShrink() {
         let event = CalendarEvent(title: "Design review", dateString: "Mon 10:00",
                                  start: nil, end: nil, organizer: nil, location: nil,
@@ -94,6 +113,7 @@ final class CaptureDeltaSignalsTests: XCTestCase {
         let delta = try CapturedContentEnvelope.makeDecoder()
             .decode(CaptureDelta.self, from: Data(json.utf8))
         XCTAssertTrue(delta.dialogBlocks.isEmpty)
+        XCTAssertFalse(delta.contentChanged)
         XCTAssertTrue(delta.hasRecordableChange)
     }
 

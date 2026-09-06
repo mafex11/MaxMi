@@ -19,11 +19,14 @@ public struct CaptureDelta: Codable, Sendable, Equatable {
     /// and the merged content — `AppWiring.finishCapture`, which writes the `dialog` event, has
     /// only the `CommitResult` (spec 12 Q12).
     public let dialogBlocks: [Block]
+    /// Whether the rendered full content changed, including a same-length substitution such as
+    /// a task checkbox flipping from open to completed.
+    public let contentChanged: Bool
 
     public init(addedBlocks: [Block] = [], addedMessages: [Message] = [],
                 addedSegments: [TerminalSegment] = [], removedCount: Int = 0,
                 addedChars: Int = 0, removedChars: Int = 0, isFirstCapture: Bool = false,
-                dialogBlocks: [Block] = []) {
+                dialogBlocks: [Block] = [], contentChanged: Bool = false) {
         self.addedBlocks = addedBlocks
         self.addedMessages = addedMessages
         self.addedSegments = addedSegments
@@ -32,14 +35,15 @@ public struct CaptureDelta: Codable, Sendable, Equatable {
         self.removedChars = removedChars
         self.isFirstCapture = isFirstCapture
         self.dialogBlocks = dialogBlocks
+        self.contentChanged = contentChanged
     }
 
     private enum CodingKeys: String, CodingKey {
         case addedBlocks, addedMessages, addedSegments, removedCount
-        case addedChars, removedChars, isFirstCapture, dialogBlocks
+        case addedChars, removedChars, isFirstCapture, dialogBlocks, contentChanged
     }
 
-    /// `dialogBlocks` is decoded leniently so a payload written before it existed still reads.
+    /// Fields added after the initial payload format are decoded leniently so older payloads still read.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         addedBlocks = try c.decode([Block].self, forKey: .addedBlocks)
@@ -50,6 +54,7 @@ public struct CaptureDelta: Codable, Sendable, Equatable {
         removedChars = try c.decode(Int.self, forKey: .removedChars)
         isFirstCapture = try c.decode(Bool.self, forKey: .isFirstCapture)
         dialogBlocks = try c.decodeIfPresent([Block].self, forKey: .dialogBlocks) ?? []
+        contentChanged = try c.decodeIfPresent(Bool.self, forKey: .contentChanged) ?? false
     }
 
     public var isEmpty: Bool {
@@ -62,9 +67,9 @@ public struct CaptureDelta: Codable, Sendable, Equatable {
     /// NOT `!isEmpty`: `.tasks` and `.calendar` deltas carry no arrays and no `removedCount` by
     /// design (spec 5a), so `isEmpty` is always true for them and gating on it would drop every
     /// Reminders and Calendar event. The rendered character counts are the only change signal
-    /// those two shapes have.
+    /// those two shapes have—except for same-length changes, which `contentChanged` records.
     public var hasRecordableChange: Bool {
-        !isEmpty || addedChars > 0 || removedChars > 0
+        !isEmpty || addedChars > 0 || removedChars > 0 || contentChanged
     }
 
     public static let empty = CaptureDelta()
@@ -75,6 +80,7 @@ public struct CaptureDelta: Codable, Sendable, Equatable {
         let mergedRendered = ContentRenderer.render(merged, style: .full)
         let addedChars = max(0, mergedRendered.count - previousRendered.count)
         let removedChars = max(0, previousRendered.count - mergedRendered.count)
+        let contentChanged = previousRendered != mergedRendered
         let isFirst = previous == nil
 
         switch merged {
@@ -85,46 +91,51 @@ public struct CaptureDelta: Codable, Sendable, Equatable {
             return CaptureDelta(
                 addedMessages: current.messages.filter { !oldIDs.contains($0.id) },
                 removedCount: old.filter { !currentIDs.contains($0.id) }.count,
-                addedChars: addedChars, removedChars: removedChars, isFirstCapture: isFirst)
+                addedChars: addedChars, removedChars: removedChars, isFirstCapture: isFirst,
+                contentChanged: contentChanged)
         case .terminal(let current):
             let old = previousSegments(previous)
             let appended = isSegmentPrefix(old, current.segments)
             return CaptureDelta(
                 addedSegments: appended ? Array(current.segments.dropFirst(old.count)) : [],
                 removedCount: appended ? 0 : old.count,
-                addedChars: addedChars, removedChars: removedChars, isFirstCapture: isFirst)
+                addedChars: addedChars, removedChars: removedChars, isFirstCapture: isFirst,
+                contentChanged: contentChanged)
         case .document(let current):
             return blockDelta(old: previousDocumentBlocks(previous), new: current.blocks,
-                              addedChars: addedChars, removedChars: removedChars, isFirst: isFirst)
+                              addedChars: addedChars, removedChars: removedChars, isFirst: isFirst,
+                              contentChanged: contentChanged)
         case .generic(let current):
             // Only `.main` counts: chrome churns constantly and would drown the signal. A
             // `.dialog` region appearing is reported separately, in `dialogBlocks`.
             var delta = blockDelta(old: previousMainBlocks(previous), new: mainBlocks(current),
                                    addedChars: addedChars, removedChars: removedChars,
-                                   isFirst: isFirst)
+                                   isFirst: isFirst, contentChanged: contentChanged)
             let dialog = appearingDialogBlocks(previous: previous, merged: merged)
             if !dialog.isEmpty {
                 delta = CaptureDelta(
                     addedBlocks: delta.addedBlocks, addedMessages: delta.addedMessages,
                     addedSegments: delta.addedSegments, removedCount: delta.removedCount,
                     addedChars: delta.addedChars, removedChars: delta.removedChars,
-                    isFirstCapture: delta.isFirstCapture, dialogBlocks: dialog)
+                    isFirstCapture: delta.isFirstCapture, dialogBlocks: dialog,
+                    contentChanged: delta.contentChanged)
             }
             return delta
         case .tasks, .calendar:
             return CaptureDelta(addedChars: addedChars, removedChars: removedChars,
-                                isFirstCapture: isFirst)
+                                isFirstCapture: isFirst, contentChanged: contentChanged)
         }
     }
 
     static func blockDelta(old: [Block], new: [Block], addedChars: Int, removedChars: Int,
-                           isFirst: Bool) -> CaptureDelta {
+                           isFirst: Bool, contentChanged: Bool) -> CaptureDelta {
         let oldTexts = Set(old.map(\.text))
         let newTexts = Set(new.map(\.text))
         return CaptureDelta(
             addedBlocks: new.filter { !oldTexts.contains($0.text) },
             removedCount: old.filter { !newTexts.contains($0.text) }.count,
-            addedChars: addedChars, removedChars: removedChars, isFirstCapture: isFirst)
+            addedChars: addedChars, removedChars: removedChars, isFirstCapture: isFirst,
+            contentChanged: contentChanged)
     }
 
     static func mainBlocks(_ page: GenericPage) -> [Block] {
