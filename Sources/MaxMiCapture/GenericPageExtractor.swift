@@ -39,6 +39,19 @@ public enum GenericPageExtractor {
     static let listContainerRoles: Set<String> = ["AXList", "AXOutline"]
     static let secureSubrole = "AXSecureTextField"
     static let secureMask = "«secure field»"
+    static let dialogRoles: Set<String> = ["AXSheet", "AXDialog", "AXPopover"]
+    static let dialogSubroles: Set<String> = ["AXDialog", "AXSystemDialog"]
+    static let landmarkRegions: [String: RegionKind] = [
+        "AXLandmarkMain": .main,
+        "AXLandmarkNavigation": .navigation,
+        "AXLandmarkComplementary": .sidebar,
+        "AXLandmarkBanner": .banner,
+        "AXLandmarkContentInfo": .footer,
+    ]
+    static let sidebarNameHints = ["sidebar", "source list"]
+    static let sidebarListRoles: Set<String> = ["AXOutline", "AXList", "AXTable"]
+    static let sidebarMaxWidthShare = 0.35
+    static let sidebarLeftEdgeShare = 0.05
 
     /// One emitted block plus the visual position of the node it came from. `order` is a
     /// monotonic counter so sorting by (y, x, order) is deterministic even when frames are
@@ -72,18 +85,53 @@ public enum GenericPageExtractor {
                             x: window.frame?.minX ?? 0,
                             entries: [])]
         var order = 0
-        walk(window, window: window, claimIndex: 0, listDepth: 0,
-             options: options, order: &order, claims: &claims)
+        walk(window, window: window, claimIndex: 0, parentIsSplitGroup: false,
+             listDepth: 0, options: options, order: &order, claims: &claims)
         return Result(
             page: GenericPage(regions: assemble(claims), focused: nil, url: url),
             truncated: false
         )
     }
 
+    /// The first matching rule claims this node's entire subtree as one region. nil means
+    /// "not claimed" — the node inherits the enclosing region, defaulting to `.main` (rule 6).
+    /// A nested claim inside a claimed subtree wins for its own subtree.
+    ///
+    /// Frames are compared in WINDOW-RELATIVE coordinates: `AXFrame` is global screen
+    /// coordinates, so a window that is not flush against the left edge of the primary display
+    /// would otherwise misclassify its sidebar.
+    static func classifyRegion(_ node: AXNode, window: AXNode, parentIsSplitGroup: Bool) -> RegionKind? {
+        if dialogRoles.contains(node.role) { return .dialog }
+        if let subrole = node.subrole, dialogSubroles.contains(subrole) { return .dialog }
+        if node.role == "AXToolbar" { return .toolbar }
+        if let subrole = node.subrole, let kind = landmarkRegions[subrole] { return kind }
+        let name = [node.identifier, node.label].compactMap { $0 }.joined(separator: " ").lowercased()
+        if sidebarNameHints.contains(where: { name.contains($0) }) { return .sidebar }
+        if parentIsSplitGroup, isSplitGroupSidebar(node, window: window) { return .sidebar }
+        return nil
+    }
+
+    static func isSplitGroupSidebar(_ node: AXNode, window: AXNode) -> Bool {
+        guard let windowFrame = window.frame, windowFrame.width > 0,
+              let frame = node.frame else { return false }
+        guard frame.width < sidebarMaxWidthShare * windowFrame.width else { return false }
+        let relativeX = frame.minX - windowFrame.minX
+        guard relativeX <= sidebarLeftEdgeShare * windowFrame.width else { return false }
+        return containsListLike(node)
+    }
+
+    /// The node itself or any descendant being an outline/list/table. Finder's source list is
+    /// sometimes the pane and sometimes wrapped in a group, so both count.
+    static func containsListLike(_ node: AXNode) -> Bool {
+        if sidebarListRoles.contains(node.role) { return true }
+        return node.children.contains(where: containsListLike)
+    }
+
     static func walk(
         _ node: AXNode,
         window: AXNode,
         claimIndex: Int,
+        parentIsSplitGroup: Bool,
         listDepth: Int,
         options: Options,
         order: inout Int,
@@ -97,8 +145,17 @@ public enum GenericPageExtractor {
         if let frame = node.frame, frame.width == 0 || frame.height == 0 { return }
         if isOffscreen(node, window: window, options: options) { return }
 
+        var currentClaim = claimIndex
+        if let kind = classifyRegion(node, window: window, parentIsSplitGroup: parentIsSplitGroup) {
+            claims.append(Claim(kind: kind,
+                                y: node.frame?.minY ?? 0,
+                                x: node.frame?.minX ?? 0,
+                                entries: []))
+            currentClaim = claims.count - 1
+        }
+
         if let block = block(for: node, listDepth: listDepth) {
-            claims[claimIndex].entries.append(BlockEntry(
+            claims[currentClaim].entries.append(BlockEntry(
                 y: node.frame?.minY ?? 0, x: node.frame?.minX ?? 0, order: order, block: block))
             order += 1
             // A node that emits text stops recursion into its own children — this is what
@@ -106,8 +163,10 @@ public enum GenericPageExtractor {
             return
         }
         let childDepth = listContainerRoles.contains(node.role) ? listDepth + 1 : listDepth
+        let childInSplitGroup = node.role == "AXSplitGroup"
         for child in node.children {
-            walk(child, window: window, claimIndex: claimIndex, listDepth: childDepth,
+            walk(child, window: window, claimIndex: currentClaim,
+                 parentIsSplitGroup: childInSplitGroup, listDepth: childDepth,
                  options: options, order: &order, claims: &claims)
         }
     }
