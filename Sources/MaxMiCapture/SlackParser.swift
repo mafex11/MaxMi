@@ -17,12 +17,10 @@ public struct SlackParser: SourceParser {
             isGroup: isGroup(fromTitle: app.windowTitle),
             messages: messages
         )
-        // Newest-anchored cap on the STRUCTURED value: the rendered text is derived from it, so
-        // capping the string afterwards would be undone by CaptureEnvelope.
-        return Self.hardCapped(
-            CaptureAccumulator.bound(.conversation(conversation), to: Self.contentCap),
-            to: Self.contentCap
-        )
+        // Newest-anchored HARD cap on the STRUCTURED value: the rendered text is derived from it,
+        // so capping the string afterwards would be undone by CaptureEnvelope, and one
+        // pathological message must not bloat a version unboundedly.
+        return CaptureAccumulator.boundHard(.conversation(conversation), to: Self.contentCap)
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
@@ -55,29 +53,6 @@ public struct SlackParser: SourceParser {
         guard let title else { return false }
         let parts = title.components(separatedBy: " - ")
         return parts.count >= 3 && parts.last == "Slack"
-    }
-
-    /// `CaptureAccumulator.bound` is a SOFT cap: one message longer than the cap is kept whole
-    /// rather than rendering an empty conversation. Slack's pre-existing guard is harder — a
-    /// single pathological message must not bloat a version unboundedly — so that lone message
-    /// keeps only the tail of its text. Applied to the STRUCTURED value, so
-    /// `content == ContentRenderer.render(structured, .full)` still holds.
-    static func hardCapped(_ content: CapturedContent, to cap: Int) -> CapturedContent {
-        guard case .conversation(let conversation) = content,
-              conversation.messages.count == 1, let message = conversation.messages.first
-        else { return content }
-        let overflow = ContentRenderer.renderMessage(message).count - cap
-        guard overflow > 0 else { return content }
-        let text = String(message.text.dropFirst(min(overflow, message.text.count)))
-        return .conversation(Conversation(
-            channel: conversation.channel,
-            isGroup: conversation.isGroup,
-            messages: [Message(
-                id: Message.makeID(sender: message.sender, timeString: message.timeString, text: text),
-                sender: message.sender, text: text, timestamp: message.timestamp,
-                timeString: message.timeString, isUser: message.isUser, isDraft: message.isDraft
-            )]
-        ))
     }
 
     /// "<view> - <workspace> - Slack" -> "slack:<workspace>/<view>"; else "slack:<title>".

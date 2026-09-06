@@ -147,6 +147,47 @@ extension CaptureAccumulator {
         }
     }
 
+    /// A HARD cap, for parsers that must not let one pathological item bloat a version.
+    /// `bound` is deliberately soft — it keeps a single over-cap item whole rather than rendering
+    /// an empty value. `boundHard` applies `bound` first and then trims the one surviving message
+    /// so the rendered form fits: the body keeps its TAIL (the newest words), and if even the
+    /// rendered head (`(From: sender)(sent time): `) is over the cap the head is bounded too.
+    /// Only `.conversation` is trimmed further; every other shape keeps `bound`'s soft floor.
+    /// Bounding the STRUCTURED value is what keeps `content == render(content, .full)` true for
+    /// the caller, which a string post-trim would break.
+    public static func boundHard(_ content: CapturedContent, to maxCharacters: Int) -> CapturedContent {
+        let cap = max(0, maxCharacters)
+        let bounded = bound(content, to: cap)
+        guard case .conversation(let value) = bounded, let message = value.messages.first,
+              value.messages.count == 1,
+              ContentRenderer.renderMessage(message).count > cap else { return bounded }
+        return .conversation(Conversation(channel: value.channel, isGroup: value.isGroup,
+                                          messages: [fitted(message, to: cap)]))
+    }
+
+    /// Trims one message until it renders within `cap`: body tail first, then the sender label,
+    /// then the time label. A cap below the empty render (`"(From: ): "`) cannot be honoured.
+    private static func fitted(_ message: Message, to cap: Int) -> Message {
+        var sender = message.sender
+        var text = message.text
+        var timeString = message.timeString
+        var timestamp = message.timestamp
+        func candidate() -> Message {
+            Message(id: Message.makeID(sender: sender, timeString: timeString, text: text),
+                    sender: sender, text: text, timestamp: timestamp, timeString: timeString,
+                    isUser: message.isUser, isDraft: message.isDraft)
+        }
+        func overflow() -> Int { ContentRenderer.renderMessage(candidate()).count - cap }
+        // Dropping n characters of body removes at least n from the render (a newline renders as
+        // "\n  "), so one pass always reaches the cap when the body is long enough.
+        if overflow() > 0 { text = String(text.dropFirst(min(overflow(), text.count))) }
+        // A name reads from the front, so the sender keeps its prefix.
+        if overflow() > 0 { sender = String(sender.dropLast(min(overflow(), sender.count))) }
+        // Last resort: the "(sent …)" segment goes entirely.
+        if overflow() > 0 { timeString = nil; timestamp = nil }
+        return candidate()
+    }
+
     /// Trims a page's CHROME before its content: kinds are shed in reverse
     /// `ContentRenderer.regionOrder` (`.unknown` first, `.dialog` last) and `.main` only after
     /// every other kind is gone, because the user is reading `.main`. Within a kind, later

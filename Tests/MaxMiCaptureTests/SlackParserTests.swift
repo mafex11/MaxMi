@@ -1,4 +1,5 @@
 import XCTest
+import MaxMiCore
 @testable import MaxMiCapture
 
 final class SlackParserTests: XCTestCase {
@@ -20,6 +21,13 @@ final class SlackParserTests: XCTestCase {
                                   frame: CGRect(x: 240, y: 0, width: 10, height: 10), focused: false, children: [])])])
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("c - w - Slack")))
         XCTAssertLessThanOrEqual(cap.content.count, 8000, "single oversize message must not bypass the cap")
+        XCTAssertTrue(cap.content.hasSuffix(String(repeating: "x", count: 100)),
+                      "the TAIL of the oversize message survives")
+        let structured = try XCTUnwrap(cap.structured)
+        XCTAssertEqual(cap.content, ContentRenderer.render(structured, style: .full),
+                       "the cap is applied to the structured value, not to the rendered string")
+        guard case .conversation(let conversation) = structured else { return XCTFail() }
+        XCTAssertEqual(conversation.messages.count, 1, "the message is trimmed, never dropped")
     }
 
     func testKeyFromTitleAndSenderAttributedMessages() throws {

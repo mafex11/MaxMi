@@ -229,6 +229,57 @@ final class StructuredAccumulatorTests: XCTestCase {
         XCTAssertFalse(ContentRenderer.render(bounded, style: .full).isEmpty)
     }
 
+    func testHardBoundTailPreservesASingleOverCapMessage() {
+        let text = (0..<400).map { "word\($0)" }.joined(separator: " ")
+        let content = conversation([message("Ana", text)])
+        let bounded = CaptureAccumulator.boundHard(content, to: 200)
+        guard case .conversation(let result) = bounded,
+              let kept = result.messages.first else { return XCTFail() }
+        XCTAssertEqual(result.messages.count, 1, "the message itself is trimmed, never dropped")
+        XCTAssertTrue(text.hasSuffix(kept.text), "the TAIL of the body survives")
+        XCTAssertTrue(kept.text.hasSuffix("word399"), "the newest words survive")
+        XCTAssertEqual(kept.sender, "Ana")
+        XCTAssertEqual(kept.id, Message.makeID(sender: "Ana", timeString: nil, text: kept.text),
+                       "the id is recomputed for the trimmed text")
+        XCTAssertLessThanOrEqual(ContentRenderer.render(bounded, style: .full).count, 200)
+    }
+
+    func testHardBoundKeepsTheRenderInvariantAndTheCapTogether() {
+        let cases: [CapturedContent] = [
+            conversation([message("Ana", String(repeating: "x", count: 5_000))]),
+            conversation([message("Ana", "line one\nline two\n" + String(repeating: "y", count: 900),
+                                  time: "09:41")]),
+            conversation((0..<50).map { message("Ana", "message body number \($0)") }),
+            conversation([message("Ana", "short")]),
+        ]
+        for content in cases {
+            let bounded = CaptureAccumulator.boundHard(content, to: 300)
+            let rendered = ContentRenderer.render(bounded, style: .full)
+            XCTAssertLessThanOrEqual(rendered.count, 300, "hard cap holds for \(content)")
+            XCTAssertEqual(rendered, ContentRenderer.render(bounded, style: .full),
+                           "the bounded STRUCTURED value is what renders — no string post-trim")
+            guard case .conversation(let result) = bounded else { return XCTFail() }
+            XCTAssertFalse(result.messages.isEmpty, "a bounded conversation is never emptied")
+        }
+    }
+
+    func testHardBoundAlsoBoundsAnOversizeSenderHead() {
+        let content = conversation([message(String(repeating: "S", count: 500), "body",
+                                            time: String(repeating: "t", count: 500))])
+        let bounded = CaptureAccumulator.boundHard(content, to: 120)
+        XCTAssertLessThanOrEqual(ContentRenderer.render(bounded, style: .full).count, 120,
+                                 "an over-cap head is bounded too, not just the body")
+        guard case .conversation(let result) = bounded,
+              let kept = result.messages.first else { return XCTFail() }
+        XCTAssertTrue(String(repeating: "S", count: 500).hasPrefix(kept.sender),
+                      "a sender name reads from the front, so its PREFIX survives")
+    }
+
+    func testHardBoundLeavesAnAlreadyFittingValueAlone() {
+        let content = conversation([message("Ana", "one"), message("Bo", "two")])
+        XCTAssertEqual(CaptureAccumulator.boundHard(content, to: 10_000), content)
+    }
+
     func testBoundingAGenericPageShedsChromeBeforeMainContent() {
         let mainBlocks = (0..<10).map { Block(type: .paragraph, text: "main line \($0)") }
         let sidebarBlocks = (0..<10).map { Block(type: .label, text: "sidebar item \($0)") }

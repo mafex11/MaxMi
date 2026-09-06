@@ -71,9 +71,14 @@ final class NativeConversationParserTests: XCTestCase {
 
         let capture = try XCTUnwrap(try WhatsAppParser().parse(window: window, app: app))
         XCTAssertEqual(capture.sourceKey, "whatsapp:controlled-group")
+        // Each bubble is ONE accessible label, so the walk has no sender of its own to lift out:
+        // the label is kept whole rather than split on ": " into an invented sender.
         XCTAssertEqual(
             capture.content,
-            "(From: Alex): First controlled message\n(From: You): Second controlled message"
+            """
+            (From: unknown): Alex: First controlled message
+            (From: unknown): You: Second controlled message
+            """
         )
     }
 

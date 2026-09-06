@@ -96,6 +96,8 @@ final class StructuredConversationParserTests: XCTestCase {
         XCTAssertFalse(conversation.isGroup, "no group marker is exposed by the AX walk yet")
         XCTAssertEqual(conversation.messages.map(\.sender), ["Alex", "You"])
         XCTAssertEqual(conversation.messages.map(\.text), ["Morning update", "I am reviewing it"])
+        XCTAssertEqual(conversation.messages.map(\.isUser), [false, true],
+                       "WhatsApp labels the user's own bubbles \"You\", which is a real signal")
 
         let capture = try XCTUnwrap(try WhatsAppParser().parse(window: window, app: app))
         XCTAssertEqual(capture.sourceKey, "whatsapp:project-group")
@@ -120,6 +122,67 @@ final class StructuredConversationParserTests: XCTestCase {
         let messages = try messages(try SlackParser().parseStructured(window: window, app: app))
         XCTAssertEqual(messages.map(\.sender), ["unknown"])
         XCTAssertEqual(messages.map(\.text), ["system joined the channel"])
+    }
+
+    /// A one-label bubble must not be split on ": ": "Note: check the doc" is a message, not a
+    /// message from someone called "Note". Only a bubble that exposes a separate sender label
+    /// gets an attributed sender.
+    func testWhatsAppAttributesSendersOnlyWhereTheBubbleExposesOne() throws {
+        func bubble(_ id: String, _ y: CGFloat, _ texts: [String]) -> AXNode {
+            AXNode(role: "AXGroup", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 400, y: y, width: 500, height: 40), focused: false,
+                   children: texts.enumerated().map { offset, text in
+                       AXNode(role: "AXStaticText", value: text, title: nil, url: nil,
+                              frame: CGRect(x: 420 + CGFloat(offset) * 120, y: y,
+                                            width: 100, height: 20),
+                              focused: false, children: [])
+                   },
+                   identifier: id)
+        }
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+            children: [
+                AXNode(role: "AXHeading", value: "Project Group", title: nil, url: nil,
+                       frame: CGRect(x: 400, y: 20, width: 300, height: 30), focused: false,
+                       children: [], identifier: "conversation-header"),
+                bubble("message-1", 200, ["Note: check the doc"]),
+                bubble("message-2", 260, ["Alice", "hi"]),
+                bubble("message-3", 320, ["You", "on it"]),
+            ]
+        )
+        let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
+                          windowTitle: "WhatsApp")
+        let messages = try messages(try WhatsAppParser().parseStructured(window: window, app: app))
+        XCTAssertEqual(messages.map(\.sender), ["unknown", "Alice", "You"])
+        XCTAssertEqual(messages.map(\.text), ["Note: check the doc", "hi", "on it"])
+        XCTAssertEqual(messages.map(\.isUser), [false, false, true])
+        let capture = try XCTUnwrap(try WhatsAppParser().parse(window: window, app: app))
+        XCTAssertEqual(capture.content, """
+            (From: unknown): Note: check the doc
+            (From: Alice): hi
+            (From: You): on it
+            """)
+    }
+
+    /// Teams exposes no "You" label, so the same sender name is not an outgoing signal there.
+    func testTeamsDoesNotTreatASenderCalledYouAsTheUser() throws {
+        let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                         frame: CGRect(x: 400, y: 200, width: 500, height: 40), focused: false,
+                         children: [
+            AXNode(role: "AXStaticText", value: "You", title: nil, url: nil,
+                   frame: CGRect(x: 420, y: 200, width: 60, height: 20), focused: false, children: []),
+            AXNode(role: "AXStaticText", value: "standup at ten", title: nil, url: nil,
+                   frame: CGRect(x: 500, y: 200, width: 200, height: 20), focused: false, children: []),
+        ])
+        let window = AXNode(role: "AXWindow", value: nil, title: "Microsoft Teams", url: nil,
+                            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+                            children: [row])
+        let app = AppInfo(bundleID: "com.microsoft.teams2", name: "Microsoft Teams",
+                          windowTitle: "Platform Team")
+        let messages = try messages(try TeamsParser().parseStructured(window: window, app: app))
+        XCTAssertEqual(messages.map(\.sender), ["You"])
+        XCTAssertEqual(messages.map(\.isUser), [false])
     }
 
     func testEmptyMessageAreaStillReturnsNilSoDispatchCanFallThrough() throws {

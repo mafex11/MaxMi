@@ -11,7 +11,8 @@ public struct WhatsAppParser: SourceParser {
             sourceApp: "WhatsApp",
             keyPrefix: "whatsapp",
             requiresConversationIdentity: true,
-            allowsFallback: false
+            allowsFallback: false,
+            labelsUserAsYou: true
         ).content
     }
 
@@ -22,7 +23,8 @@ public struct WhatsAppParser: SourceParser {
             sourceApp: "WhatsApp",
             keyPrefix: "whatsapp",
             requiresConversationIdentity: true,
-            allowsFallback: false
+            allowsFallback: false,
+            labelsUserAsYou: true
         )
     }
 }
@@ -76,7 +78,8 @@ enum NativeConversationExtraction {
         sourceApp: String,
         keyPrefix: String,
         requiresConversationIdentity: Bool = false,
-        allowsFallback: Bool = true
+        allowsFallback: Bool = true,
+        labelsUserAsYou: Bool = false
     ) throws -> Extracted {
         let boundary = mainPaneBoundary(window)
         let conversation = conversationTitle(
@@ -85,22 +88,25 @@ enum NativeConversationExtraction {
             mainBoundary: boundary,
             requiresHeaderSemantics: requiresConversationIdentity
         )
-        var messages: [(y: CGFloat, line: String)] = []
+        var containers: [(y: CGFloat, sender: String?, texts: [String])] = []
         collectMessageContainers(
             window,
             mainBoundary: boundary,
             requiresMessageSemantics: requiresConversationIdentity,
-            into: &messages
+            into: &containers
         )
 
-        var lines = messages.sorted { $0.y < $1.y }.map(\.line)
-        if lines.isEmpty, allowsFallback {
-            lines = fallbackMainPaneLines(in: window, mainBoundary: boundary)
+        var bubbles = containers.sorted { $0.y < $1.y }
+            .map { (sender: $0.sender, text: $0.texts.joined(separator: " ")) }
+        if bubbles.isEmpty, allowsFallback {
+            // The fallback reads loose main-pane text, so nothing there is sender-attributed.
+            bubbles = fallbackMainPaneLines(in: window, mainBoundary: boundary)
+                .map { (sender: nil, text: $0) }
         }
-        lines = uniqueAdjacent(lines).filter { !isChrome($0) }
+        bubbles = uniqueAdjacent(bubbles).filter { $0.sender != nil || !isChrome($0.text) }
         // Everything on screen was app chrome: a non-chat surface (Teams' Calendar, Activity or
         // Apps tab; WhatsApp with no chat open), not a message list this parser misread.
-        guard !lines.isEmpty else {
+        guard !bubbles.isEmpty else {
             throw ParserRefusal(reason: "no-conversation-content")
         }
         // WhatsApp only: without a confirmed chat header there is no conversation to key on, so
@@ -115,10 +121,12 @@ enum NativeConversationExtraction {
             // WhatsApp and Teams headers expose no group marker; Phase D's anchored parsers
             // read the participant list.
             isGroup: false,
-            messages: lines.compactMap(message(fromLine:))
+            messages: bubbles.map {
+                message(sender: $0.sender, text: $0.text, labelsUserAsYou: labelsUserAsYou)
+            }
         )
         return Extracted(
-            content: CaptureAccumulator.bound(.conversation(typed), to: contentCap),
+            content: CaptureAccumulator.boundHard(.conversation(typed), to: contentCap),
             sourceKey: "\(keyPrefix):\(slug(identity))",
             sourceTitle: conversation ?? app.windowTitle
         )
@@ -130,12 +138,14 @@ enum NativeConversationExtraction {
         sourceApp: String,
         keyPrefix: String,
         requiresConversationIdentity: Bool = false,
-        allowsFallback: Bool = true
+        allowsFallback: Bool = true,
+        labelsUserAsYou: Bool = false
     ) throws -> ParsedCapture {
         let extracted = try extract(
             window: window, app: app, sourceApp: sourceApp, keyPrefix: keyPrefix,
             requiresConversationIdentity: requiresConversationIdentity,
-            allowsFallback: allowsFallback
+            allowsFallback: allowsFallback,
+            labelsUserAsYou: labelsUserAsYou
         )
         return ParsedCapture(
             sourceApp: sourceApp,
@@ -150,23 +160,19 @@ enum NativeConversationExtraction {
         )
     }
 
-    /// `atomicMessageLine` produced "sender: body" or a bare joined line. Split the same way.
-    static func message(fromLine line: String) -> Message? {
-        guard !line.isEmpty else { return nil }
-        var sender = "unknown"
-        var text = line
-        if let separator = line.range(of: ": "),
-           line.distance(from: line.startIndex, to: separator.lowerBound) <= 80 {
-            sender = String(line[..<separator.lowerBound])
-            text = String(line[separator.upperBound...])
-        }
+    /// A bubble the AX walk attributed (`sender != nil`) or could not (`sender == nil`, which
+    /// stays `"unknown"`). Never splits the text on `": "` — a single-label bubble reading
+    /// "Note: check the doc" is a message, not a message from someone called "Note".
+    static func message(sender: String?, text: String, labelsUserAsYou: Bool) -> Message {
+        let name = sender ?? "unknown"
         return Message(
-            id: Message.makeID(sender: sender, timeString: nil, text: text),
-            sender: sender, text: text, timestamp: nil, timeString: nil,
-            // No outgoing/bubble-side signal survives this AX walk: `collectMessageContainers`
-            // keeps only each container's text, so the sender is whatever the app printed
-            // (WhatsApp prints "You" itself). Phase D's anchored parsers read bubble alignment.
-            isUser: false, isDraft: false
+            id: Message.makeID(sender: name, timeString: nil, text: text),
+            sender: name, text: text, timestamp: nil, timeString: nil,
+            // WhatsApp labels the user's own bubbles with the literal sender "You", which is a
+            // real outgoing signal; Teams exposes none, so it opts out. Bubble ALIGNMENT (the
+            // other signal) does not survive this walk — Phase D's anchored parsers read it.
+            isUser: labelsUserAsYou && name.caseInsensitiveCompare("You") == .orderedSame,
+            isDraft: false
         )
     }
 
@@ -238,11 +244,13 @@ enum NativeConversationExtraction {
         }
     }
 
+    /// `texts` is the BODY of the bubble: the sender label, when the container exposes one, has
+    /// already been lifted out into `sender`.
     private static func collectMessageContainers(
         _ node: AXNode,
         mainBoundary: CGFloat,
         requiresMessageSemantics: Bool,
-        into out: inout [(y: CGFloat, line: String)]
+        into out: inout [(y: CGFloat, sender: String?, texts: [String])]
     ) {
         let metadata = [node.identifier, node.label, node.title]
             .compactMap { $0 }.joined(separator: " ").lowercased()
@@ -258,8 +266,10 @@ enum NativeConversationExtraction {
             let ordered = uniqueAdjacent(values.sorted {
                 $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x
             }.map(\.value)).filter { !isChrome($0) }
-            if let line = atomicMessageLine(ordered) {
-                out.append((node.frame?.minY ?? 0, line))
+            if !ordered.isEmpty {
+                let sender = senderLabel(ordered)
+                out.append((node.frame?.minY ?? 0, sender,
+                            sender == nil ? ordered : Array(ordered.dropFirst())))
                 return
             }
         }
@@ -306,13 +316,12 @@ enum NativeConversationExtraction {
         return node.value ?? node.title
     }
 
-    private static func atomicMessageLine(_ values: [String]) -> String? {
-        guard let first = values.first else { return nil }
-        guard values.count > 1 else { return first }
-        let senderLike = first.count <= 80 && !first.contains("\n")
-        return senderLike
-            ? "\(first): \(values.dropFirst().joined(separator: " "))"
-            : values.joined(separator: " ")
+    /// The first text of a bubble is its sender only when there is a body after it and the value
+    /// looks like a label (short, single-line). A bubble with one text value has no sender at all.
+    private static func senderLabel(_ values: [String]) -> String? {
+        guard let first = values.first, values.count > 1,
+              first.count <= 80, !first.contains("\n") else { return nil }
+        return first
     }
 
     private static func meaningfulWindowTitle(_ title: String?, excluding appName: String) -> String? {
@@ -321,6 +330,23 @@ enum NativeConversationExtraction {
               title.caseInsensitiveCompare("WhatsApp") != .orderedSame,
               title.caseInsensitiveCompare("Microsoft Teams") != .orderedSame else { return nil }
         return title
+    }
+
+    /// Bubble-level twin of `uniqueAdjacent(_: [String])`: an AX tree that exposes the same
+    /// bubble twice (a container and its accessible label) collapses, while two speakers saying
+    /// the same thing in a row both survive.
+    private static func uniqueAdjacent(
+        _ bubbles: [(sender: String?, text: String)]
+    ) -> [(sender: String?, text: String)] {
+        bubbles.reduce(into: []) { result, bubble in
+            let text = bubble.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            let sender = bubble.sender?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let last = result.last,
+               (last.sender ?? "").caseInsensitiveCompare(sender ?? "") == .orderedSame,
+               last.text.caseInsensitiveCompare(text) == .orderedSame { return }
+            result.append((sender, text))
+        }
     }
 
     private static func uniqueAdjacent(_ values: [String]) -> [String] {
