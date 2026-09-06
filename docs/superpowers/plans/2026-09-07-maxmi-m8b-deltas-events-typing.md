@@ -4,7 +4,7 @@
 
 **Goal:** Turn Phase A's typed captures into an *event log of what the user did* — content deltas, focus changes, navigations, dialogs, and focused-field typing — plus a deterministic activity timeline built from it, with 30-day retention.
 
-**Architecture:** Phase A already computes a `CaptureDelta` inside `CaptureAccumulator.merge` and hands it back through `Store.commitCapture`'s `CommitResult`. Phase B gives that delta two explicit signals (`hasRecordableChange`, `dialogBlocks`), adds a `capture_events` table (migration `v11`) written through `Store.recordCaptureEvent` with encrypted JSON payloads, and writes the events from `AppWiring.finishCapture` — the only site that knows the app, the trigger, and the previous URL. Typing is read from the accessibility value of the *focused field only* (no `CGEventTap`, no global monitor): a pure prefix/suffix diff in `TypingDiff`, an LRU-keyed actor `TypingObserver`, and the typed text also flows back into structured content as a draft `Message` or an `authoredByUser` `Block`. `MaxMiActivity` gains `TimelineBuilder`, which reads app visits + events + thread metadata through a repository protocol and renders a compact, budgeted, chronological text timeline for Phase C's prompts.
+**Architecture:** Phase A already computes a `CaptureDelta` inside `CaptureAccumulator.merge` and hands it back through `Store.commitCapture`'s `CommitResult`. Phase B gives that delta two explicit signals (`hasRecordableChange`, `dialogBlocks`), adds a `capture_events` table (migration `v11`, with a plaintext `app_bundle` column so a row is attributable to an app without decrypting it) written through `Store.recordCaptureEvent` with encrypted JSON payloads, and writes the events from `AppWiring.finishCapture` — the only site that knows the app, the trigger, and the previous URL. Typing is read from the accessibility value of the *focused field only* (no `CGEventTap`, no global monitor): a pure prefix/suffix diff in `TypingDiff`, an LRU-keyed actor `TypingObserver`, and the typed text also flows back into structured content as a draft `Message` or an `authoredByUser` `Block`. `MaxMiActivity` gains `TimelineBuilder`, which reads app visits + events + thread metadata through a repository protocol and renders a compact, budgeted, chronological text timeline for Phase C's prompts.
 
 **Tech Stack:** Swift 6 (`swift-tools-version: 6.0`), SwiftPM, macOS 14+, XCTest, GRDB 7, ApplicationServices/AppKit accessibility APIs, CryptoKit (`AESGCMFieldCipher`).
 
@@ -17,14 +17,15 @@
 Every task's requirements implicitly include this section. Values are copied verbatim from the spec unless a ruling below says otherwise.
 
 - **Migration numbering.** Phase A ended at `v10`. Phase B's `capture_events` migration is **`v11`**, and `Migrations.currentIdentifier` becomes `"v11"`. A concurrent spec amendment assigns a `context_embeddings` `vec0` table and a `checkins` table to Phase C; **Phase C takes `v12` and `v13`**, not `v11`. Record this in the spec's §12 when Phase C is planned. `Sources/MaxMiStore/DatabaseRecovery.swift` derives its accepted schema-id set from `Migrations.migrator.migrations` (Phase A Task 8 fix), so no hardcoded list needs bumping — but any test asserting `"v10"` does.
-- **Retention is 30 days, not 14** (§5b, §12 Q5). `capture_events` is trimmed on write, gated to at most once per hour through a `settings` key, exactly the shape `CaptureHealthStore`'s row-count cap uses. It is additionally deleted by `MemoryDataControls.pruneMemory(olderThan:)` and `deleteAllMemory()`, and its row count is reported in `MemoryDeletionResult`. Memory retention itself is untouched (still Forever by default).
+- **Retention is 30 days, not 14** (§5b, §12 Q5). `capture_events` is trimmed on write, gated to at most once per hour through the `settings` key `capture_events_last_trim_at`. `CaptureHealthStore.recordCaptureHealth` (`Sources/MaxMiStore/CaptureHealthStore.swift:8-40`) is the precedent for **trimming inside the write transaction and nothing more**: it caps by ROW COUNT (`retainLatest: 500`), with no `settings` key and no time gate. The hourly time gate is new in Phase B and has no shape to copy — do not go looking for one. It is additionally deleted by `MemoryDataControls.pruneMemory(olderThan:)` and `deleteAllMemory()`, and its row count is reported in `MemoryDeletionResult`. Memory retention itself is untouched (still Forever by default).
 - **Privacy copy.** `CapturePrivacyView`'s retention card gains exactly this sentence: **"Activity events are kept for 30 days."** This is the only thing MaxMi deletes without being asked, so it is stated in the UI.
 - **`capture_events` foreign keys:** `thread_id` **nullable** `REFERENCES threads(id) ON DELETE CASCADE` (a `focus` event precedes any thread for that window, §12 Q4); `version_id` **nullable** `REFERENCES versions(id) ON DELETE SET NULL` (version pruning must not delete events). `PRAGMA foreign_keys = ON` is already set in `Sources/MaxMiStore/Database.swift:12`.
+- **`capture_events.app_bundle` is nullable plaintext** (spec §5b as amended 2026-09-07 by this repair pass). A bundle id is an identifier, not content, so it is stored in the clear exactly as `activity_app_visits.app_bundle` already is (`Sources/MaxMiStore/Migrations.swift:96-100`). It exists so §11 criterion 4 is checkable with `SELECT count(*) FROM capture_events WHERE app_bundle=? AND at_ms>?` — without it the only app identifier in a row is inside the encrypted `focus` payload and the criterion cannot be verified at all. Every write site passes it; `Store.recordCaptureEvent`'s `appBundle:` parameter is **required and has no default**, so a new event kind cannot forget it.
 - **Ciphertext columns are `TEXT`, never `BLOB`** (§12 Q2), written through `FieldCipher.encrypt(_:) throws -> String` which returns `"enc:v1:"`-prefixed base64. Reuse `AESGCMFieldCipher` and the existing Keychain key `dev.mafex.maxmi.dbkey`. No new key, no new format, no new network destination.
 - **Payload JSON is deterministic.** Encode every event payload with `CapturedContentEnvelope.makeEncoder()` (`.sortedKeys`, `.withoutEscapingSlashes`, ISO-8601 dates) and decode with `CapturedContentEnvelope.makeDecoder()`. Same payload value → same bytes.
 - **No `CGEventTap`, no `NSEvent.addGlobalMonitorForEvents`, ever** (§3 Non-goals, §11 exit criterion 5). The only typing input is the accessibility value of the focused element.
 - **A secure field is never read, including its selection** (§4a/§4e/§8 as amended). `AXReader.convert` already skips `AXValue`/`AXPlaceholderValue`/`AXSelectedText` for an `AXSecureTextField`, and `FocusedElement.init` nils both `value` and `selectedText` when `isSecure`. `TypingObserver` additionally returns nil for `focused.isSecure` — belt and braces, and directly testable.
-- **Privacy gates are the existing ones; Phase B adds none** (§8). Before any `capture_events` row or typing event is written: `Denylist.isSensitiveApp(bundleID) == false`, the app is not in `activityExcludedApps()`, `ActivityStore.activityConsent() == .granted`, and `activityEnabled() == true`. `AppWiring.isActivityEligible(bundleID:)` (`Sources/MaxMi/AppWiring.swift:1094-1111`) already checks all four and is the single gate every write site calls.
+- **Privacy gates are the existing ones; Phase B adds none** (§8). Before any `capture_events` row or typing event is written: `Denylist.isSensitiveApp(bundleID) == false`, the app is not in `activityExcludedApps()`, `ActivityStore.activityConsent() == .granted`, and `activityEnabled() == true`. `AppWiring.isActivityEligible(bundleID:)` (`Sources/MaxMi/AppWiring.swift:1094-1110`) already checks all four and is the single gate every write site calls. It is evaluated **once** per committed capture — `finishCapture` already binds it to `let eligible` at `:1585` — and passed down, never re-derived (each call is three `Store` reads).
 - **`CloudProcessingState` is NOT the gate** (§12 Q14). `CapturePrivacyStore.cloudReviewInitialized()` hardcodes `false`, so that gate is inert. Phase B relies on `ActivityConsent` + `activityEnabled()`, deliberately.
 - **XCTest only.** Zero `import Testing`. Tests are `final class …: XCTestCase` with `func test…` methods.
 - **Baseline: 689 tests, exactly 3 known-red** (pre-existing user WIP, do NOT fix them):
@@ -32,6 +33,7 @@ Every task's requirements implicitly include this section. Values are copied ver
   - `CaptureDisplaySummarizerTests.testConversationSummaryUsesTrailingMessages`
   - `PauseSettingsTests.testNewSourceIsHeldFromCloudUntilReviewed`
   Any *other* red test is a regression this plan caused.
+- **Test-count bookkeeping.** This plan adds **117** tests and removes **1** (`MigrationV10Tests.testCurrentIdentifierIsV10`, whose assertion moves to `MigrationV11Tests`), so the suite finishes at roughly **805** executed. That number is *informational only* — a plan-wide "expected total" tripwire is too fragile to trust. The gate that actually catches a test file which failed to compile into a target is Task 10 Step 1's per-class presence check: every new test class must appear in the run. `Tests/MaxMiTests/` is **not** a target in `Package.swift`; nothing may be placed there.
 - **Zero new warnings.** `swift build 2>&1 | grep warning:` must not grow.
 - **`MaxMiActivity` depends only on `MaxMiCore`** (`Package.swift`). It must not import GRDB, `MaxMiStore`, or `MaxMiCapture`. `TimelineBuilder` therefore reaches the database only through a `TimelineRepository` protocol whose concrete adapter lives in `Sources/MaxMi/StoreTimelineRepository.swift`, following `ActivitySummaryRepository`/`AgentRepository`.
 - **Fixtures are hand-scrubbed.** Never commit real page text, messages, file contents, URLs, names, emails, paths, or tokens (`Tests/MaxMiCaptureTests/Fixtures/README.md`). Every new fixture gets a row in that README's table.
@@ -40,17 +42,19 @@ Every task's requirements implicitly include this section. Values are copied ver
 
 ### Rulings that resolve spec text against the merged code
 
-All five are decided here. No task may reopen them.
+All six are decided here. No task may reopen them.
 
 1. **`CaptureDelta.isEmpty` must NOT gate `content_delta` writes.** §5b says "one per capture whose `CommitResult` is `.committed` **and** whose `delta.isEmpty == false`". But `isEmpty` is `addedBlocks.isEmpty && addedMessages.isEmpty && addedSegments.isEmpty && removedCount == 0`, and §5a specifies that `.tasks`/`.calendar` deltas carry **no** arrays and **no** `removedCount` — only `addedChars`/`removedChars`. So `isEmpty` is *always* `true` for a Reminders or Calendar capture and gating on it would silently drop every task/calendar event (Phase A ledger, Task 9 deferred item). Task 1 adds an explicit `hasRecordableChange` (`!isEmpty || addedChars > 0 || removedChars > 0`), and Task 4's `CaptureEventDecision.kinds(for:trigger:hasBrowserURL:)` — the one tested place the rule lives — gates on **that**. `isEmpty` stays as-is; it has other callers' semantics and Phase C may use it.
 
 2. **`CaptureEventKind` and the payload structs live in `MaxMiCore`, not `MaxMiStore`/`MaxMiCapture`.** §5b puts `CaptureEventKind` in `Sources/MaxMiStore/CaptureEventStore.swift` and §5c puts `TypingEvent` in `Sources/MaxMiCapture/TypingObserver.swift`. But §5d's `TimelineRawEvent` — in `MaxMiActivity`, which depends only on `MaxMiCore` — has fields of type `CaptureEventKind` and `TypingEvent`. Those two placements are mutually exclusive. **Decision:** `CaptureEventKind`, `FocusEventPayload`, `NavigationEventPayload`, `TypingEvent`, `DialogEventPayload`, and `CaptureEventRetention` all live in new `Sources/MaxMiCore/CaptureEvent.swift`. `MaxMiStore` and `MaxMiActivity` both see them; `TypingObserver` in `MaxMiCapture` produces the `MaxMiCore` `TypingEvent`. Nothing else about §5b/§5c changes. Note this for the spec's §12.
 
-3. **"A dialog appeared" is computed in `CaptureDelta.between`, and travels on the delta.** §5b says the `dialog` event fires "when the merged `.generic` content has a `.dialog` region and the previous one did not". `AppWiring.finishCapture` does not have the previous content — it only has the `CommitResult`. `CaptureDelta.between(previous:merged:)` is the one function that sees both. **Decision:** `CaptureDelta` gains `dialogBlocks: [Block]`, populated by `between` with the merged `.generic` page's `.dialog` blocks *only when* the previous content had no `.dialog` region, and empty otherwise. `CaptureEventDecision` names a `dialog` event when `delta.dialogBlocks` is non-empty, and `AppWiring` supplies its payload. This costs no extra decrypt and no extra query, and keeps `CommitResult`'s arity — 15 existing `case .committed(_, _, _)` pattern matches stay compiling.
+3. **"A dialog appeared" is computed in `CaptureDelta.between`, and travels on the delta.** §5b says the `dialog` event fires "when the merged `.generic` content has a `.dialog` region and the previous one did not". `AppWiring.finishCapture` does not have the previous content — it only has the `CommitResult`. `CaptureDelta.between(previous:merged:)` is the one function that sees both. **Decision:** `CaptureDelta` gains `dialogBlocks: [Block]`, populated by `between` with the merged `.generic` page's `.dialog` blocks *only when* the previous content had no `.dialog` region, and empty otherwise. `CaptureEventDecision` names a `dialog` event when `delta.dialogBlocks` is non-empty, and `AppWiring` supplies its payload. This costs no extra decrypt and no extra query, and keeps `CommitResult`'s arity — the 21 existing `case .committed` pattern matches across `Sources/` and `Tests/` stay compiling.
 
-4. **`thread_id` and the previous URL are read through two small `Store` lookups, not through `CommitResult`.** Events need the thread id, and `navigation` needs the thread's URL *before* the commit overwrites it. Adding both to `CommitResult.committed` would touch 15 pattern-match sites for no gain. **Decision:** Task 4 adds `Store.threadID(sourceApp:sourceKey:)` (one indexed read on the existing `UNIQUE(source_app, source_key)`, called once after a committed capture) and `Store.previousContextURL(sourceApp:sourceKey:)` (called *before* `commitCapture`, and only when `trigger == .browserNavigation`, so no other capture pays for it).
+4. **`thread_id` and the previous URL are read through two small `Store` lookups, not through `CommitResult`.** Events need the thread id, and `navigation` needs the thread's URL *before* the commit overwrites it. Adding both to `CommitResult.committed` would touch all 21 pattern-match sites for no gain. **Decision:** Task 4 adds `Store.threadID(sourceApp:sourceKey:)` (one indexed read on the existing `UNIQUE(source_app, source_key)`, called once after a committed capture) and `Store.previousContextURL(sourceApp:sourceKey:)` (called *before* `commitCapture`, and only when `trigger == .browserNavigation`, so no other capture pays for it).
 
 5. **The consent/exclusion gate stays on the main actor; `TypingObserver.isEligible` is the pure denylist guard.** §5c has `TypingObserver.init(isEligible:)` as `@Sendable (String) -> Bool`, but consent and per-app exclusion are `throws` reads on `Store`, which is not `Sendable`. **Decision:** `AppWiring` calls `isActivityEligible(bundleID:)` on the main actor *before* handing anything to the observer, and constructs the observer with `isEligible: { !Denylist.isSensitiveApp($0) }`. Unit tests drive the consent/exclusion cases by injecting a closure that returns `false`, which is exactly the production composition.
+
+6. **The delta is computed on the merged content BEFORE bounding.** `CaptureAccumulator.merge` currently calls `CaptureDelta.between(previous: previous, merged: bounded)` (`Sources/MaxMiCore/StructuredAccumulator.swift:41`), i.e. against the value *after* `bound` has shed regions to fit `maxCharacters`. Combined with Ruling 3 that is a silent hole: bounding sheds `.dialog` last but it does shed it (`boundGeneric`, `StructuredAccumulator.swift:222`), so an over-cap page that just put a sheet on screen would produce **no** `dialog` event — the one event whose whole point is "something is asking the user for a decision". The same argument applies to `addedBlocks` on any over-cap page: the delta is supposed to describe *what changed*, not *what fit*. **Decision:** Task 1 changes that one line to `merged: merged`. `content`, `rendered` and `changed` keep using `bounded` — only the delta moves. Two existing bounding tests (`StructuredAccumulatorTests.testBoundingTrimsWholeMessagesFromTheFrontAndNeverSplitsOne`, `…KeepsAtLeastOneItem`) assert on `result.content` and `result.rendered` only, so nothing pre-existing depends on the old behaviour.
 
 
 ### Where §9's Phase B test list is covered
@@ -63,9 +67,9 @@ All five are decided here. No task may reopen them.
 | one `content_delta` per committed non-empty capture, **none** for a `.deduplicated` commit | Task 4, via the pure `CaptureEventDecision.kinds(for:trigger:hasBrowserURL:)` — the write site itself is in `AppWiring`, which has no test target, so the *rule* is extracted and tested |
 | retention trim at 30 days incl. the once-per-hour gate | Task 2 |
 | `pruneMemory` and `deleteAllMemory` remove events | Task 3 |
-| `TypingObserver`: append, mid-string insertion, paste, clear, identical, debounce, secure, sensitive/excluded, consent, LRU | Task 5 |
+| `TypingObserver`: append, mid-string insertion, paste, clear, identical, debounce, secure, sensitive/excluded, consent, LRU | Task 5, together with `TypingPollGate`'s pre-read gate (spec §5c's 800 ms, applied to the AX read as well as to the emitted event) |
 | `TimelineBuilder`: ordering, coalescing, budget dropping oldest-first with the omission line, no entry exceeding 200 chars of delta content | Task 8 |
-| §11 criterion 4 (events recorded; nothing for denylisted/excluded/non-consented) | Task 10 Steps 5 and 9 |
+| §11 criterion 4 (events recorded; nothing for denylisted/excluded/non-consented) | Task 2 (`CaptureEventStoreTests.testEventsAreAttributableToTheirAppWithoutDecrypting` — the plaintext `app_bundle` column that makes the criterion a query at all) plus Task 10 Steps 5 and 9 (the live check, now attributable to a bundle id). The gate itself still has no unit test: it lives in `AppWiring`, which has no test target. |
 | §11 criterion 5 (typing captured, no `CGEventTap` in the binary) | Task 5 (source grep), Task 10 Steps 6 and 10 (binary check) |
 
 ---
@@ -77,8 +81,8 @@ All five are decided here. No task may reopen them.
 | File | Responsibility |
 |---|---|
 | `Sources/MaxMiCore/CaptureEvent.swift` | `CaptureEventKind`, the four payload structs (`FocusEventPayload`, `NavigationEventPayload`, `TypingEvent`, `DialogEventPayload`), and `CaptureEventRetention`'s constants. Types and one payload-capping helper only — no SQL, no AX. Placed in `MaxMiCore` so `MaxMiStore` (writer), `MaxMiCapture` (typing producer) and `MaxMiActivity` (timeline reader) can all see them (Ruling 2). |
-| `Sources/MaxMiStore/CaptureEventStore.swift` | `capture_events` writes and reads: `recordCaptureEvent`, the 30-day trim-on-write with its hourly gate, `recentCaptureEvents`, `captureEvents(fromMs:toMs:)`, plus the two event-context lookups `threadID(sourceApp:sourceKey:)` and `previousContextURL(sourceApp:sourceKey:)`. Modelled file-for-file on `CaptureHealthStore.swift`. |
-| `Sources/MaxMiCapture/TypingObserver.swift` | `FocusedFieldKey`, the pure `TypingDiff`, the `TypingObserver` actor with its 800 ms per-key debounce and 32-entry in-memory LRU, and the `FocusedElement(node:)` bridge from `AXNode`. |
+| `Sources/MaxMiStore/CaptureEventStore.swift` | `capture_events` writes and reads: `recordCaptureEvent`, the 30-day trim-on-write with its hourly gate, `recentCaptureEvents`, `captureEvents(fromMs:toMs:)`, plus the two event-context lookups `threadID(sourceApp:sourceKey:)` and `previousContextURL(sourceApp:sourceKey:)`. `CaptureHealthStore.swift` is the precedent for trimming inside the write transaction, and for nothing else: its cap is by row count with no `settings` key and no time gate. |
+| `Sources/MaxMiCapture/TypingObserver.swift` | `FocusedFieldKey`, the pure `TypingDiff`, `TypingPollGate` (the pre-read 800 ms per-key time gate that keeps `kAXValueChangedNotification` from firing an AX round trip per notification), the `TypingObserver` actor with its 800 ms per-key emit debounce and 32-entry in-memory LRU, and the `FocusedElement(node:)` bridge from `AXNode`. |
 | `Sources/MaxMiCapture/ComposerDraft.swift` | The one pure function that turns a focused chat composer into a draft `Message`, shared by the three native chat parsers and the browser conversation path. |
 | `Sources/MaxMiActivity/TimelineBuilder.swift` | `TimelineEntry`, `ActivityTimeline`, `TimelineRepository`, `TimelineRawEvent`, `TimelineThreadMeta`, `TimelineBuilder.build`, and the deterministic `TimelineBuilder.render`. Pure and GRDB-free. |
 | `Sources/MaxMi/StoreTimelineRepository.swift` | The concrete `TimelineRepository`: `Store` reads plus payload JSON decoding. The only place that knows both `MaxMiStore` and `MaxMiActivity`. |
@@ -95,6 +99,7 @@ All five are decided here. No task may reopen them.
 | File | Change |
 |---|---|
 | `Sources/MaxMiCore/CaptureDelta.swift` | Add `dialogBlocks: [Block]` and `hasRecordableChange`; populate `dialogBlocks` in `between`; add a tolerant `init(from:)`. |
+| `Sources/MaxMiCore/StructuredAccumulator.swift` | One line: `CaptureAccumulator.merge` computes the delta from the **pre-bound** `merged` value instead of `bounded`, so bounding cannot swallow a `.dialog` region or an added block (Ruling 6). |
 | `Sources/MaxMiCore/SafeLogger.swift` | Add `SafeLogEvent.captureEventWriteFailed = "capture_event_write_failed"`. |
 | `Sources/MaxMiCapture/SourceParser.swift` | `ParsedCapture` gains `truncated: Bool = false` as the **last** initializer parameter. |
 | `Sources/MaxMiCapture/GenericV2Content.swift` | `page(...)` returns `GenericV2Content.Page?` (content + truncated) instead of `CapturedContent?`. |
@@ -104,14 +109,15 @@ All five are decided here. No task may reopen them.
 | `Sources/MaxMiCapture/GenericPageExtractor.swift` | Mark the focused input's block `authoredByUser: true`; resolve the focused element before budgeting and pass its value as the trim anchor. |
 | `Sources/MaxMiCapture/GenericPageExtractor+Budgets.swift` | Viewport-anchored `.main` trimming: `applyBudgets(_:anchorText:options:)`, `anchorIndex(in:text:)`, `trimAnchored(_:to:anchorIndex:)`. |
 | `Sources/MaxMiCapture/AXReader.swift` | Add `focusedWindowTitle(pid:)` for the `focus` payload. |
-| `Sources/MaxMiCapture/FocusObserver.swift` | Add `onAXNotification` so `AppWiring` sees the `kAXValueChangedNotification` that already fires. |
+| `Sources/MaxMiCapture/FocusObserver.swift` | Add `onAXNotification` so `AppWiring` sees the `kAXValueChangedNotification` that already fires. `FocusObserver`'s own capture debounce is untouched; the typing path gets its own gate (`TypingPollGate`) because `onAXNotification` fires *ahead* of that debounce. |
 | `Sources/MaxMiStore/Migrations.swift` | Register `v11`; `currentIdentifier` becomes `"v11"`. |
 | `Sources/MaxMiStore/MemoryDataControls.swift` | `MemoryDeletionResult.events`; delete `capture_events` in `pruneMemory` and `deleteAllMemory`. |
 | `Sources/MaxMiStore/ActivityStore.swift` | Add `ActivityVisitRecord` and `appVisits(fromMs:toMs:)`. |
 | `Sources/MaxMiStore/LatestContextStore.swift` | Add `latestContextRecords(threadIDs:)`. |
 | `Sources/MaxMiUI/CapturePrivacyView.swift` | The 30-day events sentence on the retention card. |
-| `Sources/MaxMi/AppWiring.swift` | Retire the `content.count >= 8_000` truncation heuristic; write `focus`, `navigation`, `content_delta`, `dialog` and `typing` events; own the `TypingObserver`. |
-| `Tests/MaxMiStoreTests/MigrationTests.swift`, `Tests/MaxMiStoreTests/MigrationV10Tests.swift`, `Tests/MaxMiCoreTests/SafeDiagnosticsTests.swift` | Any `"v10"` literal that is now `"v11"`. Task 2 greps for them. |
+| `Sources/MaxMi/AppWiring.swift` | Retire the `content.count >= 8_000` truncation heuristic; write `focus`, `navigation`, `content_delta`, `dialog` and `typing` events; own the `TypingObserver` and its `TypingPollGate`. |
+| `Tests/MaxMiStoreTests/MemoryDataControlsTests.swift` (3 literals), `Tests/MaxMiStoreTests/Phase7BaselineScriptTests.swift`, `Tests/MaxMiStoreTests/RuntimeDiagnosticsTests.swift` | The five `"v10"` schema-identifier literals that become `"v11"`. This is the complete list: `grep -rn '"v10"' Tests/` returns exactly these three files plus `MigrationV10Tests.swift:22`, and `MigrationTests.swift` / `SafeDiagnosticsTests.swift` contain **no** `"v10"` at all. |
+| `Tests/MaxMiStoreTests/MigrationV10Tests.swift` | Delete `testCurrentIdentifierIsV10` (one method). Everything else in the file is a v10-structural assertion and stays byte-identical; the current-identifier assertion belongs to `MigrationV11Tests` from now on. |
 | `Tests/MaxMiCaptureTests/Fixtures/README.md` | A row for `slack-composer-draft.json`. |
 
 ---
@@ -122,15 +128,16 @@ Two items the Phase A final review deferred as *explicit Phase B blockers*. Both
 
 **Files:**
 - Modify: `Sources/MaxMiCore/CaptureDelta.swift` (add `dialogBlocks`, `hasRecordableChange`, tolerant `init(from:)`, populate in `between`)
-- Modify: `Sources/MaxMiCapture/GenericV2Content.swift:6-22` (`page` returns `Page?`)
+- Modify: `Sources/MaxMiCore/StructuredAccumulator.swift:41` (compute the delta from the pre-bound `merged`, Ruling 6)
+- Modify: `Sources/MaxMiCapture/GenericV2Content.swift:8-22` (`page` returns `Page?`)
 - Modify: `Sources/MaxMiCapture/SourceParser.swift:16-46` (`ParsedCapture.truncated`)
 - Modify: `Sources/MaxMiCapture/GenericAXParser.swift:10-33`
 - Modify: `Sources/MaxMiCapture/NotesParser.swift:12-29`
 - Modify: `Sources/MaxMiCapture/NotionParser.swift:12-28`
-- Modify: `Sources/MaxMiCapture/ObsidianParser.swift:13-27`
+- Modify: `Sources/MaxMiCapture/ObsidianParser.swift:12-27`
 - Modify: `Sources/MaxMiCapture/StructuredNativeParsers.swift:82-118, 256-315`
 - Modify: `Sources/MaxMiCapture/WebAppCaptureParser.swift:108-127`
-- Modify: `Sources/MaxMi/AppWiring.swift:1573-1576`
+- Modify: `Sources/MaxMi/AppWiring.swift:1573-1575`
 - Test: `Tests/MaxMiCoreTests/CaptureDeltaSignalsTests.swift` (create)
 - Test: `Tests/MaxMiCaptureTests/GenericV2ParserTests.swift` (extend)
 
@@ -139,6 +146,7 @@ Two items the Phase A final review deferred as *explicit Phase B blockers*. Both
 - Produces:
   - `CaptureDelta.dialogBlocks: [Block]` — the merged `.generic` page's `.dialog` blocks when the previous content had no `.dialog` region; `[]` otherwise and for every non-`.generic` shape.
   - `CaptureDelta.hasRecordableChange: Bool` — `!isEmpty || addedChars > 0 || removedChars > 0`.
+  - `CaptureAccumulator.merge`'s `StructuredAccumulationResult.delta` is now `CaptureDelta.between(previous: previous, merged: merged)` — the **pre-bound** merged value. `.content`, `.rendered` and `.changed` still describe `bounded`. Signature and return type are unchanged, so no caller is touched.
   - `CaptureDelta.init(addedBlocks:addedMessages:addedSegments:removedCount:addedChars:removedChars:isFirstCapture:dialogBlocks:)` — `dialogBlocks` is the **last** parameter and defaults to `[]`, so every existing call site compiles unchanged.
   - `GenericV2Content.Page { let content: CapturedContent; let truncated: Bool }` and `GenericV2Content.page(window:url:budget:offscreenPolicy:) -> Page?`.
   - `ParsedCapture.truncated: Bool` — `truncated` is the **last** initializer parameter and defaults to `false`.
@@ -248,6 +256,26 @@ final class CaptureDeltaSignalsTests: XCTestCase {
         XCTAssertTrue(delta.hasRecordableChange)
     }
 
+    /// Ruling 6: bounding sheds `.dialog` last, but it does shed it. The delta describes what
+    /// CHANGED, not what fit, so a sheet that appeared on an over-cap page must still produce a
+    /// `dialog` event even though the stored content no longer contains the dialog region.
+    func testDialogSurvivesIntoTheDeltaEvenWhenBoundingDropsIt() {
+        let body = (0..<40).map { Block(type: .paragraph, text: "paragraph \($0) " + String(repeating: "b", count: 120)) }
+        let previous = page([Region(kind: .main, blocks: body)])
+        let incoming = page([
+            Region(kind: .main, blocks: body),
+            Region(kind: .dialog, blocks: [Block(type: .label, text: "Discard changes?")]),
+        ])
+        // A cap far below the page's rendered size, so `bound` sheds the dialog region entirely.
+        let result = CaptureAccumulator.merge(previous: previous, incoming: incoming,
+                                              policy: .replace, maxCharacters: 300)
+        guard case .generic(let stored) = result.content else { return XCTFail("expected generic") }
+        XCTAssertFalse(stored.regions.contains { $0.kind == .dialog },
+                       "bounding dropped the dialog region from the STORED content")
+        XCTAssertEqual(result.delta.dialogBlocks.map(\.text), ["Discard changes?"],
+                       "but the delta still reports it")
+    }
+
     func testRoundTripsThroughDeterministicEncoder() throws {
         let delta = CaptureDelta(addedBlocks: [Block(type: .paragraph, text: "x")],
                                 addedChars: 1, isFirstCapture: true,
@@ -264,7 +292,7 @@ final class CaptureDeltaSignalsTests: XCTestCase {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `swift test --filter CaptureDeltaSignalsTests`
-Expected: compile FAIL — `CaptureDelta` has no member `dialogBlocks` and no member `hasRecordableChange`.
+Expected: compile FAIL — `CaptureDelta` has no member `dialogBlocks` and no member `hasRecordableChange`. (Once it compiles, `testDialogSurvivesIntoTheDeltaEvenWhenBoundingDropsIt` will still fail until Step 4, because `merge` computes the delta from the bounded value.)
 
 - [ ] **Step 3: Add the two delta signals**
 
@@ -371,22 +399,42 @@ and in `between`'s `.generic` case only (every other shape has no regions, so it
             return delta
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Compute the delta from the pre-bound merged content**
+
+In `Sources/MaxMiCore/StructuredAccumulator.swift`, `CaptureAccumulator.merge` currently derives every
+field of its result from `bounded`. Change the delta — and only the delta — to use `merged`:
+
+```swift
+        let bounded = bound(merged, to: cap)
+        return StructuredAccumulationResult(
+            content: bounded,
+            rendered: ContentRenderer.render(bounded, style: .full),
+            changed: previous != bounded,
+            // The delta describes what CHANGED, not what FIT. `bound` sheds `.dialog` last but it
+            // does shed it (`boundGeneric`), and a delta computed from the bounded value would
+            // silently lose the `dialog` event for exactly the over-cap pages most likely to have
+            // one (Ruling 6). `content`/`rendered`/`changed` keep describing what was stored.
+            delta: CaptureDelta.between(previous: previous, merged: merged)
+        )
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `swift test --filter CaptureDeltaSignalsTests`
-Expected: PASS, 10 tests.
+Expected: PASS, 11 tests.
 
 Run: `swift test --filter MaxMiCoreTests`
-Expected: PASS — Phase A's `StructuredAccumulatorTests` and `CaptureAccumulatorTests` still green (`dialogBlocks` defaults to `[]`, so their `CaptureDelta` equality assertions are unaffected).
+Expected: PASS — Phase A's `StructuredAccumulatorTests` and `CaptureAccumulatorTests` still green. `dialogBlocks` defaults to `[]`, so their `CaptureDelta` equality assertions are unaffected, and the two tests that exercise bounding (`testBoundingTrimsWholeMessagesFromTheFrontAndNeverSplitsOne`, `testBoundingKeepsAtLeastOneItem`) assert on `result.content` and `result.rendered`, never on `result.delta`, so Step 4 does not move them. If some other test does start failing on a delta field, it is asserting that the delta describes the *bounded* value — read it, decide whether the assertion or Ruling 6 is wrong, and do not change both.
 
-- [ ] **Step 5: Commit the delta signals**
+- [ ] **Step 6: Commit the delta signals**
 
 ```bash
-git add Sources/MaxMiCore/CaptureDelta.swift Tests/MaxMiCoreTests/CaptureDeltaSignalsTests.swift
+git add Sources/MaxMiCore/CaptureDelta.swift Sources/MaxMiCore/StructuredAccumulator.swift \
+        Tests/MaxMiCoreTests/CaptureDeltaSignalsTests.swift
 git commit -m "Add hasRecordableChange and dialogBlocks to CaptureDelta"
 ```
 
-- [ ] **Step 6: Write the failing truncated-plumbing test**
+- [ ] **Step 7: Write the failing truncated-plumbing test**
 
 Append to `Tests/MaxMiCaptureTests/GenericV2ParserTests.swift` (inside the existing `final class GenericV2ParserTests: XCTestCase`). The fixture-free tree below is deliberate: it needs one region whose rendered size exceeds a small budget, nothing more.
 
@@ -394,8 +442,14 @@ Append to `Tests/MaxMiCaptureTests/GenericV2ParserTests.swift` (inside the exist
     /// `AppWiring` used to infer truncation from `parsed.content.count >= 8_000`, which
     /// false-positives on an 8k-32k document that was never trimmed and false-negatives on a
     /// 32k-budget page that WAS trimmed. The extractor already knows; the parser now carries it.
+    ///
+    /// Thirty paragraphs, not forty, and the count is load-bearing: `GenericAXParser` uses the
+    /// `DocumentExtraction.contentCap` default of 8_000, and with no other region present every
+    /// share rolls into `.main`, so `mainAllowance` is 8_000 exactly. Thirty paragraphs render as
+    /// 10x201 + 20x202 + 29 separators = 6_079 characters, comfortably under it. Forty render as
+    /// 8_109 and the last assertion would be false.
     func testGenericPageParserCarriesTruncatedFromTheExtractor() throws {
-        let paragraphs = (0..<40).map { index in
+        let paragraphs = (0..<30).map { index in
             AXNode(role: "AXStaticText", value: String(repeating: "x", count: 200) + "\(index)",
                    title: nil, url: nil,
                    frame: CGRect(x: 0, y: CGFloat(index) * 20, width: 600, height: 18),
@@ -415,16 +469,17 @@ Append to `Tests/MaxMiCaptureTests/GenericV2ParserTests.swift` (inside the exist
         XCTAssertTrue(clipped.truncated)
 
         let parsed = try XCTUnwrap(GenericAXParser().parse(window: window, app: app))
-        XCTAssertFalse(parsed.truncated, "8_000 default is not reached by this tree")
+        XCTAssertFalse(parsed.truncated,
+                       "6_079 rendered chars is under the 8_000 default, so nothing was trimmed")
     }
 ```
 
-- [ ] **Step 7: Run it to verify it fails**
+- [ ] **Step 8: Run it to verify it fails**
 
 Run: `swift test --filter GenericV2ParserTests/testGenericPageParserCarriesTruncatedFromTheExtractor`
 Expected: compile FAIL — `GenericV2Content.page` returns `CapturedContent?`, which has no `truncated`, and `ParsedCapture` has no `truncated`.
 
-- [ ] **Step 8: Make `GenericV2Content.page` return content plus truncation**
+- [ ] **Step 9: Make `GenericV2Content.page` return content plus truncation**
 
 Replace `Sources/MaxMiCapture/GenericV2Content.swift`'s `page` with:
 
@@ -456,7 +511,7 @@ Replace `Sources/MaxMiCapture/GenericV2Content.swift`'s `page` with:
     }
 ```
 
-- [ ] **Step 9: Add `ParsedCapture.truncated`**
+- [ ] **Step 10: Add `ParsedCapture.truncated`**
 
 In `Sources/MaxMiCapture/SourceParser.swift`, add the property after `structured` and the parameter **last** in `init`:
 
@@ -492,9 +547,9 @@ In `Sources/MaxMiCapture/SourceParser.swift`, add the property after `structured
     }
 ```
 
-`ParsedCapture.envelope(cleanSourceKey:parserID:trigger:truncated:structured:)` keeps its explicit `truncated:` parameter — `AppWiring` passes the OR of the parser's flag and the browser pipeline's, and Step 12 shows the exact expression.
+`ParsedCapture.envelope(cleanSourceKey:parserID:trigger:truncated:structured:)` keeps its explicit `truncated:` parameter — `AppWiring` passes the OR of the parser's flag and the browser pipeline's, and Step 13 shows the exact expression.
 
-- [ ] **Step 10: Carry `truncated` through the five generic-v2 parsers**
+- [ ] **Step 11: Carry `truncated` through the five generic-v2 parsers**
 
 `Sources/MaxMiCapture/GenericAXParser.swift` — `parseStructured` drops the flag, `parse` uses it:
 
@@ -672,7 +727,7 @@ In `Sources/MaxMiCapture/SourceParser.swift`, add the property after `structured
     }
 ```
 
-- [ ] **Step 11: Carry `truncated` on the browser path**
+- [ ] **Step 12: Carry `truncated` on the browser path**
 
 In `Sources/MaxMiCapture/WebAppCaptureParser.swift`, the local `truncated` already holds "bounding dropped content" for both branches. Add it to the `ParsedCapture` so the non-browser and browser paths use the same field:
 
@@ -693,7 +748,7 @@ In `Sources/MaxMiCapture/WebAppCaptureParser.swift`, the local `truncated` alrea
 
 `BrowserCapturePipeline.parse` keeps its own `BrowserCaptureResult.truncated` unchanged: it additionally ORs `tab.truncated` (the tab TEXT hitting `BrowserTabExtractor`'s cap), which the parser cannot see.
 
-- [ ] **Step 12: Retire the `8_000` heuristic in `AppWiring`**
+- [ ] **Step 13: Retire the `8_000` heuristic in `AppWiring`**
 
 Replace `Sources/MaxMi/AppWiring.swift:1573-1576`:
 
@@ -713,15 +768,15 @@ with:
             let wasTruncated = browserTruncated || parsed.truncated
 ```
 
-- [ ] **Step 13: Run the full suite**
+- [ ] **Step 14: Run the full suite**
 
 Run: `swift test 2>&1 | tail -30`
-Expected: 700 executed, exactly the 3 known-red failures listed in Global Constraints. `Browser` may now be unused in `finishCapture`; if the compiler warns, leave the `import` alone and check the symbol is still used by the pipeline lookup above — do not delete anything to silence a warning without checking.
+Expected: 701 executed (689 baseline + 11 `CaptureDeltaSignalsTests` + 1 `GenericV2ParserTests`), exactly the 3 known-red failures listed in Global Constraints. `Browser` may now be unused in `finishCapture`; if the compiler warns, leave the `import` alone and check the symbol is still used by the pipeline lookup above — do not delete anything to silence a warning without checking.
 
 Run: `swift build 2>&1 | grep warning: | wc -l`
 Expected: `0`.
 
-- [ ] **Step 14: Commit the truncated plumbing**
+- [ ] **Step 15: Commit the truncated plumbing**
 
 ```bash
 git add Sources/MaxMiCapture/GenericV2Content.swift Sources/MaxMiCapture/SourceParser.swift \
@@ -746,7 +801,8 @@ The table, the payload types, the write path, the reads, and the 30-day trim. No
 - Modify: `Sources/MaxMiCore/SafeLogger.swift:57` (add one `SafeLogEvent` case after `capturePolicyReadFailed`)
 - Test: `Tests/MaxMiStoreTests/MigrationV11Tests.swift` (create)
 - Test: `Tests/MaxMiStoreTests/CaptureEventStoreTests.swift` (create)
-- Modify (v10 → v11 literals): `Tests/MaxMiStoreTests/MigrationV10Tests.swift:22`, `Tests/MaxMiStoreTests/MemoryDataControlsTests.swift:97,172,179`, `Tests/MaxMiStoreTests/Phase7BaselineScriptTests.swift:69`, `Tests/MaxMiStoreTests/RuntimeDiagnosticsTests.swift:40`
+- Modify (`"v10"` → `"v11"` literals, five of them): `Tests/MaxMiStoreTests/MemoryDataControlsTests.swift:97,172,179`, `Tests/MaxMiStoreTests/Phase7BaselineScriptTests.swift:69`, `Tests/MaxMiStoreTests/RuntimeDiagnosticsTests.swift:40`
+- Modify (one deletion): `Tests/MaxMiStoreTests/MigrationV10Tests.swift:21-23` — delete `testCurrentIdentifierIsV10`, change nothing else in that file
 
 **Interfaces:**
 - Consumes: `EpochMs`, `epochNowMs()`, `HourBucket.bucket(forMs:) -> Int64`, `Ident.uuidv7(nowMs:) -> String`, `CaptureTrigger` (`appActivated, accessibilityChanged, conversationChanged, browserNavigation, webContentChanged, periodic, retry, unknown`), `Block`, `ContentRenderer.renderBlocks(_:) -> String`, `CapturedContentEnvelope.makeEncoder()/makeDecoder()`, `CaptureDelta`, `Store.db: MaxMiDatabase`, `Store.cipher: any FieldCipher`, `Store.decryptOrMarker(_:)`, `Store.placeholders(_:)`, `Store.structuredOrLegacy(_:renderedContent:kind:)`.
@@ -757,8 +813,8 @@ The table, the payload types, the write path, the reads, and the 30-day trim. No
   - `TypingEvent(insertedText: String, fieldRole: String, fieldIdentifier: String?, totalLength: Int, replaced: Bool)`
   - `DialogEventPayload(blocks: [Block])` + `DialogEventPayload.capped(_ blocks: [Block]) -> [Block]`
   - `CaptureEventRetention.days = 30`, `.trimIntervalMs: EpochMs = 3_600_000`, `.lastTrimSettingsKey = "capture_events_last_trim_at"`, `.dialogPayloadCap = 1_000`
-  - `CaptureEventRecord(id: String, threadID: String?, versionID: String?, atMs: EpochMs, kind: CaptureEventKind, trigger: CaptureTrigger, payloadJSON: String?)`
-  - `Store.recordCaptureEvent(kind:threadID:versionID:trigger:payload:nowMs:) throws`
+  - `CaptureEventRecord(id: String, appBundle: String?, threadID: String?, versionID: String?, atMs: EpochMs, kind: CaptureEventKind, trigger: CaptureTrigger, payloadJSON: String?)`
+  - `Store.recordCaptureEvent(kind:appBundle:threadID:versionID:trigger:payload:nowMs:) throws` — `appBundle: String?` is **required, no default**, and is written to the plaintext `app_bundle` column
   - `Store.recentCaptureEvents(limit: Int = 100) throws -> [CaptureEventRecord]`
   - `Store.captureEvents(fromMs: EpochMs, toMs: EpochMs) throws -> [CaptureEventRecord]`
   - `SafeLogEvent.captureEventWriteFailed = "capture_event_write_failed"`
@@ -785,9 +841,13 @@ final class MigrationV11Tests: XCTestCase {
             let columns = try Row.fetchAll(d, sql: "PRAGMA table_info(capture_events)")
             let byName = Dictionary(uniqueKeysWithValues: columns.map { ($0["name"] as String, $0) })
             XCTAssertEqual(Set(byName.keys), [
-                "id", "thread_id", "version_id", "at_ms", "kind", "trigger",
+                "id", "app_bundle", "thread_id", "version_id", "at_ms", "kind", "trigger",
                 "payload_ciphertext", "hour_bucket",
             ])
+            // Plaintext and nullable: a bundle id is an identifier, not content, and it is what
+            // makes spec 11 criterion 4 checkable without a decrypt (spec 5b as amended).
+            XCTAssertEqual(byName["app_bundle"]?["type"] as String?, "TEXT")
+            XCTAssertEqual(byName["app_bundle"]?["notnull"] as Int?, 0)
             // Nullable on purpose: a focus event precedes any thread for that window (12 Q4),
             // and version pruning must not delete events.
             XCTAssertEqual(byName["thread_id"]?["notnull"] as Int?, 0)
@@ -814,9 +874,9 @@ final class MigrationV11Tests: XCTestCase {
         let db = try MaxMiDatabase.inMemory()
         XCTAssertThrowsError(try db.dbQueue.write { d in
             try d.execute(sql: """
-                INSERT INTO capture_events (id, thread_id, version_id, at_ms, kind, trigger,
-                                            payload_ciphertext, hour_bucket)
-                VALUES ('e1',NULL,NULL,1,'scrolling','periodic',NULL,0)
+                INSERT INTO capture_events (id, app_bundle, thread_id, version_id, at_ms, kind,
+                                            trigger, payload_ciphertext, hour_bucket)
+                VALUES ('e1',NULL,NULL,NULL,1,'scrolling','periodic',NULL,0)
                 """)
         })
     }
@@ -826,9 +886,9 @@ final class MigrationV11Tests: XCTestCase {
         try db.dbQueue.write { d in
             for (index, kind) in CaptureEventKind.allCases.enumerated() {
                 try d.execute(sql: """
-                    INSERT INTO capture_events (id, thread_id, version_id, at_ms, kind, trigger,
-                                                payload_ciphertext, hour_bucket)
-                    VALUES (?,NULL,NULL,?,?,'periodic',NULL,0)
+                    INSERT INTO capture_events (id, app_bundle, thread_id, version_id, at_ms, kind,
+                                                trigger, payload_ciphertext, hour_bucket)
+                    VALUES (?,NULL,NULL,NULL,?,?,'periodic',NULL,0)
                     """, arguments: ["e\(index)", index, kind.rawValue])
             }
             XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM capture_events"),
@@ -978,6 +1038,11 @@ In `Sources/MaxMiStore/Migrations.swift`, change line 4 to `static let currentId
 
 ```swift
         m.registerMigration("v11") { db in
+            // `app_bundle` is nullable PLAINTEXT, exactly like `activity_app_visits.app_bundle`
+            // above: a bundle id is an identifier, not content, and it is the only way to check
+            // spec 11 criterion 4 ("nothing is written for a denylisted, excluded, or
+            // non-consented app") without decrypting a payload. Not indexed — the only query is
+            // the criterion check and `idx_capture_events_at` already covers its time bound.
             // `thread_id` is nullable because a focus event fires before any thread exists for
             // that window (spec 12 Q4). `version_id` is SET NULL so version pruning keeps the
             // event. `payload_ciphertext` is TEXT because FieldCipher.encrypt returns the
@@ -985,6 +1050,7 @@ In `Sources/MaxMiStore/Migrations.swift`, change line 4 to `static let currentId
             try db.execute(sql: """
             CREATE TABLE capture_events (
               id                 TEXT PRIMARY KEY,
+              app_bundle         TEXT,
               thread_id          TEXT REFERENCES threads(id) ON DELETE CASCADE,
               version_id         TEXT REFERENCES versions(id) ON DELETE SET NULL,
               at_ms              INTEGER NOT NULL,
@@ -999,19 +1065,33 @@ In `Sources/MaxMiStore/Migrations.swift`, change line 4 to `static let currentId
         }
 ```
 
-- [ ] **Step 5: Update the six `"v10"` assertions**
+- [ ] **Step 5: Retarget the five `"v10"` literals and delete the one duplicate assertion**
 
-Each is a bare identifier assertion; change the literal only, and leave the surrounding comments' historical `v10` references alone (they describe when a column arrived, which is still true).
+`grep -rn '"v10"' Tests/` returns exactly six hits. Five are schema-identifier assertions whose
+literal simply becomes `"v11"`. The sixth, `MigrationV10Tests.testCurrentIdentifierIsV10`, is
+**deleted**: `MigrationV11Tests.testCurrentIdentifierIsV11` (Step 1) owns that assertion from now
+on, and `MigrationV10Tests` keeps only its v10-*structural* tests, which stay true forever.
+
+That is the single disposition for that method. Do not rename it, do not repurpose it, and do not
+add a replacement method to that file — a second `Migrations.migrator.migrations.contains("v10")`
+assertion would be new dead weight, and `MigrationV11Tests.testV10DatabaseMigratesForwardWithoutDataLoss`
+already proves `v10` is still registered by migrating a real `v10` database forward.
+
+Leave the surrounding comments' historical `v10` references alone: they describe when a column
+arrived, which is still true.
+
+The script below runs from the **worktree**. `pwd` must be
+`/Users/mafex/code/personal/MaxMi/.worktrees/m8b-deltas-events-typing`, NOT
+`/Users/mafex/code/personal/MaxMi`, which is a different checkout sitting on branch `main`. The
+branch check and the per-target asserts make a wrong directory fail loudly instead of quietly
+editing `main`.
 
 ```bash
-cd /Users/mafex/code/personal/MaxMi
-python3 - <<'PY'
-import re, pathlib
+cd /Users/mafex/code/personal/MaxMi/.worktrees/m8b-deltas-events-typing
+git rev-parse --abbrev-ref HEAD   # must print m8b-deltas-events-typing
+python3 - <<'PATCH'
+import pathlib
 edits = {
-    "Tests/MaxMiStoreTests/MigrationV10Tests.swift": [
-        ('XCTAssertEqual(Migrations.currentIdentifier, "v10")',
-         'XCTAssertEqual(Migrations.currentIdentifier, "v11")'),
-    ],
     "Tests/MaxMiStoreTests/MemoryDataControlsTests.swift": [
         ('XCTAssertEqual(result.migrationIdentifier, "v10")',
          'XCTAssertEqual(result.migrationIdentifier, "v11")'),
@@ -1032,24 +1112,29 @@ for path, pairs in edits.items():
         assert old in text, (path, old)
         text = text.replace(old, new)
     p.write_text(text)
-print("done")
-PY
-```
 
-`MigrationV10Tests.testCurrentIdentifierIsV11` now duplicates `MigrationV11Tests`. Rename the method in `MigrationV10Tests.swift` to `testCurrentIdentifierHasMovedPastV10` and assert `XCTAssertNotEqual(Migrations.currentIdentifier, "v9")` plus `XCTAssertTrue(Migrations.migrator.migrations.contains("v10"))` — the v10-specific fact that file exists to protect:
-
-```swift
-    func testV10MigrationIsStillRegistered() {
-        XCTAssertTrue(Migrations.migrator.migrations.contains("v10"))
+# Delete the duplicate assertion; MigrationV11Tests owns it now.
+p = pathlib.Path("Tests/MaxMiStoreTests/MigrationV10Tests.swift")
+text = p.read_text()
+method = """    func testCurrentIdentifierIsV10() {
+        XCTAssertEqual(Migrations.currentIdentifier, "v10")
     }
+
+"""
+assert method in text, "MigrationV10Tests no longer matches; read it before editing"
+p.write_text(text.replace(method, ""))
+print("done")
+PATCH
+grep -rn '"v10"' Tests/ || echo "no v10 literals left"
 ```
 
-(Delete the old `testCurrentIdentifierIsV10` method entirely; `MigrationV11Tests` owns that assertion now.)
+Expected: `done`, then `no v10 literals left`. `MigrationV10Tests` now has two test methods, both
+about v10's columns; the suite total drops by one, which Task 10 Step 1 accounts for.
 
 - [ ] **Step 6: Run the migration tests to verify they pass**
 
 Run: `swift test --filter "MigrationV11Tests|MigrationV10Tests|MigrationTests"`
-Expected: PASS.
+Expected: PASS. `MigrationV11Tests` contributes 6 tests; `MigrationV10Tests` contributes 2 (down from 3).
 
 - [ ] **Step 7: Commit the migration**
 
@@ -1099,15 +1184,29 @@ final class CaptureEventStoreTests: XCTestCase {
         return try CapturedContentEnvelope.makeDecoder().decode(type, from: Data(json.utf8))
     }
 
+    /// The `focus` write, which most of these tests only need as "a row exists at this time".
+    private func recordFocus(nowMs: EpochMs, appBundle: String = "com.example.editor",
+                             windowTitle: String? = nil,
+                             trigger: CaptureTrigger = .periodic) throws {
+        try store.recordCaptureEvent(
+            kind: .focus, appBundle: appBundle, threadID: nil, versionID: nil, trigger: trigger,
+            payload: FocusEventPayload(bundleID: appBundle, appLabel: "Editor",
+                                       windowTitle: windowTitle),
+            nowMs: nowMs)
+    }
+
     func testFocusPayloadRoundTripsAndIsEncryptedAtRest() throws {
         try store.recordCaptureEvent(
-            kind: .focus, threadID: nil, versionID: nil, trigger: .unknown,
+            kind: .focus, appBundle: "com.example.editor", threadID: nil, versionID: nil,
+            trigger: .unknown,
             payload: FocusEventPayload(bundleID: "com.example.editor", appLabel: "Editor",
                                        windowTitle: "quarterly-plan"),
             nowMs: t0)
 
         let record = try XCTUnwrap(store.recentCaptureEvents().first)
         XCTAssertEqual(record.kind, .focus)
+        XCTAssertEqual(record.appBundle, "com.example.editor",
+                       "plaintext, so a row is attributable without a decrypt")
         XCTAssertNil(record.threadID)
         XCTAssertNil(record.versionID)
         XCTAssertEqual(record.trigger, .unknown)
@@ -1125,24 +1224,25 @@ final class CaptureEventStoreTests: XCTestCase {
     func testNavigationTypingDialogAndDeltaPayloadsRoundTrip() throws {
         let seeded = try seedThreadAndVersion()
         try store.recordCaptureEvent(
-            kind: .navigation, threadID: seeded.threadID, versionID: seeded.versionID,
-            trigger: .browserNavigation,
+            kind: .navigation, appBundle: "com.example.browser", threadID: seeded.threadID,
+            versionID: seeded.versionID, trigger: .browserNavigation,
             payload: NavigationEventPayload(fromURL: "https://example.com/a",
                                             toURL: "https://example.com/b"),
             nowMs: t0 + 1)
         try store.recordCaptureEvent(
-            kind: .typing, threadID: seeded.threadID, versionID: nil, trigger: .accessibilityChanged,
+            kind: .typing, appBundle: "com.example.chat", threadID: seeded.threadID,
+            versionID: nil, trigger: .accessibilityChanged,
             payload: TypingEvent(insertedText: " world", fieldRole: "AXTextArea",
                                  fieldIdentifier: "composer", totalLength: 11, replaced: false),
             nowMs: t0 + 2)
         try store.recordCaptureEvent(
-            kind: .dialog, threadID: seeded.threadID, versionID: seeded.versionID,
-            trigger: .accessibilityChanged,
+            kind: .dialog, appBundle: "com.example.notes", threadID: seeded.threadID,
+            versionID: seeded.versionID, trigger: .accessibilityChanged,
             payload: DialogEventPayload(blocks: [Block(type: .label, text: "Discard")]),
             nowMs: t0 + 3)
         try store.recordCaptureEvent(
-            kind: .contentDelta, threadID: seeded.threadID, versionID: seeded.versionID,
-            trigger: .periodic,
+            kind: .contentDelta, appBundle: "com.example.notes", threadID: seeded.threadID,
+            versionID: seeded.versionID, trigger: .periodic,
             payload: CaptureDelta(addedBlocks: [Block(type: .paragraph, text: "second line")],
                                   addedChars: 12),
             nowMs: t0 + 4)
@@ -1160,11 +1260,7 @@ final class CaptureEventStoreTests: XCTestCase {
     }
 
     func testHourBucketAndIdentifierAreDerivedFromTheTimestamp() throws {
-        try store.recordCaptureEvent(kind: .focus, threadID: nil, versionID: nil,
-                                     trigger: .appActivated,
-                                     payload: FocusEventPayload(bundleID: "b", appLabel: "B",
-                                                                windowTitle: nil),
-                                     nowMs: t0)
+        try recordFocus(nowMs: t0, trigger: .appActivated)
         let bucket = try db.dbQueue.read { d in
             try Int64.fetchOne(d, sql: "SELECT hour_bucket FROM capture_events")
         }
@@ -1173,11 +1269,32 @@ final class CaptureEventStoreTests: XCTestCase {
         XCTAssertEqual(id.count, 36, "Ident.uuidv7 produces a hyphenated uuid string")
     }
 
+    /// The whole point of the plaintext `app_bundle` column: a row is attributable to an app
+    /// without decrypting anything, which is what makes spec 11 criterion 4 ("nothing is written
+    /// for a denylisted, excluded, or non-consented app") a query anyone can run. Before this
+    /// column the only app identifier in a row lived inside the encrypted `focus` payload.
+    func testEventsAreAttributableToTheirAppWithoutDecrypting() throws {
+        try recordFocus(nowMs: t0, appBundle: "com.example.editor")
+        try recordFocus(nowMs: t0 + 1, appBundle: "com.example.excluded")
+        try recordFocus(nowMs: t0 + 2, appBundle: "com.example.excluded")
+
+        let excludedRows = try db.dbQueue.read { d in
+            try Int.fetchOne(d, sql: """
+                SELECT count(*) FROM capture_events WHERE app_bundle=? AND at_ms > ?
+                """, arguments: ["com.example.excluded", t0])
+        }
+        XCTAssertEqual(excludedRows, 2, "the exit-criterion query runs on plaintext alone")
+        let records = try store.recentCaptureEvents()
+        XCTAssertEqual(records.first?.appBundle, "com.example.excluded")
+        XCTAssertEqual(records.filter { $0.appBundle == "com.example.editor" }.count, 1)
+    }
+
     func testDeletingTheThreadCascadesItsEvents() throws {
         let seeded = try seedThreadAndVersion()
-        try store.recordCaptureEvent(kind: .contentDelta, threadID: seeded.threadID,
-                                     versionID: seeded.versionID, trigger: .periodic,
-                                     payload: CaptureDelta(addedChars: 1), nowMs: t0 + 1)
+        try store.recordCaptureEvent(
+            kind: .contentDelta, appBundle: "com.example.notes", threadID: seeded.threadID,
+            versionID: seeded.versionID, trigger: .periodic,
+            payload: CaptureDelta(addedChars: 1), nowMs: t0 + 1)
         try db.dbQueue.write { d in
             try d.execute(sql: "DELETE FROM latest_contexts WHERE thread_id=?", arguments: [seeded.threadID])
             try d.execute(sql: "DELETE FROM message_fingerprints WHERE thread_id=?", arguments: [seeded.threadID])
@@ -1189,9 +1306,10 @@ final class CaptureEventStoreTests: XCTestCase {
 
     func testDeletingTheVersionNullsVersionIDButKeepsTheEvent() throws {
         let seeded = try seedThreadAndVersion()
-        try store.recordCaptureEvent(kind: .contentDelta, threadID: seeded.threadID,
-                                     versionID: seeded.versionID, trigger: .periodic,
-                                     payload: CaptureDelta(addedChars: 1), nowMs: t0 + 1)
+        try store.recordCaptureEvent(
+            kind: .contentDelta, appBundle: "com.example.notes", threadID: seeded.threadID,
+            versionID: seeded.versionID, trigger: .periodic,
+            payload: CaptureDelta(addedChars: 1), nowMs: t0 + 1)
         try db.dbQueue.write { d in
             try d.execute(sql: "UPDATE latest_contexts SET version_id=NULL WHERE thread_id=?",
                           arguments: [seeded.threadID])
@@ -1202,62 +1320,39 @@ final class CaptureEventStoreTests: XCTestCase {
         XCTAssertNil(record.versionID)
     }
 
-    func testTrimDeletesEventsOlderThanThirtyDays() throws {
-        let old = t0 - EpochMs(CaptureEventRetention.days) * 86_400_000 - 1
+    /// `app_bundle` is nullable, so a hand-written row may omit it. The reader must not drop it.
+    private func insertAncientRow(atMs: EpochMs) throws {
         try db.dbQueue.write { d in
             try d.execute(sql: """
-                INSERT INTO capture_events (id, thread_id, version_id, at_ms, kind, trigger,
-                                            payload_ciphertext, hour_bucket)
-                VALUES ('ancient',NULL,NULL,?,'focus','periodic',NULL,0)
-                """, arguments: [old])
+                INSERT INTO capture_events (id, app_bundle, thread_id, version_id, at_ms, kind,
+                                            trigger, payload_ciphertext, hour_bucket)
+                VALUES ('ancient',NULL,NULL,NULL,?,'focus','periodic',NULL,0)
+                """, arguments: [atMs])
         }
-        try store.recordCaptureEvent(kind: .focus, threadID: nil, versionID: nil,
-                                     trigger: .periodic,
-                                     payload: FocusEventPayload(bundleID: "b", appLabel: "B",
-                                                                windowTitle: nil),
-                                     nowMs: t0)
+    }
+
+    func testTrimDeletesEventsOlderThanThirtyDays() throws {
+        try insertAncientRow(atMs: t0 - EpochMs(CaptureEventRetention.days) * 86_400_000 - 1)
+        try recordFocus(nowMs: t0)
         XCTAssertEqual(try store.recentCaptureEvents().map(\.id).contains("ancient"), false)
     }
 
     func testTrimRunsAtMostOncePerHour() throws {
         // First write trims (last-trim is unset) and records t0 as the trim time.
-        try store.recordCaptureEvent(kind: .focus, threadID: nil, versionID: nil,
-                                     trigger: .periodic,
-                                     payload: FocusEventPayload(bundleID: "b", appLabel: "B",
-                                                                windowTitle: nil),
-                                     nowMs: t0)
-        let old = t0 - EpochMs(CaptureEventRetention.days) * 86_400_000 - 1
-        try db.dbQueue.write { d in
-            try d.execute(sql: """
-                INSERT INTO capture_events (id, thread_id, version_id, at_ms, kind, trigger,
-                                            payload_ciphertext, hour_bucket)
-                VALUES ('ancient',NULL,NULL,?,'focus','periodic',NULL,0)
-                """, arguments: [old])
-        }
+        try recordFocus(nowMs: t0)
+        try insertAncientRow(atMs: t0 - EpochMs(CaptureEventRetention.days) * 86_400_000 - 1)
         // Inside the gate: the stale row survives, so no capture pays for a DELETE.
-        try store.recordCaptureEvent(kind: .focus, threadID: nil, versionID: nil,
-                                     trigger: .periodic,
-                                     payload: FocusEventPayload(bundleID: "b", appLabel: "B",
-                                                                windowTitle: nil),
-                                     nowMs: t0 + 1_000)
+        try recordFocus(nowMs: t0 + 1_000)
         XCTAssertTrue(try store.recentCaptureEvents().map(\.id).contains("ancient"))
 
         // An hour later the gate opens.
-        try store.recordCaptureEvent(kind: .focus, threadID: nil, versionID: nil,
-                                     trigger: .periodic,
-                                     payload: FocusEventPayload(bundleID: "b", appLabel: "B",
-                                                                windowTitle: nil),
-                                     nowMs: t0 + CaptureEventRetention.trimIntervalMs)
+        try recordFocus(nowMs: t0 + CaptureEventRetention.trimIntervalMs)
         XCTAssertFalse(try store.recentCaptureEvents().map(\.id).contains("ancient"))
     }
 
     func testCaptureEventsWindowIsInclusiveAndChronological() throws {
         for offset in [0, 10, 20, 30] {
-            try store.recordCaptureEvent(kind: .focus, threadID: nil, versionID: nil,
-                                         trigger: .periodic,
-                                         payload: FocusEventPayload(bundleID: "b", appLabel: "B",
-                                                                    windowTitle: "w\(offset)"),
-                                         nowMs: t0 + EpochMs(offset))
+            try recordFocus(nowMs: t0 + EpochMs(offset), windowTitle: "w\(offset)")
         }
         let window = try store.captureEvents(fromMs: t0 + 10, toMs: t0 + 20)
         XCTAssertEqual(window.map(\.atMs), [t0 + 10, t0 + 20])
@@ -1265,11 +1360,7 @@ final class CaptureEventStoreTests: XCTestCase {
 
     func testRecentCaptureEventsLimitIsBounded() throws {
         for offset in 0..<5 {
-            try store.recordCaptureEvent(kind: .focus, threadID: nil, versionID: nil,
-                                         trigger: .periodic,
-                                         payload: FocusEventPayload(bundleID: "b", appLabel: "B",
-                                                                    windowTitle: nil),
-                                         nowMs: t0 + EpochMs(offset))
+            try recordFocus(nowMs: t0 + EpochMs(offset))
         }
         XCTAssertEqual(try store.recentCaptureEvents(limit: 0).count, 1)
         XCTAssertEqual(try store.recentCaptureEvents(limit: 10_000).count, 5)
@@ -1309,6 +1400,9 @@ import MaxMiCore
 /// kind carries, and keeping it opaque here means a new kind needs no change to this type.
 public struct CaptureEventRecord: Sendable, Equatable {
     public let id: String
+    /// The bundle id of the app this event belongs to, from the plaintext `app_bundle` column.
+    /// Optional because the column is nullable, not because any current writer omits it.
+    public let appBundle: String?
     public let threadID: String?
     public let versionID: String?
     public let atMs: EpochMs
@@ -1318,9 +1412,11 @@ public struct CaptureEventRecord: Sendable, Equatable {
     /// `decryptOrMarker` uses everywhere else, never a throw.
     public let payloadJSON: String?
 
-    public init(id: String, threadID: String?, versionID: String?, atMs: EpochMs,
-                kind: CaptureEventKind, trigger: CaptureTrigger, payloadJSON: String?) {
+    public init(id: String, appBundle: String?, threadID: String?, versionID: String?,
+                atMs: EpochMs, kind: CaptureEventKind, trigger: CaptureTrigger,
+                payloadJSON: String?) {
         self.id = id
+        self.appBundle = appBundle
         self.threadID = threadID
         self.versionID = versionID
         self.atMs = atMs
@@ -1339,6 +1435,10 @@ extension Store {
     /// must be satisfied before this is called (spec 8).
     public func recordCaptureEvent(
         kind: CaptureEventKind,
+        // Plaintext, so a row is attributable to an app without decrypting its payload — the only
+        // thing that makes spec 11 criterion 4 checkable. Required, with no default, so a new
+        // event kind cannot silently write an unattributable row.
+        appBundle: String?,
         threadID: String?,
         versionID: String?,
         trigger: CaptureTrigger,
@@ -1351,11 +1451,12 @@ extension Store {
         try db.dbQueue.write { d in
             try d.execute(sql: """
                 INSERT INTO capture_events (
-                    id, thread_id, version_id, at_ms, kind, trigger, payload_ciphertext, hour_bucket
-                ) VALUES (?,?,?,?,?,?,?,?)
+                    id, app_bundle, thread_id, version_id, at_ms, kind, trigger,
+                    payload_ciphertext, hour_bucket
+                ) VALUES (?,?,?,?,?,?,?,?,?)
                 """, arguments: [
-                    Ident.uuidv7(nowMs: nowMs), threadID, versionID, nowMs, kind.rawValue,
-                    trigger.rawValue, ciphertext, HourBucket.bucket(forMs: nowMs),
+                    Ident.uuidv7(nowMs: nowMs), appBundle, threadID, versionID, nowMs,
+                    kind.rawValue, trigger.rawValue, ciphertext, HourBucket.bucket(forMs: nowMs),
                 ])
             try Self.trimCaptureEventsIfDue(d, nowMs: nowMs)
         }
@@ -1379,7 +1480,8 @@ extension Store {
         let boundedLimit = min(max(limit, 1), 500)
         return try db.dbQueue.read { d in
             try Row.fetchAll(d, sql: """
-                SELECT id, thread_id, version_id, at_ms, kind, trigger, payload_ciphertext
+                SELECT id, app_bundle, thread_id, version_id, at_ms, kind, trigger,
+                       payload_ciphertext
                 FROM capture_events
                 ORDER BY at_ms DESC, id DESC
                 LIMIT ?
@@ -1391,7 +1493,8 @@ extension Store {
     public func captureEvents(fromMs: EpochMs, toMs: EpochMs) throws -> [CaptureEventRecord] {
         try db.dbQueue.read { d in
             try Row.fetchAll(d, sql: """
-                SELECT id, thread_id, version_id, at_ms, kind, trigger, payload_ciphertext
+                SELECT id, app_bundle, thread_id, version_id, at_ms, kind, trigger,
+                       payload_ciphertext
                 FROM capture_events
                 WHERE at_ms >= ? AND at_ms <= ?
                 ORDER BY at_ms ASC, id ASC
@@ -1408,6 +1511,7 @@ extension Store {
               let trigger = CaptureTrigger(rawValue: row["trigger"]) else { return nil }
         return CaptureEventRecord(
             id: row["id"],
+            appBundle: row["app_bundle"],
             threadID: row["thread_id"],
             versionID: row["version_id"],
             atMs: row["at_ms"],
@@ -1431,7 +1535,7 @@ In `Sources/MaxMiCore/SafeLogger.swift`, after `case capturePolicyReadFailed = "
 - [ ] **Step 12: Run the store tests to verify they pass**
 
 Run: `swift test --filter CaptureEventStoreTests`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 Run: `swift test --filter MaxMiStoreTests 2>&1 | tail -20`
 Expected: only the two known-red store failures (`ActivityStoreTests.testNewSourceActivitySummaryWaitsForCloudReview`, `PauseSettingsTests.testNewSourceIsHeldFromCloudUntilReviewed`).
@@ -1452,12 +1556,12 @@ The trim in Task 2 covers the automatic case. The user-triggered controls must a
 
 **Files:**
 - Modify: `Sources/MaxMiStore/MemoryDataControls.swift:5-13` (`MemoryDeletionResult`), `:91-148` (`pruneMemory`), `:150-175` (`deleteAllMemory`)
-- Modify: `Sources/MaxMiUI/CapturePrivacyView.swift:105-122` (`retentionCard`)
+- Modify: `Sources/MaxMiUI/CapturePrivacyView.swift:104-121` (`retentionCard`)
 - Test: `Tests/MaxMiStoreTests/MemoryDataControlsTests.swift` (extend)
 - Test: `Tests/MaxMiUITests/CapturePrivacyCopyTests.swift` (create)
 
 **Interfaces:**
-- Consumes: `Store.recordCaptureEvent(kind:threadID:versionID:trigger:payload:nowMs:)`, `Store.recentCaptureEvents(limit:)`, `CaptureEventRetention.days`, `FocusEventPayload`, `CaptureDelta` (all from Task 2); `Store.pruneMemory(olderThan:) throws -> MemoryDeletionResult`; `Store.deleteAllMemory() throws -> MemoryDeletionResult`.
+- Consumes: `Store.recordCaptureEvent(kind:appBundle:threadID:versionID:trigger:payload:nowMs:)`, `Store.recentCaptureEvents(limit:)`, `CaptureEventRetention.days`, `FocusEventPayload`, `CaptureDelta` (all from Task 2); `Store.pruneMemory(olderThan:) throws -> MemoryDeletionResult`; `Store.deleteAllMemory() throws -> MemoryDeletionResult`.
 - Produces:
   - `MemoryDeletionResult(threads: Int, versions: Int, facts: Int, events: Int)` — `events` is a **required** fourth parameter. The only two construction sites are inside `MemoryDataControls.swift`, so no default is needed and none is added.
   - `CapturePrivacyCopy.eventRetentionNote = "Activity events are kept for 30 days."` in `Sources/MaxMiUI/CapturePrivacyView.swift`, so the copy is assertable without rendering SwiftUI.
@@ -1475,6 +1579,7 @@ Append to `Tests/MaxMiStoreTests/MemoryDataControlsTests.swift` (inside the exis
         )
         try store.recordCaptureEvent(
             kind: .contentDelta,
+            appBundle: "com.example.web",
             threadID: try store.threadID(forKey: threadKey),
             versionID: nil,
             trigger: .periodic,
@@ -1591,7 +1696,8 @@ The thread deletes above this point already cascade their events (`ON DELETE CAS
             )
 ```
 
-and, next to the existing `paused_threads` settings delete at the end:
+and, next to the existing `paused_threads` settings delete at the end. `MemoryDataControls.swift`
+already has `import MaxMiCore` at the top, so the key is the constant — never a repeated literal:
 
 ```swift
             try database.execute(sql: "DELETE FROM capture_health_events")
@@ -1599,15 +1705,9 @@ and, next to the existing `paused_threads` settings delete at the end:
             try database.execute(sql: "DELETE FROM settings WHERE key='paused_threads'")
             // The trim gate must not outlive the rows it was gating, or a fresh database waits an
             // hour before its first trim.
-            try database.execute(sql: "DELETE FROM settings WHERE key='capture_events_last_trim_at'")
-            return result
-```
-
-The literal key is used rather than `CaptureEventRetention.lastTrimSettingsKey` only if `MaxMiCore` is not already imported — it is (`import MaxMiCore` at the top of the file), so use the constant:
-
-```swift
             try database.execute(sql: "DELETE FROM settings WHERE key=?",
                                  arguments: [CaptureEventRetention.lastTrimSettingsKey])
+            return result
 ```
 
 - [ ] **Step 6: Add the Privacy copy**
@@ -1673,17 +1773,17 @@ git commit -m "Delete capture_events in the data controls and state the 30-day w
 **Files:**
 - Modify: `Sources/MaxMiStore/CaptureEventStore.swift` (add the two event-context lookups)
 - Modify: `Sources/MaxMiCapture/AXReader.swift` (add `focusedWindowTitle(pid:)`)
-- Modify: `Sources/MaxMi/AppWiring.swift:1112-1132` (`handleFocusChange`), `:1443-1476` (browser branch — capture the URL), `:1570-1600` (commit + event writes), and add `recordCaptureEvents` next to `recordCaptureHealth` (`:1779+`)
+- Modify: `Sources/MaxMi/AppWiring.swift:1054-1092` (`handleFocusChange` — `:1112-1132` is `isActivitySynthesisEnabled`, do not edit that), `:1443-1476` (browser branch — capture the URL), `:1573-1605` (commit + event writes), and add `recordCaptureEvents` next to `recordCaptureHealth` (`:1781+`)
 - Test: `Tests/MaxMiStoreTests/CaptureEventStoreTests.swift` (extend with the two lookups)
 
 **Interfaces:**
-- Consumes: `Store.recordCaptureEvent(kind:threadID:versionID:trigger:payload:nowMs:)`, `CaptureEventKind`, `FocusEventPayload`, `NavigationEventPayload`, `DialogEventPayload.capped(_:)`, `CaptureDelta.hasRecordableChange`, `CaptureDelta.dialogBlocks`, `SafeLogEvent.captureEventWriteFailed` (Tasks 1–2); `Store.structuredOrLegacy(_:renderedContent:kind:)`, `Store.decryptOrMarker(_:)`; `AppWiring.isActivityEligible(bundleID:) -> Bool`, `AppWiring.recordCaptureHealth(app:trigger:parser:outcome:startedAtMs:)`, `CommitResult.committed(versionID:contentHash:delta:)`, `BrowserCaptureResult.url`.
+- Consumes: `Store.recordCaptureEvent(kind:appBundle:threadID:versionID:trigger:payload:nowMs:)`, `CaptureEventKind`, `FocusEventPayload`, `NavigationEventPayload`, `DialogEventPayload.capped(_:)`, `CaptureDelta.hasRecordableChange`, `CaptureDelta.dialogBlocks`, `SafeLogEvent.captureEventWriteFailed` (Tasks 1–2); `Store.structuredOrLegacy(_:renderedContent:kind:)`, `Store.decryptOrMarker(_:)`; `AppWiring.isActivityEligible(bundleID:) -> Bool`, `AppWiring.recordCaptureHealth(app:trigger:parser:outcome:startedAtMs:)`, `CommitResult.committed(versionID:contentHash:delta:)`, `BrowserCaptureResult.url`.
 - Produces:
   - `Store.threadID(sourceApp: String, sourceKey: String) throws -> String?` — nil when the thread does not exist yet. Distinct from the existing `threadID(forKey:) throws -> String`, which ignores the app and throws.
   - `Store.previousContextURL(sourceApp: String, sourceKey: String) throws -> String?` — the URL currently stored for that thread, read from `latest_contexts.structured_ciphertext`.
   - `AXReader.focusedWindowTitle(pid: pid_t) -> String?`
   - `CaptureEventDecision.kinds(for result: CommitResult, trigger: CaptureTrigger, hasBrowserURL: Bool) -> [CaptureEventKind]` — the pure rule for which events one commit warrants, so §9's "one `content_delta` per committed non-empty capture and **none** for a `.deduplicated` commit" is a unit test rather than a live observation.
-  - `AppWiring.recordCaptureEvents(app:threadID:versionID:result:delta:trigger:browserURL:previousURL:nowMs:)` — private.
+  - `AppWiring.recordCaptureEvents(app:eligible:threadID:versionID:result:delta:trigger:browserURL:previousURL:nowMs:)` — private. `eligible` is the already-computed `isActivityEligible(bundleID:)` answer that `finishCapture` binds at `:1585`; the method never re-derives it, because each derivation is three `Store` reads.
 
 - [ ] **Step 1: Write the failing lookup tests**
 
@@ -1856,7 +1956,7 @@ public enum CaptureEventDecision {
 - [ ] **Step 4: Run the lookup tests to verify they pass**
 
 Run: `swift test --filter CaptureEventStoreTests`
-Expected: PASS, 20 tests.
+Expected: PASS, 21 tests (12 from Task 2 plus the 9 added here).
 
 - [ ] **Step 5: Add `AXReader.focusedWindowTitle(pid:)`**
 
@@ -1910,6 +2010,7 @@ with:
         do {
             try store.recordCaptureEvent(
                 kind: .focus,
+                appBundle: app.bundleID,
                 threadID: nil,
                 versionID: nil,
                 trigger: .unknown,
@@ -1984,16 +2085,21 @@ Immediately after the existing activity-evidence block and **before** `switch re
 ```swift
             // Events are derived signals, so a failed write is logged and dropped — never
             // allowed to fail the capture that produced it.
+            // `eligible` is the `isActivityEligible(bundleID:)` answer already bound above at
+            // `:1585` — three `Store` reads. It is passed in, never recomputed.
             if case .committed(let versionID, _, let delta) = result {
                 let eventThreadID = (try? store.threadID(sourceApp: parsed.sourceApp,
                                                          sourceKey: cleanKey)) ?? nil
                 recordCaptureEvents(
-                    app: appInfo, threadID: eventThreadID, versionID: versionID, result: result,
-                    delta: delta, trigger: trigger, browserURL: browserURL,
-                    previousURL: previousURL, nowMs: nowMs
+                    app: appInfo, eligible: eligible, threadID: eventThreadID,
+                    versionID: versionID, result: result, delta: delta, trigger: trigger,
+                    browserURL: browserURL, previousURL: previousURL, nowMs: nowMs
                 )
             }
 ```
+
+This block goes **after** `let eligible = isActivityEligible(bundleID: appInfo.bundleID)` (`:1585`)
+and before `switch result {` (`:1606`), which is where the activity-evidence block already sits.
 
 and add the method next to `recordCaptureHealth`:
 
@@ -2005,6 +2111,10 @@ and add the method next to `recordCaptureHealth`:
     /// A `.deduplicated` commit writes nothing: nothing changed, so there is nothing to record.
     private func recordCaptureEvents(
         app: AppInfo,
+        // `isActivityEligible(bundleID:)`, evaluated once by the caller. Three `Store` reads per
+        // evaluation, and `finishCapture` already has the answer — so it is a parameter, not a
+        // second call.
+        eligible: Bool,
         threadID: String?,
         versionID: String,
         result: CommitResult,
@@ -2014,7 +2124,7 @@ and add the method next to `recordCaptureHealth`:
         previousURL: String?,
         nowMs: EpochMs
     ) {
-        guard isActivityEligible(bundleID: app.bundleID) else { return }
+        guard eligible else { return }
         // The rule for WHICH events a commit warrants is tested in MaxMiStore; this method only
         // supplies the payloads for the kinds it names.
         let kinds = CaptureEventDecision.kinds(
@@ -2025,15 +2135,16 @@ and add the method next to `recordCaptureHealth`:
                 switch kind {
                 case .contentDelta:
                     try store.recordCaptureEvent(
-                        kind: .contentDelta, threadID: threadID, versionID: versionID,
-                        trigger: trigger, payload: delta, nowMs: nowMs
+                        kind: .contentDelta, appBundle: app.bundleID, threadID: threadID,
+                        versionID: versionID, trigger: trigger, payload: delta, nowMs: nowMs
                     )
                 case .dialog:
                     // Non-empty only when a `.dialog` region appeared that the previous capture
                     // did not have — the comparison happens in `CaptureDelta.between`, the one
                     // place that sees both sides.
                     try store.recordCaptureEvent(
-                        kind: .dialog, threadID: threadID, versionID: versionID, trigger: trigger,
+                        kind: .dialog, appBundle: app.bundleID, threadID: threadID,
+                        versionID: versionID, trigger: trigger,
                         payload: DialogEventPayload(
                             blocks: DialogEventPayload.capped(delta.dialogBlocks)),
                         nowMs: nowMs
@@ -2044,8 +2155,8 @@ and add the method next to `recordCaptureHealth`:
                     // rather than a `!` so a future change to the rule cannot crash a capture.
                     guard let toURL = browserURL else { continue }
                     try store.recordCaptureEvent(
-                        kind: .navigation, threadID: threadID, versionID: versionID,
-                        trigger: trigger,
+                        kind: .navigation, appBundle: app.bundleID, threadID: threadID,
+                        versionID: versionID, trigger: trigger,
                         payload: NavigationEventPayload(fromURL: previousURL, toURL: toURL),
                         nowMs: nowMs
                     )
@@ -2082,16 +2193,17 @@ git commit -m "Record focus, navigation, content delta and dialog capture events
 
 ## Task 5: `TypingDiff` and the `TypingObserver` actor
 
-The pure part of typing capture: the diff, the per-key debounce, the LRU, and the gates. Nothing is wired to AX yet — Task 6 does that — so this task is judged entirely on unit tests.
+The pure part of typing capture: the diff, the two per-key time gates (one before the AX read, one before the emitted event), the LRU, and the privacy guards. Nothing is wired to AX yet — Task 6 does that — so this task is judged entirely on unit tests.
 
 **Files:**
-- Create: `Sources/MaxMiCapture/TypingObserver.swift`
+- Create: `Sources/MaxMiCapture/TypingObserver.swift` (`FocusedFieldKey`, `TypingPollGate`, `TypingDiff`, `TypingObserver`, `FocusedElement(node:)`)
 - Test: `Tests/MaxMiCaptureTests/TypingObserverTests.swift` (create)
 
 **Interfaces:**
 - Consumes: `TypingEvent(insertedText:fieldRole:fieldIdentifier:totalLength:replaced:)` (Task 2), `FocusedElement(role:identifier:value:selectedText:isSecure:)` and `AXNode` (both merged in Phase A), `Denylist.isSensitiveApp(_:) -> Bool`, `AppInfo(bundleID:name:windowTitle:windowID:)`, `GenericPageExtractor.secureSubrole` (internal `static let`, same module), `EpochMs`.
 - Produces:
-  - `FocusedFieldKey: Hashable, Sendable` with `bundleID: String`, `windowID: UInt32?`, `windowTitle: String?`, `role: String`, `identifier: String?`; `init(bundleID:windowID:windowTitle:role:identifier:)` which **nils `windowTitle` whenever `windowID != nil`**; and `init(app: AppInfo, focused: FocusedElement)`.
+  - `FocusedFieldKey: Hashable, Sendable` with `bundleID: String`, `window: String?`, `role: String`, `identifier: String?`; `init(bundleID:windowID:windowTitle:role:identifier:)`, which **collapses the two window inputs into one discriminator** — `"id:<CGWindowID>"` when a window id is known, else `"title:<window title>"`, else nil; and `init(app: AppInfo, focused: FocusedElement)`.
+  - `TypingPollGate` (`init()`, `static let intervalMs: EpochMs`, `static let staleAfterMs: EpochMs`, `enum Decision { case read, schedule(afterMs: EpochMs), alreadyScheduled }`, `mutating func admit(key: String, nowMs: EpochMs) -> Decision`, `mutating func completeScheduled(key: String, nowMs: EpochMs)`, `var trackedKeyCount: Int`).
   - `TypingDiff.Change(insertedText: String, replaced: Bool)` and `TypingDiff.diff(old: String, new: String, maxReplacedTailChars: Int) -> Change?`.
   - `TypingObserver` actor: `static let debounceMs: EpochMs = 800`, `static let maxTrackedFields = 32`, `static let maxReplacedTailChars = 500`; `init(isEligible: @escaping @Sendable (String) -> Bool)`; `func observe(_ focused: FocusedElement, key: FocusedFieldKey, nowMs: EpochMs) -> TypingEvent?`; `var trackedFieldCount: Int`.
   - `extension FocusedElement { init(node: AXNode) }`.
@@ -2264,15 +2376,15 @@ final class TypingObserverTests: XCTestCase {
 
     // MARK: - Key identity
 
-    /// The capture path knows the window title; the AX-notification path only knows the window id.
-    /// Dropping the title whenever an id is present keeps both paths on the SAME key.
-    func testWindowTitleIsIgnoredWhenAWindowIDIsKnown() {
+    /// One window discriminator, not two fields: the id when the app exposes one, otherwise the
+    /// title. An id and a title for the same window therefore collapse to the same key.
+    func testWindowIDWinsOverTheTitle() {
         let withTitle = FocusedFieldKey(bundleID: "b", windowID: 7, windowTitle: "Draft",
                                         role: "AXTextArea", identifier: nil)
         let withoutTitle = FocusedFieldKey(bundleID: "b", windowID: 7, windowTitle: nil,
                                            role: "AXTextArea", identifier: nil)
         XCTAssertEqual(withTitle, withoutTitle)
-        XCTAssertNil(withTitle.windowTitle)
+        XCTAssertEqual(withTitle.window, "id:7")
     }
 
     func testWindowTitleDistinguishesKeysWhenNoWindowIDIsKnown() {
@@ -2281,6 +2393,68 @@ final class TypingObserverTests: XCTestCase {
         let b = FocusedFieldKey(bundleID: "b", windowID: nil, windowTitle: "Two",
                                 role: "AXTextArea", identifier: nil)
         XCTAssertNotEqual(a, b)
+        XCTAssertEqual(a.window, "title:One")
+    }
+
+    /// The bug this shape exists to prevent. `AXReader.focusedWindowID(pid:)` returns nil for any
+    /// app whose focused window exposes no `CGWindowID`. The capture path passes a real window
+    /// title; if the AX-notification path passed nil, the two paths would mint DIFFERENT keys for
+    /// the same field, every notification would be a first sighting, and no typing event would
+    /// ever be emitted for that app. Both paths pass the same `(windowID, windowTitle)` pair, so
+    /// the keys agree — and the last assertion shows the failure mode is loud, not silent.
+    func testBothWritePathsMintTheSameKeyWhenNoWindowIDIsAvailable() {
+        let captureSide = FocusedFieldKey(
+            app: AppInfo(bundleID: "com.example.chat", name: "Chat", windowTitle: "General",
+                         windowID: nil),
+            focused: field("x"))
+        let pollSide = FocusedFieldKey(bundleID: "com.example.chat", windowID: nil,
+                                       windowTitle: "General", role: "AXTextArea",
+                                       identifier: "composer")
+        XCTAssertEqual(captureSide, pollSide)
+        XCTAssertEqual(captureSide.window, "title:General")
+        XCTAssertNotEqual(
+            captureSide,
+            FocusedFieldKey(bundleID: "com.example.chat", windowID: nil, windowTitle: nil,
+                            role: "AXTextArea", identifier: "composer"),
+            "a poll path that forgot the title must not silently agree")
+    }
+
+    // MARK: - TypingPollGate
+
+    func testPollGateAdmitsTheFirstNotificationForAKey() {
+        var gate = TypingPollGate()
+        XCTAssertEqual(gate.admit(key: "com.example.chat", nowMs: t0), .read)
+    }
+
+    /// Progress bars, clocks and live regions all fire `kAXValueChangedNotification`, so a burst
+    /// is the normal case. It must cost ONE AX read, taken at the end.
+    func testPollGateCoalescesABurstIntoOneTrailingRead() {
+        var gate = TypingPollGate()
+        XCTAssertEqual(gate.admit(key: "com.example.chat", nowMs: t0), .read)
+        XCTAssertEqual(gate.admit(key: "com.example.chat", nowMs: t0 + 100),
+                       .schedule(afterMs: TypingPollGate.intervalMs - 100))
+        XCTAssertEqual(gate.admit(key: "com.example.chat", nowMs: t0 + 200), .alreadyScheduled)
+        XCTAssertEqual(gate.admit(key: "com.example.chat", nowMs: t0 + 700), .alreadyScheduled)
+
+        gate.completeScheduled(key: "com.example.chat", nowMs: t0 + TypingPollGate.intervalMs)
+        XCTAssertEqual(
+            gate.admit(key: "com.example.chat", nowMs: t0 + TypingPollGate.intervalMs + 1),
+            .schedule(afterMs: TypingPollGate.intervalMs - 1),
+            "the trailing read reset the window, so the next burst schedules again")
+    }
+
+    func testPollGateIsPerKeyAndReopensAfterTheInterval() {
+        var gate = TypingPollGate()
+        XCTAssertEqual(gate.admit(key: "a", nowMs: t0), .read)
+        XCTAssertEqual(gate.admit(key: "b", nowMs: t0), .read, "a different app is not gated")
+        XCTAssertEqual(gate.admit(key: "a", nowMs: t0 + TypingPollGate.intervalMs), .read)
+    }
+
+    func testPollGateForgetsKeysItHasNotSeenRecently() {
+        var gate = TypingPollGate()
+        XCTAssertEqual(gate.admit(key: "a", nowMs: t0), .read)
+        XCTAssertEqual(gate.admit(key: "b", nowMs: t0 + TypingPollGate.staleAfterMs + 1), .read)
+        XCTAssertEqual(gate.trackedKeyCount, 1, "the stale key is forgotten, so the map is bounded")
     }
 
     func testKeyFromAppInfoAndFocusedElement() {
@@ -2338,7 +2512,7 @@ final class TypingObserverTests: XCTestCase {
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `swift test --filter TypingObserverTests`
-Expected: compile FAIL — `FocusedFieldKey`, `TypingDiff` and `TypingObserver` do not exist.
+Expected: compile FAIL — `FocusedFieldKey`, `TypingDiff`, `TypingPollGate` and `TypingObserver` do not exist.
 
 - [ ] **Step 3: Implement the file**
 
@@ -2348,31 +2522,104 @@ Create `Sources/MaxMiCapture/TypingObserver.swift`:
 import Foundation
 import MaxMiCore
 
-/// Identity of one text field across captures.
+/// Identity of one text field across captures: bundle id + one window discriminator + role +
+/// identifier.
 ///
-/// `windowTitle` is deliberately dropped whenever `windowID` is known: the capture path resolves
-/// a title and the AX-notification path does not, and a key that disagreed between them would
-/// treat every notification as a first sighting and never emit anything. The title is only a
-/// fallback for apps that expose no window id.
+/// The window is ONE stored field, not a `windowID`/`windowTitle` pair, because there are two
+/// write paths (the capture path and the AX-notification path) and both must arrive at the same
+/// key or nothing is ever emitted. `AXReader.focusedWindowID(pid:)` returns nil for any focused
+/// window that exposes no `CGWindowID`, so the id alone is not enough and the title alone is not
+/// stable — the rule is "the id when there is one, otherwise the title". Both paths therefore pass
+/// the SAME `(windowID, windowTitle)` pair and let this initializer decide; neither path is allowed
+/// to pass `windowTitle: nil` as a shortcut.
 public struct FocusedFieldKey: Hashable, Sendable {
     public let bundleID: String
-    public let windowID: UInt32?
-    public let windowTitle: String?
+    /// `"id:<CGWindowID>"`, else `"title:<window title>"`, else nil. Prefixed so an app that names
+    /// a window `"7"` cannot collide with window id 7.
+    public let window: String?
     public let role: String
     public let identifier: String?
 
     public init(bundleID: String, windowID: UInt32?, windowTitle: String?,
                 role: String, identifier: String?) {
         self.bundleID = bundleID
-        self.windowID = windowID
-        self.windowTitle = windowID == nil ? windowTitle : nil
+        if let windowID {
+            self.window = "id:\(windowID)"
+        } else if let windowTitle, !windowTitle.isEmpty {
+            self.window = "title:\(windowTitle)"
+        } else {
+            self.window = nil
+        }
         self.role = role
         self.identifier = identifier
     }
 
+    /// `AppInfo` carries both inputs — `AppWiring` builds it with the AXReader window title and
+    /// `AXReader.focusedWindowID(pid:)` — so the capture path has nothing to resolve itself.
     public init(app: AppInfo, focused: FocusedElement) {
         self.init(bundleID: app.bundleID, windowID: app.windowID, windowTitle: app.windowTitle,
                   role: focused.role, identifier: focused.identifier)
+    }
+}
+
+/// Pre-read time gate for `kAXValueChangedNotification`, keyed per app.
+///
+/// `FocusObserver.onAXNotification` fires for EVERY notification the app-level `AXObserver`
+/// delivers, and it fires *ahead of* `FocusObserver`'s own capture debounce. Progress bars, clocks
+/// and live regions all emit value changes. Without this gate each one would run a full
+/// `AXReader.focusedElementSnapshot(pid:)` on the main actor — an `AXManualAccessibility` write, a
+/// `kAXFocusedUIElementAttribute` read and up to 64 node conversions, several AX round trips each.
+/// `TypingObserver.debounceMs` cannot help: it suppresses the emitted EVENT, and the read has
+/// already happened by then.
+///
+/// A value type driven entirely by an injected `nowMs`, so every branch is a unit test with no
+/// clock and no sleeping. `AppWiring` owns one on the main actor.
+public struct TypingPollGate: Sendable {
+    /// The same 800 ms as the emit debounce: a read that could not produce an event is wasted work.
+    public static let intervalMs: EpochMs = TypingObserver.debounceMs
+    /// A key unseen for this long is forgotten, so the map is bounded by *recently* active apps
+    /// rather than by every app ever focused.
+    public static let staleAfterMs: EpochMs = 60_000
+
+    public enum Decision: Equatable, Sendable {
+        /// Read now.
+        case read
+        /// Too soon. Read once after this delay — the burst is coalesced into a single TRAILING
+        /// read, so the last value of the burst is still seen rather than dropped.
+        case schedule(afterMs: EpochMs)
+        /// Too soon, and a trailing read for this key is already pending. Do nothing.
+        case alreadyScheduled
+    }
+
+    private var lastReadAtMs: [String: EpochMs] = [:]
+    private var pending: Set<String> = []
+
+    public init() {}
+
+    public var trackedKeyCount: Int { lastReadAtMs.count }
+
+    public mutating func admit(key: String, nowMs: EpochMs) -> Decision {
+        lastReadAtMs = lastReadAtMs.filter { nowMs - $0.value < Self.staleAfterMs }
+        guard let last = lastReadAtMs[key] else {
+            lastReadAtMs[key] = nowMs
+            return .read
+        }
+        let elapsed = nowMs - last
+        guard elapsed < Self.intervalMs else {
+            lastReadAtMs[key] = nowMs
+            pending.remove(key)
+            return .read
+        }
+        guard !pending.contains(key) else { return .alreadyScheduled }
+        pending.insert(key)
+        return .schedule(afterMs: Self.intervalMs - elapsed)
+    }
+
+    /// Called when a scheduled trailing read actually runs, so the window restarts from the read
+    /// rather than from the notification that asked for it.
+    public mutating func completeScheduled(key: String, nowMs: EpochMs) {
+        pending.remove(key)
+        lastReadAtMs[key] = nowMs
     }
 }
 
@@ -2524,7 +2771,7 @@ extension FocusedElement {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `swift test --filter TypingObserverTests`
-Expected: PASS, 21 tests.
+Expected: PASS, 27 tests.
 
 If `testNoEventTapAnywhereInSources` fails, something in `Sources/` already uses one of the banned APIs — do **not** relax the test. Report it: it is a spec violation that predates this plan.
 
@@ -2546,20 +2793,21 @@ Three deliverables that only make sense together: the observer needs an input, t
 - Create: `Tests/MaxMiCaptureTests/ComposerDraftTests.swift`
 - Create: `Tests/MaxMiCaptureTests/Fixtures/slack-composer-draft.json`
 - Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md` (one table row)
-- Modify: `Sources/MaxMiCapture/FocusObserver.swift:103` (add `onAXNotification`), `:279-292` (`handleAXNotification`)
-- Modify: `Sources/MaxMiCapture/GenericPageExtractor.swift:130-142` (mark the focused input's block)
+- Modify: `Sources/MaxMiCapture/FocusObserver.swift:103` (add `onAXNotification`), `:273-288` (`handleAXNotification`)
+- Modify: `Sources/MaxMiCapture/GenericPageExtractor.swift:131-133` (mark the focused input's block)
 - Modify: `Sources/MaxMiCapture/SlackParser.swift:12-23`
 - Modify: `Sources/MaxMiCapture/NativeConversationParser.swift:128-144`
 - Modify: `Sources/MaxMiCapture/WebAppCaptureParser.swift:63-90`
-- Modify: `Sources/MaxMi/AppWiring.swift` (`typingObserver` property, observer construction ~`:984-1006`, `finishCapture` event block, new `pollFocusedFieldTyping` + `recordTypingEvent`)
+- Modify: `Sources/MaxMi/AppWiring.swift` (`typingObserver` + `typingPollGate` + `typingThreadIDs` properties, observer construction ~`:983-1007`, `finishCapture` event block, new `handleValueChangeNotification` + `pollFocusedFieldTyping` + `recordTypingEvent`, and the `:1175-1176` shutdown)
 - Test: `Tests/MaxMiCaptureTests/GenericPageExtractorTests.swift` (extend)
 
 **Interfaces:**
-- Consumes: `TypingObserver`, `FocusedFieldKey(app:focused:)`, `FocusedElement(node:)` (Task 5); `Store.recordCaptureEvent(...)`, `CaptureEventKind.typing` (Task 2); `AXReader.focusedElementSnapshot(pid:) -> AXNode?`, `AXReader.focusedWindowID(pid:) -> UInt32?` (Phase A / Task 4); `AppWiring.isActivityEligible(bundleID:)`; `Message(id:sender:text:timestamp:timeString:isUser:isDraft:)`; `Block(type:text:authoredByUser:)`; `CaptureAccumulator.boundHard(_:to:)`; `GenericPageExtractor.menuRoles`, `.secureSubrole`, `.inputRoles`.
+- Consumes: `TypingObserver`, `TypingPollGate`, `FocusedFieldKey(app:focused:)`, `FocusedElement(node:)` (Task 5); `Store.recordCaptureEvent(kind:appBundle:threadID:versionID:trigger:payload:nowMs:)`, `CaptureEventKind.typing` (Task 2); `AXReader.focusedElementSnapshot(pid:) -> AXNode?`, `AXReader.focusedWindowID(pid:) -> UInt32?` (Phase A), `AXReader.focusedWindowTitle(pid:) -> String?` (Task 4), `GenericPageExtractor.listContainerRoles`; `AppWiring.isActivityEligible(bundleID:)`; `Message(id:sender:text:timestamp:timeString:isUser:isDraft:)`; `Block(type:text:authoredByUser:)`; `CaptureAccumulator.boundHard(_:to:)`; `GenericPageExtractor.menuRoles`, `.secureSubrole`, `.inputRoles`.
 - Produces:
   - `ComposerDraft.draft(window: AXNode) -> Message?` — the focused composer's value as a `Message(id: "draft:<identifier or role>", sender: "You", isUser: true, isDraft: true)`, or nil.
+  - `ComposerDraft.messageListContainerRoles: Set<String>` — `GenericPageExtractor.listContainerRoles` plus `"AXTable"`; the ancestor roles that disqualify a focused field from being the composer.
   - `FocusObserver.onAXNotification: (@MainActor (_ isValueChange: Bool, _ bundleID: String, _ pid: pid_t) -> Void)?`
-  - `AppWiring.pollFocusedFieldTyping(bundleID:pid:)` and `AppWiring.recordTypingEvent(app:focused:trigger:threadID:versionID:)` — both private.
+  - `AppWiring.handleValueChangeNotification(bundleID:pid:)`, `AppWiring.pollFocusedFieldTyping(bundleID:pid:)` and `AppWiring.recordTypingEvent(app:focused:trigger:threadID:versionID:)` — all private.
   - `Block.authoredByUser == true` on the block produced by the focused, non-secure input node.
 
 - [ ] **Step 1: Write the failing composer-draft and authorship tests**
@@ -2629,7 +2877,7 @@ Create `Tests/MaxMiCaptureTests/Fixtures/slack-composer-draft.json` — a Slack-
 Add to `Tests/MaxMiCaptureTests/Fixtures/README.md`'s table:
 
 ```
-| `slack-composer-draft.json` | Hand-authored Slack-shaped window at a nonzero origin with a focused composer and a focused text area inside a message row | `ComposerDraft` picking the composer, not the row |
+| `slack-composer-draft.json` | Hand-authored Slack-shaped window at a nonzero origin with a focused composer, plus a second focused text area inside the message `AXList` | `ComposerDraft` picking the composer, not the list descendant |
 ```
 
 Create `Tests/MaxMiCaptureTests/ComposerDraftTests.swift`:
@@ -2687,14 +2935,42 @@ final class ComposerDraftTests: XCTestCase {
         XCTAssertNil(ComposerDraft.draft(window: window))
     }
 
-    func testNoDraftForAFocusedFieldInsideARow() {
+    func testNoDraftForAFocusedFieldInsideAMessageListRow() {
         let window = node(role: "AXWindow", value: nil, children: [
-            node(role: "AXRow", value: nil, children: [
-                node(role: "AXTextArea", value: "an edited bubble", identifier: "bubble",
-                     focused: true),
+            node(role: "AXList", value: nil, identifier: "message-list", children: [
+                node(role: "AXRow", value: nil, children: [
+                    node(role: "AXTextArea", value: "an edited bubble", identifier: "bubble",
+                         focused: true),
+                ]),
             ]),
         ])
         XCTAssertNil(ComposerDraft.draft(window: window))
+    }
+
+    /// The case the old rows/cells rule missed. Spec 5c disqualifies any descendant of the
+    /// MESSAGE-LIST node, and plenty of chat surfaces parent an editable bubble directly to the
+    /// list with no row wrapper — Electron re-renders in particular. Under a rows/cells-only test
+    /// that field is read as the user's draft and attributed to `You`.
+    func testNoDraftForAFocusedFieldParentedDirectlyByTheMessageList() {
+        let window = node(role: "AXWindow", value: nil, children: [
+            node(role: "AXList", value: nil, identifier: "message-list", children: [
+                node(role: "AXTextArea", value: "somebody else's message, being edited",
+                     identifier: "bubble", focused: true),
+            ]),
+        ])
+        XCTAssertNil(ComposerDraft.draft(window: window))
+    }
+
+    /// A focused row OUTSIDE any list, table or outline is not a message list, so it is not
+    /// disqualified — the rule is about the container, not about rows.
+    func testAFocusedFieldInABareRowIsStillTheComposer() {
+        let window = node(role: "AXWindow", value: nil, children: [
+            node(role: "AXRow", value: nil, children: [
+                node(role: "AXTextArea", value: "typed into a toolbar row", identifier: "input",
+                     focused: true),
+            ]),
+        ])
+        XCTAssertEqual(ComposerDraft.draft(window: window)?.text, "typed into a toolbar row")
     }
 
     func testMenuSubtreesAreNotSearched() {
@@ -2772,7 +3048,7 @@ Append to `Tests/MaxMiCaptureTests/GenericPageExtractorTests.swift`:
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `swift test --filter "ComposerDraftTests|GenericPageExtractorTests/testFocused"`
-Expected: FAIL — `ComposerDraft` does not exist and no block is marked `authoredByUser`.
+Expected: compile FAIL — `ComposerDraft` does not exist and no block is marked `authoredByUser`.
 
 - [ ] **Step 3: Implement `ComposerDraft`**
 
@@ -2785,18 +3061,25 @@ import MaxMiCore
 /// The user's in-progress message in a chat composer, as a draft `Message`.
 ///
 /// Read from the focused text field only. A secure field is never read (Phase A nils its value at
-/// the source), and a focused field INSIDE a row, cell or list item is not the composer — it is a
+/// the source), and a focused field anywhere inside the MESSAGE LIST is not the composer — it is a
 /// bubble being edited or a virtualised list cell, and treating it as a draft would attribute
 /// somebody else's message to the user.
 ///
-/// Phase D's per-parser configs name the composer anchor explicitly; until then this is the
-/// generic rule the spec 5c describes: the focused text area or field that is not a descendant of
-/// the message list.
+/// The disqualifying test is the ancestor CONTAINER, not the row: spec 5c says "not a descendant of
+/// the message-list node", and a rows/cells-only test misses a field parented directly to the list
+/// (common in Electron re-renders) while wrongly disqualifying a toolbar field that happens to sit
+/// in a bare `AXRow`. `GenericPageExtractor.listContainerRoles` already names the container roles
+/// the text walk treats as lists, so it is reused rather than re-listed; `AXTable` is added because
+/// a table is a message list in the same sense an `AXList` is.
+///
+/// Phase D's per-parser configs name the composer anchor explicitly; until then this is the generic
+/// rule spec 5c describes.
 public enum ComposerDraft {
     static let composerRoles: Set<String> = ["AXTextArea", "AXTextField"]
-    static let messageListAncestorRoles: Set<String> = [
-        "AXRow", "AXTableRow", "AXListItem", "AXCell",
-    ]
+    /// Ancestor roles that mean "inside the message list", so a focused field below one of them is
+    /// history being edited rather than a draft being written.
+    static let messageListContainerRoles: Set<String> =
+        GenericPageExtractor.listContainerRoles.union(["AXTable"])
 
     public static func draft(window: AXNode) -> Message? {
         guard let field = focusedComposer(window, inMessageList: false) else { return nil }
@@ -2817,7 +3100,7 @@ public enum ComposerDraft {
     /// skips them: a Spotlight or menu search field is not this window's content.
     static func focusedComposer(_ node: AXNode, inMessageList: Bool) -> AXNode? {
         if GenericPageExtractor.menuRoles.contains(node.role) { return nil }
-        let inList = inMessageList || messageListAncestorRoles.contains(node.role)
+        let inList = inMessageList || messageListContainerRoles.contains(node.role)
         if node.focused, composerRoles.contains(node.role),
            node.subrole != GenericPageExtractor.secureSubrole, !inList {
             return node
@@ -2913,7 +3196,7 @@ with:
 - [ ] **Step 6: Run the capture tests to verify they pass**
 
 Run: `swift test --filter "ComposerDraftTests|GenericPageExtractorTests|SlackParserTests|StructuredConversationParserTests|WebAppStructuredTests|NativeConversationParserTests"`
-Expected: PASS. If a conversation-parser golden string now ends with an extra `(draft)` line, that fixture's window has a focused composer and the new line is correct — update the golden, do not remove the draft.
+Expected: PASS, including all 10 `ComposerDraftTests` and the 2 new `GenericPageExtractorTests`. If a conversation-parser golden string now ends with an extra `(draft)` line, that fixture's window has a focused composer and the new line is correct — update the golden, do not remove the draft.
 
 - [ ] **Step 7: Commit the composer draft and authorship**
 
@@ -2931,7 +3214,7 @@ git commit -m "Carry the focused composer into structured content as a draft mes
 
 - [ ] **Step 8: Expose the value-change notification from `FocusObserver`**
 
-`FocusObserver` already registers `kAXValueChangedNotification` (`:92`) and already classifies it (`:41-44`). It just never tells anyone. Add the hook next to `onFocusChanged`:
+`FocusObserver` already registers `kAXValueChangedNotification` (`:92`) and already classifies it (`CaptureNotificationClassifier.trigger`, `:37-44` — `:44` maps it to `.webContentChanged` for browsers, and the `guard isBrowser else { return .accessibilityChanged }` at `:37` covers everything else). It just never tells anyone. Add the hook next to `onFocusChanged`:
 
 ```swift
     public var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?
@@ -2973,6 +3256,15 @@ Add the property next to `var observer: FocusObserver?`:
     /// Focused-field typing. Nothing is persisted inside it; the LRU is in-actor memory and is
     /// gone on quit (spec 5c).
     var typingObserver: TypingObserver?
+    /// Gates the AX READ, per app, before it happens. `onAXNotification` fires ahead of
+    /// `FocusObserver`'s capture debounce and for every value change any element publishes, so
+    /// without this a progress bar would buy a main-actor AX round trip per tick.
+    var typingPollGate = TypingPollGate()
+    /// Thread id of the last capture that produced a typing event for a given field, so a value
+    /// change arriving BETWEEN captures is still attributable to a thread. In-memory only, bounded
+    /// to `TypingObserver.maxTrackedFields` entries, cleared on shutdown.
+    var typingThreadIDs: [FocusedFieldKey: String] = [:]
+    var typingThreadIDOrder: [FocusedFieldKey] = []
 ```
 
 In `start()`, after `observer.onFocusChanged = { ... }` and before `observer.start()`:
@@ -2987,17 +3279,38 @@ In `start()`, after `observer.onFocusChanged = { ... }` and before `observer.sta
         typingObserver = TypingObserver(isEligible: { !Denylist.isSensitiveApp($0) })
         observer.onAXNotification = { [weak self] isValueChange, bundleID, pid in
             guard isValueChange else { return }
-            self?.pollFocusedFieldTyping(bundleID: bundleID, pid: pid)
+            self?.handleValueChangeNotification(bundleID: bundleID, pid: pid)
         }
         observer.start()
 ```
 
-Add the two methods next to `recordCaptureEvents`:
+Add the four methods next to `recordCaptureEvents`:
 
 ```swift
+    /// Decides whether this value change is allowed to cost an AX read, BEFORE taking one.
+    ///
+    /// A burst is coalesced into one trailing read rather than dropped, so the last value of the
+    /// burst is still seen — which is the value the user finished typing.
+    private func handleValueChangeNotification(bundleID: String, pid: pid_t) {
+        switch typingPollGate.admit(key: bundleID, nowMs: epochNowMs()) {
+        case .read:
+            pollFocusedFieldTyping(bundleID: bundleID, pid: pid)
+        case .alreadyScheduled:
+            return
+        case .schedule(let afterMs):
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(afterMs))
+                guard let self else { return }
+                self.typingPollGate.completeScheduled(key: bundleID, nowMs: epochNowMs())
+                self.pollFocusedFieldTyping(bundleID: bundleID, pid: pid)
+            }
+        }
+    }
+
     /// The focused field changed value without a capture running. `focusedElementSnapshot` wakes
     /// `AXManualAccessibility` itself, so this works for Electron apps that expose nothing until
-    /// an assistive client asks.
+    /// an assistive client asks. Never called directly from the notification —
+    /// `handleValueChangeNotification` gates it first.
     private func pollFocusedFieldTyping(bundleID: String, pid: pid_t) {
         guard !isShuttingDown, !isLifecycleSuspended,
               isActivityEligible(bundleID: bundleID),
@@ -3005,7 +3318,13 @@ Add the two methods next to `recordCaptureEvents`:
         let app = AppInfo(
             bundleID: bundleID,
             name: NSWorkspace.shared.frontmostApplication?.localizedName ?? bundleID,
-            windowTitle: nil,
+            // BOTH window inputs, exactly as the capture path supplies them.
+            // `AXReader.focusedWindowID(pid:)` returns nil for a window with no CGWindowID, and
+            // `FocusedFieldKey` then falls back to the title — so passing `windowTitle: nil` here
+            // would mint a DIFFERENT key from the capture path for the same field, make every
+            // notification a first sighting, and emit nothing for that app forever. Both calls
+            // read `kAXTitleAttribute` of the same focused window, so the titles agree.
+            windowTitle: AXReader.focusedWindowTitle(pid: pid),
             windowID: AXReader.focusedWindowID(pid: pid)
         )
         recordTypingEvent(app: app, focused: FocusedElement(node: node),
@@ -3013,7 +3332,8 @@ Add the two methods next to `recordCaptureEvents`:
     }
 
     /// One `typing` event, if the observer decides the value change was meaningful. The observer
-    /// owns the debounce, the diff and the secure-field refusal; this method owns the DB write.
+    /// owns the emit debounce, the diff and the secure-field refusal; this method owns the thread
+    /// attribution and the DB write.
     private func recordTypingEvent(
         app: AppInfo,
         focused: FocusedElement,
@@ -3023,14 +3343,20 @@ Add the two methods next to `recordCaptureEvents`:
     ) {
         guard let typingObserver, !focused.isSecure else { return }
         let key = FocusedFieldKey(app: app, focused: focused)
+        // The capture path knows the thread; the poll path does not, because no capture ran. Reuse
+        // the thread the last capture of this SAME field established, so typing between captures is
+        // still attributable. nil until there has been such a capture, which is one of the reasons
+        // capture_events.thread_id is nullable (spec 12 Q4).
+        if let threadID { rememberTypingThreadID(threadID, for: key) }
+        let resolvedThreadID = threadID ?? typingThreadIDs[key]
         let nowMs = epochNowMs()
         Task { @MainActor [weak self] in
             guard let event = await typingObserver.observe(focused, key: key, nowMs: nowMs),
                   let self else { return }
             do {
                 try self.store.recordCaptureEvent(
-                    kind: .typing, threadID: threadID, versionID: versionID, trigger: trigger,
-                    payload: event, nowMs: nowMs
+                    kind: .typing, appBundle: app.bundleID, threadID: resolvedThreadID,
+                    versionID: versionID, trigger: trigger, payload: event, nowMs: nowMs
                 )
             } catch {
                 SafeLogger.shared.log(
@@ -3039,9 +3365,31 @@ Add the two methods next to `recordCaptureEvents`:
             }
         }
     }
+
+    /// Most-recently-used last, bounded to the same 32 fields the observer tracks — the two maps
+    /// are keyed identically, so neither can outgrow the other.
+    private func rememberTypingThreadID(_ threadID: String, for key: FocusedFieldKey) {
+        typingThreadIDOrder.removeAll { $0 == key }
+        typingThreadIDOrder.append(key)
+        typingThreadIDs[key] = threadID
+        while typingThreadIDOrder.count > TypingObserver.maxTrackedFields {
+            typingThreadIDs[typingThreadIDOrder.removeFirst()] = nil
+        }
+    }
 ```
 
-In the shutdown path (`Sources/MaxMi/AppWiring.swift:1175-1176`, `observer?.stop()` then `observer = nil`), add `typingObserver = nil` immediately after `observer = nil` so no tracked field values outlive the process's capture lifecycle. Leave the lifecycle-suspend path (`:1144`) alone: a suspend is temporary and re-establishing every baseline on resume would report the whole field as freshly typed.
+In the shutdown path (`Sources/MaxMi/AppWiring.swift:1175-1176`, `observer?.stop()` then `observer = nil`), add these three lines immediately after `observer = nil`, so no tracked field values or thread ids outlive the process's capture lifecycle:
+
+```swift
+        typingObserver = nil
+        typingThreadIDs.removeAll()
+        typingThreadIDOrder.removeAll()
+```
+
+`typingPollGate` needs no reset: it holds only timestamps, and its own `staleAfterMs` prune makes a
+stale entry indistinguishable from an absent one. Leave the lifecycle-suspend path (`:1144`) alone:
+a suspend is temporary and re-establishing every baseline on resume would report the whole field as
+freshly typed.
 
 - [ ] **Step 10: Feed the capture path's focused element to the observer**
 
@@ -3052,9 +3400,9 @@ In `finishCapture`, extend the committed-capture block from Task 4:
                 let eventThreadID = (try? store.threadID(sourceApp: parsed.sourceApp,
                                                          sourceKey: cleanKey)) ?? nil
                 recordCaptureEvents(
-                    app: appInfo, threadID: eventThreadID, versionID: versionID, result: result,
-                    delta: delta, trigger: trigger, browserURL: browserURL,
-                    previousURL: previousURL, nowMs: nowMs
+                    app: appInfo, eligible: eligible, threadID: eventThreadID,
+                    versionID: versionID, result: result, delta: delta, trigger: trigger,
+                    browserURL: browserURL, previousURL: previousURL, nowMs: nowMs
                 )
                 // The capture's own focused element is the primary source: it was resolved from
                 // the tree we already walked. `focusedElementSnapshot` is the fallback for the
@@ -3072,7 +3420,14 @@ In `finishCapture`, extend the committed-capture block from Task 4:
             }
 ```
 
-`appInfo` already carries the authoritative window title and `AXReader.focusedWindowID(pid:)`, so the key built here matches the one `pollFocusedFieldTyping` builds (both have a window id, and `FocusedFieldKey.init` drops the title when an id is present).
+`appInfo` (`AppWiring.swift:1436-1438`) carries **both** window inputs — the authoritative
+`AXReader` window title and `AXReader.focusedWindowID(pid:)` — and `pollFocusedFieldTyping` now
+resolves both as well, so the two paths build the same `FocusedFieldKey` whether or not the app
+exposes a `CGWindowID`. Do not "simplify" either call site to pass only one of the two: with a
+window id the title is ignored, and without one the title is the only discriminator there is.
+
+`recordTypingEvent` is also what remembers the thread id for this field, so a later poll-path event
+on the same field is attributed to the same thread instead of writing `thread_id IS NULL`.
 
 - [ ] **Step 11: Build and run the suite**
 
@@ -3097,7 +3452,7 @@ Phase A trims a region by dropping blocks from the END, which keeps the top of t
 
 **Files:**
 - Modify: `Sources/MaxMiCapture/GenericPageExtractor.swift:78-102` (`extract`)
-- Modify: `Sources/MaxMiCapture/GenericPageExtractor+Budgets.swift:22-77` (`applyBudgets`) and add `anchorIndex`/`trimAnchored`
+- Modify: `Sources/MaxMiCapture/GenericPageExtractor+Budgets.swift:25-78` (`applyBudgets`; the `.main` trim is `:61`) and add `anchorIndex`/`trimAnchored`
 - Test: `Tests/MaxMiCaptureTests/GenericPageBudgetTests.swift` (extend)
 
 **Interfaces:**
@@ -3342,10 +3697,23 @@ Append the two helpers to the same extension:
 - [ ] **Step 5: Run the budget tests to verify they pass**
 
 Run: `swift test --filter GenericPageBudgetTests`
-Expected: PASS, including every pre-existing test in the file (they pass no `anchorText`, and their fixtures have no focused field inside `.main`).
+Expected: PASS, 9 new tests plus every pre-existing test in the file (they pass no `anchorText`, and their fixtures have no focused field inside `.main`).
 
 Run: `swift test --filter "GenericPage|GenericV2|GenericAX"`
 Expected: PASS.
+
+Anchored `.main` trimming is **not** confined to the native path: `WebAppCaptureParser` calls
+`GenericPageExtractor.extract` for the browser `.generic` branch (`WebAppCaptureParser.swift:92-97`),
+so a browser page with a focused field now keeps a different slice of `.main` than it did before.
+The filters above do not touch a single browser test, so run them explicitly rather than discovering
+the breakage in Task 10:
+
+Run: `swift test --filter "WebAppStructuredTests|BrowserCapturePipelineTests"`
+Expected: PASS. If a browser golden string changes, read the fixture: a focused field inside `.main`
+means the new slice is the correct one and the golden is what should move. A change in a fixture with
+**no** focused field is a bug in `anchorIndex` — `trimAnchored` with a nil anchor must be
+byte-identical to `trim`, which `testTrimAnchoredWithoutAnAnchorIsExactlyTheOldTopOfPageBehaviour`
+asserts directly.
 
 - [ ] **Step 6: Run the perf bound**
 
@@ -3382,11 +3750,12 @@ git commit -m "Anchor main-region trimming to the focused block"
   - `TimelineThreadMeta(sourceApp:sourceTitle:kind:url:cwd:)` — `Sendable, Equatable`.
   - `protocol TimelineRepository: Sendable` with `appVisits(fromMs:toMs:) throws -> [(bundleID: String, appLabel: String, startedAt: EpochMs, endedAt: EpochMs?)]`, `captureEvents(fromMs:toMs:) throws -> [TimelineRawEvent]`, `threadMetadata(threadIDs: [String]) throws -> [String: TimelineThreadMeta]`.
   - `TimelineBuilder(repo: any TimelineRepository)`, `build(fromMs:toMs:) throws -> ActivityTimeline`, `static render(_ timeline: ActivityTimeline, budgetChars: Int) -> String`.
+  - Internal (not part of the public surface, and no later task references it): `TimelineBuilder.BuiltEntry(bundleID: String, entry: TimelineEntry)`, `static coalesce(_ built: [BuiltEntry]) -> [TimelineEntry]`, `static mergeable(_ lhs: BuiltEntry, _ rhs: BuiltEntry) -> Bool`.
   - `TimelineBuilder.deltaSummaryCap = 200`, `.typedSampleCap = 120`, `.urlCap = 60`, `.omissionLine = "(earlier activity omitted)"`.
 
 **Decisions this task pins (so nothing downstream has to guess):**
 - A visit with **no** events is still emitted: the app was focused, which is activity. Its `kind` is `.generic`, its `threadID` is nil.
-- An entry's `threadID` is the thread of the **first** attached event that has one; entries are coalesced with the next one when the `threadID`s are equal, or — when both are nil — when the `appLabel`s are equal. `appLabel` stands in for the bundle id because `activity_app_visits` stores them 1:1 and `TimelineEntry`'s shape is pinned by the spec.
+- An entry's `threadID` is the thread of the **first** attached event that has one; entries are coalesced with the next one when the `threadID`s are equal, or — when both are nil — when the **`bundleID`s** are equal (spec §5d). `appLabel` is NOT the coalescing key: two bundles can share one display name (Chrome and Chrome Beta, two Electron builds of the same product) and merging them would report one stretch of activity that never happened. `TimelineEntry`'s field list is pinned by the spec and has no `bundleID`, so the bundle id rides on an internal `BuiltEntry` that `build` pairs with each entry and `coalesce` consumes; it never reaches the public type.
 - `endMs` for an open visit (`endedAt == nil`) is the window's `toMs`.
 - `render` drops whole entries **oldest first** and prepends `omissionLine` when anything was dropped. It never drops the last remaining entry, mirroring Phase A's never-return-empty rule for budgeting.
 - Unit words are fixed plurals — `msgs`, `paragraphs`, `segments`, `rows` — so a rendered line is byte-stable and no pluralisation logic can drift.
@@ -3563,6 +3932,21 @@ final class TimelineBuilderTests: XCTestCase {
         let entries = try TimelineBuilder(repo: repo).build(fromMs: t0, toMs: t0 + 600_000).entries
         XCTAssertEqual(entries.count, 1)
         XCTAssertEqual(entries.first?.endMs, t0 + 200_000)
+    }
+
+    /// Spec 5d coalesces threadless entries by BUNDLE ID, not by display name. Two bundles that
+    /// present the same name — a release and a beta channel, two Electron builds of one product —
+    /// are two apps, and merging them would invent a stretch of activity that never happened.
+    func testThreadlessVisitsOfDifferentBundlesWithTheSameLabelDoNotCoalesce() throws {
+        let repo = StubTimelineRepository(visits: [
+            (bundleID: "com.example.browser", appLabel: "Browser",
+             startedAt: t0, endedAt: t0 + 100_000),
+            (bundleID: "com.example.browser.beta", appLabel: "Browser",
+             startedAt: t0 + 100_001, endedAt: t0 + 200_000),
+        ])
+        let entries = try TimelineBuilder(repo: repo).build(fromMs: t0, toMs: t0 + 600_000).entries
+        XCTAssertEqual(entries.count, 2, "one display name, two bundles, two entries")
+        XCTAssertEqual(entries.map(\.startMs), [t0, t0 + 100_001])
     }
 
     func testDifferentThreadsInTheSameAppDoNotCoalesce() throws {
@@ -3899,16 +4283,27 @@ public struct TimelineBuilder: Sendable {
         let metadata = try repo.threadMetadata(
             threadIDs: Array(Set(events.compactMap(\.threadID))).sorted())
 
-        let raw = visits.map { visit -> TimelineEntry in
+        let raw = visits.map { visit -> BuiltEntry in
             // An open visit runs to the end of the window, not to "now": a timeline must not
             // depend on when it was rendered.
             let endMs = visit.endedAt ?? toMs
-            return Self.entry(
-                appLabel: visit.appLabel, startMs: visit.startedAt, endMs: endMs,
-                events: events.filter { $0.atMs >= visit.startedAt && $0.atMs <= endMs },
-                metadata: metadata)
+            return BuiltEntry(
+                bundleID: visit.bundleID,
+                entry: Self.entry(
+                    appLabel: visit.appLabel, startMs: visit.startedAt, endMs: endMs,
+                    events: events.filter { $0.atMs >= visit.startedAt && $0.atMs <= endMs },
+                    metadata: metadata))
         }
         return ActivityTimeline(fromMs: fromMs, toMs: toMs, entries: Self.coalesce(raw))
+    }
+
+    /// A built entry plus the bundle id it came from. `TimelineEntry`'s field list is pinned by
+    /// spec 5d and carries no bundle id, but coalescing needs one (spec 5d again: threadless
+    /// entries merge on the bundle, not on the display name), so it rides alongside and is dropped
+    /// as soon as coalescing is done.
+    struct BuiltEntry: Equatable {
+        let bundleID: String
+        let entry: TimelineEntry
     }
 
     static func entry(appLabel: String, startMs: EpochMs, endMs: EpochMs,
@@ -3960,27 +4355,34 @@ public struct TimelineBuilder: Sendable {
         return String(flattened.prefix(deltaSummaryCap))
     }
 
-    static func coalesce(_ entries: [TimelineEntry]) -> [TimelineEntry] {
-        var out: [TimelineEntry] = []
-        for entry in entries {
-            guard let previous = out.last, mergeable(previous, entry) else {
-                out.append(entry)
+    static func coalesce(_ built: [BuiltEntry]) -> [TimelineEntry] {
+        var out: [BuiltEntry] = []
+        for candidate in built {
+            guard let previous = out.last, mergeable(previous, candidate) else {
+                out.append(candidate)
                 continue
             }
-            out[out.count - 1] = merge(previous, entry)
+            // The bundle id of a merged pair is the same on both sides — `mergeable` only merges a
+            // threadless pair when they match, and a threaded pair is the same thread, hence the
+            // same app.
+            out[out.count - 1] = BuiltEntry(bundleID: candidate.bundleID,
+                                            entry: merge(previous.entry, candidate.entry))
         }
-        return out
+        return out.map(\.entry)
     }
 
-    /// Same thread, or — when NEITHER has a thread — the same app. A threadless entry never
+    /// Same thread, or — when NEITHER has a thread — the same BUNDLE. A threadless entry never
     /// absorbs a threaded one: "the user was in the editor" and "the user edited this document"
     /// are different facts.
     ///
-    /// `appLabel` stands in for the bundle id because `activity_app_visits` stores them 1:1 and
-    /// `TimelineEntry`'s field list is pinned by the spec.
-    static func mergeable(_ lhs: TimelineEntry, _ rhs: TimelineEntry) -> Bool {
-        if let left = lhs.threadID, let right = rhs.threadID { return left == right }
-        if lhs.threadID == nil, rhs.threadID == nil { return lhs.appLabel == rhs.appLabel }
+    /// The bundle id, not `appLabel`: `activity_app_visits` stores the pair per visit, not 1:1
+    /// across apps, so two bundles can present one display name and must stay two entries
+    /// (spec 5d).
+    static func mergeable(_ lhs: BuiltEntry, _ rhs: BuiltEntry) -> Bool {
+        if let left = lhs.entry.threadID, let right = rhs.entry.threadID { return left == right }
+        if lhs.entry.threadID == nil, rhs.entry.threadID == nil {
+            return lhs.bundleID == rhs.bundleID
+        }
         return false
     }
 
@@ -4080,7 +4482,7 @@ public struct TimelineBuilder: Sendable {
 - [ ] **Step 4: Run the timeline tests to verify they pass**
 
 Run: `swift test --filter TimelineBuilderTests`
-Expected: PASS, 20 tests.
+Expected: PASS, 21 tests.
 
 If `testRenderedTerminalLineNamesTheKindAndCwd` fails on the dash, check the separator character: the template uses an EN DASH (`–`, U+2013) between the two times, matching the spec's example line, not a hyphen.
 
@@ -4124,17 +4526,15 @@ Append to `Tests/MaxMiStoreTests/ActivityStoreTests.swift`, inside the existing 
 
 ```swift
     func testAppVisitsInWindowIncludeOverlapsAndOpenVisits() throws {
-        let closedBefore = try store.openVisit(appBundle: "a", appLabel: "Before", nowMs: t0 - 100_000)
-        _ = closedBefore
+        _ = try store.openVisit(appBundle: "a", appLabel: "Before", nowMs: t0 - 100_000)
         try store.closeOpenVisits(nowMs: t0 - 90_000)
         let spanning = try store.openVisit(appBundle: "b", appLabel: "Spanning", nowMs: t0 - 10_000)
-        _ = spanning
         try store.closeOpenVisits(nowMs: t0 + 10_000)
         let open = try store.openVisit(appBundle: "c", appLabel: "Open", nowMs: t0 + 20_000)
-        _ = open
 
         let visits = try store.appVisits(fromMs: t0, toMs: t0 + 60_000)
         XCTAssertEqual(visits.map(\.appLabel), ["Spanning", "Open"])
+        XCTAssertEqual(visits.map(\.id), [spanning, open], "ids, not just labels")
         XCTAssertNil(visits.last?.endedAtMs)
         XCTAssertEqual(visits.first?.appBundle, "b")
     }
@@ -4355,7 +4755,7 @@ struct StoreTimelineRepository: TimelineRepository, @unchecked Sendable {
 - [ ] **Step 7: Build and run the suite**
 
 Run: `swift build 2>&1 | grep -E "error:|warning:"`
-Expected: no output. `StoreTimelineRepository` has no production caller yet — Phase C's prompt rewiring is what consumes the timeline (§6b/§6d) — so the compiler may warn that `store` is unused if the methods were mistyped. Nothing else in this plan constructs it; that is deliberate and is stated in Task 10's live checklist.
+Expected: no output. `StoreTimelineRepository` has no production caller yet — Phase C's prompt rewiring is what consumes the timeline (§6b/§6d) — and Swift emits **no** warning for an unconstructed internal type or an unread stored property, so silence here is not evidence that the adapter works. What proves it is that it compiles against `TimelineRepository`: a missing or mistyped method is a conformance **error**, not a warning. Nothing else in this plan constructs it; that is deliberate and is stated in Task 10's live checklist.
 
 Run: `swift test 2>&1 | tail -20`
 Expected: exactly the 3 known-red failures.
@@ -4384,13 +4784,46 @@ Phase B's write sites live in `AppWiring`, which has no unit-test target in `Pac
 
 - [ ] **Step 1: Run the full suite in debug**
 
-Run: `swift test 2>&1 | tail -40`
+Run the suite once and keep the output, so the count check below reads the same run:
+
+```bash
+swift test 2>&1 | tee /tmp/m8b-suite.txt | tail -40
+```
+
 Expected: exactly 3 failures, and they are:
 - `ActivityStoreTests.testNewSourceActivitySummaryWaitsForCloudReview`
 - `CaptureDisplaySummarizerTests.testConversationSummaryUsesTrailingMessages`
 - `PauseSettingsTests.testNewSourceIsHeldFromCloudUntilReviewed`
 
-Record the executed-test count. The baseline was 689; this plan adds roughly 80 (10 delta signals, 6 migration, 14 event store, 4 data controls + copy, 21 typing, 8 composer draft, 2 authorship, 9 budget, 20 timeline, 5 store reads). A count materially below that means a test file was not added to a target that compiles it — `Tests/MaxMiTests/` is **not** in `Package.swift` and nothing must be placed there.
+For reference the executed count should be about **805**: 689 baseline, plus 117 added
+(11 `CaptureDeltaSignalsTests` + 1 `GenericV2ParserTests`; 6 `MigrationV11Tests`;
+12 `CaptureEventStoreTests` in Task 2 and 9 more in Task 4; 3 `MemoryDataControlsTests` +
+1 `CapturePrivacyCopyTests`; 27 `TypingObserverTests`; 10 `ComposerDraftTests` +
+2 `GenericPageExtractorTests`; 9 `GenericPageBudgetTests`; 21 `TimelineBuilderTests`;
+3 `ActivityStoreTests` + 2 `LatestContextStoreTests`), minus 1 removed
+(`MigrationV10Tests.testCurrentIdentifierIsV10`, Task 2 Step 5).
+
+**That total is information, not a gate.** A whole-suite count drifts with every unrelated commit and
+cannot tell you *which* file went missing. The check that actually catches the failure it is meant to
+catch — a new test file that never got compiled into a target — counts per class. XCTest prints one
+`Test Case '-[<Module>.<Class> <method>]' passed` line per test, so:
+
+```bash
+for c in CaptureDeltaSignalsTests:11 MigrationV11Tests:6 CaptureEventStoreTests:21 \
+         CapturePrivacyCopyTests:1 TypingObserverTests:27 ComposerDraftTests:10 \
+         GenericPageBudgetTests:9 TimelineBuilderTests:21; do
+  name=${c%%:*}; want=${c##*:}
+  got=$(grep -c "\.${name} " /tmp/m8b-suite.txt)
+  # Each test prints a "started" and a "passed"/"failed" line, so the raw count is doubled.
+  got=$(( got / 2 ))
+  [ "$got" -ge "$want" ] && echo "ok   $name $got" || echo "SHORT $name $got, wanted $want"
+done
+```
+
+Expected: eight `ok` lines. `SHORT <name> 0` means that file is not in a target `Package.swift`
+compiles — `Tests/MaxMiTests/` is **not** a target and nothing may be placed there.
+`GenericPageBudgetTests` is a pre-existing class that only gained tests, so its number is a floor
+rather than an equality — which is why the comparison is `-ge`.
 
 - [ ] **Step 2: Confirm zero warnings**
 
@@ -4404,16 +4837,26 @@ Expected: PASS. Task 7 added one `firstIndex` scan over the `.main` region per e
 
 - [ ] **Step 4: Rebuild the app bundle**
 
+Build the **worktree**, not `/Users/mafex/code/personal/MaxMi`, which is a different checkout on
+branch `main` and does not contain any of this work:
+
 ```bash
-cd /Users/mafex/code/personal/MaxMi
+cd /Users/mafex/code/personal/MaxMi/.worktrees/m8b-deltas-events-typing
+git rev-parse --abbrev-ref HEAD   # must print m8b-deltas-events-typing
 ./packaging/make-app.sh
 pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi" || true
 sleep 2
 open MaxMi.app
-date '+%H:%M:%S'
+START_MS=$(( $(date +%s) * 1000 ))
+echo "START_MS=$START_MS  ($(date '+%H:%M:%S'))"
 ```
 
-**No `tccutil reset`.** Signed builds keep the Accessibility grant across rebuilds; resetting it would force a re-grant for no reason. Record the timestamp printed by `date` — every live check below must only trust rows whose time is strictly after it.
+**No `tccutil reset`.** Signed builds keep the Accessibility grant across rebuilds; resetting it
+would force a re-grant for no reason.
+
+Record `START_MS`. `capture_events.at_ms` is epoch **milliseconds**, so `HH:MM:SS` is not a value any
+query below can use — every live check must compare against `START_MS` and trust only rows strictly
+after it. Keep the shell open so `$START_MS` stays in scope, or write it down.
 
 Confirm the new process:
 
@@ -4441,11 +4884,25 @@ Also confirm `hour_bucket` and `payload_ciphertext` look right:
 
 ```bash
 sqlite3 "file:$HOME/Library/Application Support/MaxMi/maxmi.db?mode=ro" \
-  "SELECT kind, at_ms, thread_id IS NULL AS no_thread, substr(payload_ciphertext,1,7)
+  "SELECT kind, at_ms, app_bundle, thread_id IS NULL AS no_thread,
+          substr(payload_ciphertext,1,7)
    FROM capture_events ORDER BY at_ms DESC LIMIT 10;"
 ```
 
-Expected: every `payload_ciphertext` starts with `enc:v1:`, and `no_thread` is `1` only for `focus` rows.
+Expected: every `payload_ciphertext` starts with `enc:v1:`, and every row has a non-null
+`app_bundle`.
+
+`no_thread` is `1` for **`focus` rows and for early `typing` rows**, not for `focus` alone: a `focus`
+event fires before any thread exists for that window (spec §12 Q4), and a poll-path `typing` event
+has no capture behind it, so it carries a thread only once a capture of that same field has committed
+and `recordTypingEvent` has remembered its thread id (Task 6 Step 9). So the shape to expect is:
+
+- `focus` — always `no_thread = 1`
+- `typing` — `1` for the first value changes in a field, then `0` once that field has been captured
+- `content_delta`, `dialog`, `navigation` — always `0`; these only exist for a committed capture
+
+A `content_delta` row with `no_thread = 1` is a real bug: `Store.threadID(sourceApp:sourceKey:)`
+returned nil for a thread that was just committed.
 
 - [ ] **Step 6: Confirm typing reaches structured content**
 
@@ -4453,10 +4910,18 @@ Open Slack (or WhatsApp), type a short invented sentence into the composer, and 
 
 ```bash
 sqlite3 "file:$HOME/Library/Application Support/MaxMi/maxmi.db?mode=ro" \
-  "SELECT count(*) FROM capture_events WHERE kind='typing' AND at_ms > <recorded-start-ms>;"
+  "SELECT count(*) FROM capture_events WHERE kind='typing' AND at_ms > $START_MS;"
 ```
 
-Expected: at least one row, and materially fewer rows than characters typed — the 800 ms per-key debounce is what makes that true. A row per keystroke means the debounce is not being applied.
+Expected: at least one row, and materially fewer rows than characters typed. Two 800 ms gates make
+that true and they fail differently, so distinguish them if the count looks wrong:
+
+- `TypingPollGate` (Task 5) caps how often an AX **read** happens, per app.
+- `TypingObserver.debounceMs` caps how often an **event** is emitted, per field.
+
+A row per keystroke means the emit debounce is not being applied. A visible main-thread stall or fan
+spin while an unrelated app animates a progress bar means the poll gate is not — check that
+`onAXNotification` calls `handleValueChangeNotification` and not `pollFocusedFieldTyping` directly.
 
 Then read the capture itself through MCP `get_latest_context` for that thread and confirm the rendered content ends with a draft line:
 
@@ -4488,14 +4953,48 @@ Open MaxMi's Privacy settings and confirm the retention card reads "Activity eve
 
 - [ ] **Step 9: Confirm nothing is recorded for an excluded app**
 
-In Activity privacy settings, exclude one app that is currently being captured. Focus it, type in it, then:
+This is exit criterion 4's second half — "nothing is written for a denylisted, excluded, or
+non-consented app" — and the plaintext `app_bundle` column exists so that it is a query rather than a
+guess. Before the column, the only app identifier in a row was inside the encrypted `focus` payload
+and a bare `count(*)` could not attribute anything.
+
+Pick an app that is currently being captured, note its bundle id, and record the moment you exclude it:
+
+```bash
+BUNDLE="com.tinyspeck.slackmacgap"   # whichever app you are about to exclude
+sqlite3 "file:$HOME/Library/Application Support/MaxMi/maxmi.db?mode=ro" \
+  "SELECT count(*) FROM capture_events WHERE app_bundle='$BUNDLE';"
+```
+
+Expected: a non-zero count — the app is being recorded right now, which is what makes the next step
+meaningful. Now exclude it in Activity privacy settings, and record the cutoff:
+
+```bash
+EXCLUDED_MS=$(( $(date +%s) * 1000 ))
+echo "EXCLUDED_MS=$EXCLUDED_MS"
+```
+
+Focus that app, type a sentence in it, switch away and back so a capture is attempted, wait 60 s, then:
 
 ```bash
 sqlite3 "file:$HOME/Library/Application Support/MaxMi/maxmi.db?mode=ro" \
-  "SELECT count(*) FROM capture_events WHERE at_ms > <timestamp-of-the-exclusion>;"
+  "SELECT kind, count(*) FROM capture_events
+   WHERE app_bundle='$BUNDLE' AND at_ms > $EXCLUDED_MS GROUP BY kind;"
 ```
 
-Expected: no new rows attributable to that app. This is exit criterion 4's second half ("nothing is written for a denylisted, excluded, or non-consented app") and it exercises `isActivityEligible` on the real path.
+Expected: **no rows at all.** Any row here is `isActivityEligible` failing on the real path — either a
+write site that does not call it, or `recordCaptureEvents` re-deriving it instead of using the
+`eligible` it was handed.
+
+Then confirm the rest of the world kept working, so the gate is not simply off for everyone:
+
+```bash
+sqlite3 "file:$HOME/Library/Application Support/MaxMi/maxmi.db?mode=ro" \
+  "SELECT app_bundle, count(*) FROM capture_events
+   WHERE at_ms > $EXCLUDED_MS GROUP BY app_bundle ORDER BY 2 DESC;"
+```
+
+Expected: rows for other apps, and the excluded bundle absent from the list.
 
 - [ ] **Step 10: Confirm no event tap shipped**
 
@@ -4511,6 +5010,7 @@ If Steps 5–10 all pass, Phase B is done. Note in the SDD progress ledger:
 - the process start time used for verification
 - the per-kind event counts observed
 - the typing-row count versus characters typed (the debounce evidence)
+- the excluded bundle id, its `EXCLUDED_MS`, and the empty result that proves criterion 4
 - that `StoreTimelineRepository` has no production caller yet, by design: Phase C (§6b, §6d) is what feeds the timeline into `DisplaySummarizer` and `HourlyAgent`
 
 If any step fails, fix it, re-run Step 1, rebuild, and re-verify the failing step only. Commit each fix on its own:
@@ -4531,6 +5031,6 @@ Stated so a reviewer does not read these as gaps.
 - **No new MCP surface.** `search_memory`, `list_active_threads`, `get_latest_context` and `meeting_memory` keep their request and response shapes. `capture_events` is not exposed over MCP in M8.
 - **No raw-content embedding.** §12 Q15 settled facts-only embedding for M8; Phase B adds no `vec0` table. Phase C's `context_embeddings` migration takes `v12`.
 - **No reminder slots.** §12 Q9 dropped the slot legend from M8 entirely; it arrives with M9's todo panel, which adds the columns and the legend together.
-- **Per-parser composer anchors stay generic.** §5c names Phase D's per-parser configs as the eventual source of the composer anchor. Task 6 implements the generic rule (the focused text field that is not inside a row, cell or list item), which is what §5c specifies for the generic path.
+- **Per-parser composer anchors stay generic.** §5c names Phase D's per-parser configs as the eventual source of the composer anchor. Task 6 implements the generic rule (the focused text field with no `AXList`/`AXOutline`/`AXTable` ancestor), which is what §5c specifies for the generic path.
 - **Group-chat sender attribution is still incomplete.** Inherited from Phase A Task 11: WhatsApp group chats leave third-party senders unknown until Phase D's anchored parsers read the participant list. A draft is always attributed to `You`, which is correct regardless.
 - **The Capture Health window does not show events.** `recentCaptureEvents` exists so it can, and §10 says "visible in the Capture Health window" — but that is a UI addition with no spec-pinned layout, and adding it here would put an unreviewed view between Phase B and Phase C. The data is queryable; the view is not in this plan.
