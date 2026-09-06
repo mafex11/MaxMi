@@ -33,8 +33,11 @@ public struct SlackParser: SourceParser {
         window: AXNode,
         app: AppInfo
     ) -> (content: CapturedContent, truncated: Bool)? {
-        let messages = messages(in: window, windowX: window.frame?.origin.x ?? 0)
+        var messages = messages(in: window, windowX: window.frame?.origin.x ?? 0)
         guard !messages.isEmpty else { return nil }
+        // The composer's current text, so the next summary can see what the user is writing. The
+        // accumulator keeps at most one draft per sender and never merges a draft into history.
+        if let draft = ComposerDraft.draft(window: window) { messages.append(draft) }
         let conversation = Conversation(
             channel: channel(fromTitle: app.windowTitle),
             isGroup: isGroup(fromTitle: app.windowTitle),

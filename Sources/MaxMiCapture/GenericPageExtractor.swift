@@ -128,7 +128,12 @@ public enum GenericPageExtractor {
             currentClaim = claims.count - 1
         }
 
-        if let block = block(for: node, listDepth: listDepth) {
+        if var block = block(for: node, listDepth: listDepth) {
+            // The block the user is typing into. `dedupKey` intentionally ignores authorship, so
+            // marking a block cannot change dedup behaviour.
+            if node.focused, inputRoles.contains(node.role), node.subrole != secureSubrole {
+                block = Block(type: block.type, text: block.text, authoredByUser: true)
+            }
             claims[currentClaim].entries.append(BlockEntry(
                 y: node.frame?.minY ?? 0, x: node.frame?.minX ?? 0, order: order, block: block))
             order += 1
