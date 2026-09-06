@@ -38,7 +38,11 @@ extension CaptureAccumulator {
             content: bounded,
             rendered: ContentRenderer.render(bounded, style: .full),
             changed: previous != bounded,
-            delta: CaptureDelta.between(previous: previous, merged: bounded)
+            // The delta describes what CHANGED, not what FIT. `bound` sheds `.dialog` last but it
+            // does shed it (`boundGeneric`), and a delta computed from the bounded value would
+            // silently lose the `dialog` event for exactly the over-cap pages most likely to have
+            // one (Ruling 6). `content`/`rendered`/`changed` keep describing what was stored.
+            delta: CaptureDelta.between(previous: previous, merged: merged)
         )
     }
 
