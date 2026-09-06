@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace MaxMi's per-app geometry heuristics with an `AXQuery` path DSL, a `StructuredParser` v2 protocol that routes by bundle ID *and* by browser host, and fourteen anchored parsers each pinned by golden `CapturedContent` fixtures.
+**Goal:** Replace MaxMi's per-app geometry heuristics with an `AXQuery` path DSL, a `StructuredParser` v2 protocol that routes by bundle ID *and* by browser host, and eighteen anchored parsers each pinned by golden `CapturedContent` fixtures — fourteen claimed by bundle ID and four claimed by browser host (Slack web shares the native `SlackParser`).
 
 **Architecture:** `AXQuery` compiles a small XPath-like grammar (`//AXRow[domClass*="c-virtual_list__item"][0]`) into cached `[Step]` values and evaluates them over an `AXNode` tree — no throwing, no geometry unless a parser explicitly asks for it. `StructuredParser` adds a static `ParserConfig` (bundle IDs, hosts, forced AX attribute set, offscreen policy, `preferOverNative`) and a `parse(_:context:)` that returns Phase A's `CapturedContent?`, where `nil` means NOT_HANDLED and falls through to `GenericPageExtractor`. `ParserRegistry` gains a bundle-ID map and a host map so a Slack *web* tab and the Slack *app* reach the same anchored parser. Each existing parser keeps its `SourceParser` conformance (which owns the thread key and the accumulation/offscreen policies, per spec §4f rule 1) and gains a `StructuredParser` conformance that owns the content.
 
 **Tech Stack:** Swift 6 (`swift-tools-version: 6.0`), SwiftPM, macOS 14+, XCTest, ApplicationServices/AppKit accessibility APIs.
 
-**Spec:** `docs/superpowers/specs/2026-09-06-maxmi-m8-structured-capture-design.md` — this plan implements §7 in full (7a `AXQuery`, 7b `StructuredParser` v2 + `ParserConfig` + `ParseContext` + registry routing, 7c the anchored parser table, 7d fixture tooling) plus the Phase-D parts of §8 (cross-cutting), §9 (testing), and §11 (exit criteria, item 8). Phases B (§5) and C (§6) are separate plans and are out of scope here.
+**Spec:** `docs/superpowers/specs/2026-09-06-maxmi-m8-structured-capture-design.md` — this plan implements §7 in full (7a `AXQuery`, 7b `StructuredParser` v2 + `ParserConfig` + `ParseContext` + registry routing, 7c the anchored parser table, 7d fixture tooling) plus the Phase-D parts of §8 (cross-cutting), §9 (testing), and §11 (exit criteria, item 8). Phases B (§5) and C (§6) are separate plans and are out of scope here. It also implements **§14b** (web-app parsers by host) as Tasks 22-26 plus their own live pass as Task 27, and the refusal decision §12 Q18 records for them. **27 tasks: 1-6 the DSL, routing and fixture tooling; 7-20 the bundle-ID parsers; 21 the first live pass; 22-26 the five web hosts; 27 their live pass.**
 
 **Depends on: the Phase A plan (`docs/superpowers/plans/2026-09-06-maxmi-m8a-typed-capture-contract.md`) being merged first.** Per spec §10, "D depends only on A" and may run in parallel with B and C on a separate branch/worktree. Every task in this plan **consumes** these Phase A types and must never redefine them:
 
@@ -42,6 +42,7 @@ Every task's requirements implicitly include this section. Values are copied ver
 - **Discord must not use any geometric split** — its `AXFrame` values are unreliable (§7c, `DiscordParser.swift` header comment).
 - **Visual-order sorting is translation-invariant.** `AXFrame` is global screen coordinates, so every comparison against a window edge or midpoint is done relative to the window frame (§4e, and the `project_maxmi_ax_capture` regression).
 - **Every rewritten parser ships ≥2 recorded, hand-scrubbed AX fixtures with a golden expected `CapturedContent` JSON, at least one of them with a nonzero window origin** (§9, §11 item 8).
+- **Every DOM anchor in §14b is a CANDIDATE, not a verified read** (§14b). Tasks 22-26 record a live dump with `tools/ax-snapshot-record.swift` **before** relying on an anchor, and record the verified set — plus every candidate that did not survive — in the parser's header comment.
 - **Fixtures are hand-scrubbed.** Never commit real page text, messages, file contents, URLs, names, or tokens (`Tests/MaxMiCaptureTests/Fixtures/README.md`). Every new fixture gets a row in that README's table.
 - **No PII/email redaction inside captured content** beyond the existing `Denylist` app + domain denylist (§3 Non-goals).
 - **No `CGEventTap`, no `NSEvent.addGlobalMonitorForEvents`, ever** (§3 Non-goals).
@@ -104,6 +105,17 @@ Decided here so no task has to reopen them.
 | `Tests/MaxMiCaptureTests/FinderStructuredTests.swift` | Sidebar/main/toolbar regions, `.tableRow` with `selected`, path, golden fixtures. |
 | `Tests/MaxMiCaptureTests/CalendarStructuredTests.swift` | `.calendar` events from the detail root, golden fixtures. |
 | `Tests/MaxMiCaptureTests/RemindersStructuredTests.swift` | `.tasks` with status from the row checkbox, golden fixtures. |
+| `Sources/MaxMiCapture/WebHostParsing.swift` | The `RefusingStructuredParser` protocol and the shared message/draft/anchor-text helpers the five §14b web-app parsers use. No DOM class lives here. |
+| `Sources/MaxMiCapture/GmailParser.swift` | Gmail (`mail.google.com`) → thread `.conversation`, inbox `.generic` rows, compose draft. |
+| `Sources/MaxMiCapture/LinkedInMessagingParser.swift` | LinkedIn `/messaging` → `.conversation`; nil on every other LinkedIn path. |
+| `Sources/MaxMiCapture/OutlookWebParser.swift` | Outlook web (`outlook.office.com`, `outlook.live.com`) → reading-pane `.conversation`, list `.generic` rows, compose draft. |
+| `Sources/MaxMiCapture/TeamsWebParser.swift` | Teams web (`teams.microsoft.com`, `teams.cloud.microsoft`) → `.conversation`, with an `AXDescription` fallback tier. |
+| `Tests/MaxMiCaptureTests/GmailParserTests.swift` | Thread, collapsed-message skip, inbox rows, draft, refusal, pipeline kind/key, goldens. |
+| `Tests/MaxMiCaptureTests/LinkedInMessagingParserTests.swift` | Group/continuation attribution, self-name `isUser`, off-`/messaging` nil, draft, goldens. |
+| `Tests/MaxMiCaptureTests/OutlookWebParserTests.swift` | `From:`/`Sent:` description parsing, header-text fallback, list rows, draft, goldens. |
+| `Tests/MaxMiCaptureTests/SlackWebStructuredTests.swift` | Web anchors, `aria-label` timestamps, `#`-driven `isGroup`, native/web byte-identical render, goldens. |
+| `Tests/MaxMiCaptureTests/TeamsWebParserTests.swift` | Class tier, identifier tier, `AXDescription` fallback, `classify` host addition, key stability, goldens. |
+| 20 fixture + golden JSON files under `Tests/MaxMiCaptureTests/Fixtures/` for the five web hosts | Two fixtures + two goldens per host (Tasks 22-26), at least one per host at a nonzero window origin; named in each task. |
 | 28 fixture + golden JSON files under `Tests/MaxMiCaptureTests/Fixtures/` | Two per parser; named in each parser task. |
 
 ### Modified
@@ -130,6 +142,13 @@ Decided here so no task has to reopen them.
 | `Tests/MaxMiCoreTests/ApplicationRegistryTests.swift:66` | `cursor?.captureStrategy` expectation moves from `.genericAX` to `.nativeParser`. |
 | `Tests/MaxMiCaptureTests/ExtractorTests.swift:5`, `BrowserCapturePipelineTests.swift:6`, `NativeConversationParserTests.swift:5`, `GenericAXParserTests.swift:5`, `SlackParserTests.swift:5`, `StructuredNativeParserTests.swift:5` | The six duplicated `func fixture(_:)` helpers are deleted in favour of `FixtureLoading.swift` (§7d). |
 | `Tests/MaxMiCaptureTests/Fixtures/README.md` | A row per new fixture, plus the recording + hand-scrub procedure. |
+| `Sources/MaxMiCapture/BrowserCapturePipeline.swift` (second change, Task 22) | The host parse is hoisted above `WebAppCaptureParser.parse`, a `RefusingStructuredParser` may throw `ParserRefusal` for an empty compose-only tab, and a host shape is bounded with `CaptureAccumulator.bound` to the browser budget. |
+| `Sources/MaxMiCapture/WebAppCaptureParser.swift` (second change, Task 26) | `classify` recognises `teams.cloud.microsoft`, so both Teams domains reach `contentKind` `.conversation` (§12 Q3). `URLKeyNormalizer` is deliberately untouched. |
+| `Sources/MaxMiCapture/SlackParser.swift` (second change, Task 25) | `domMessages`/`parse` replaced: alternate `c-message_kit__background` item class, timestamps read from `AXDescription`, header-driven `channel`/`isGroup`, `RefusingStructuredParser` conformance. |
+| `Sources/MaxMiCapture/ParserRegistry.swift` (second change, Tasks 22-26) | The four new host parsers are appended to Task 5's single `structured` registration list; each carries `hosts` and no bundle IDs, so the derived loop files them in the host map only. |
+| `Sources/MaxMi/AppWiring.swift` (second change, Task 22) | One new `catch let refusal as ParserRefusal` clause on the browser path: logs `.parserRefused` and records `.skipped(.parserNoContent)`; no retry, no new health enum case. |
+| `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (created in Task 21) | Tasks 22-26 add `hostCoverage`, `testEveryHostRoutedParserIsReachableFromTheHostMap`, and five `coverage` entries. |
+| `Tests/MaxMiCaptureTests/SlackStructuredTests.swift` (Task 25) | One assertion message updated where Task 10's fixture now exercises the "no header anchor" `isGroup` default. |
 
 ### Deleted
 
@@ -6761,6 +6780,3003 @@ git commit -m "Assert Phase D parser fixture and origin coverage"
 
 ---
 
+### Task 22: Gmail web (`mail.google.com`) → `.conversation` / `.generic` rows / compose draft
+
+**Files:**
+- Create: `Sources/MaxMiCapture/WebHostParsing.swift`
+- Create: `Sources/MaxMiCapture/GmailParser.swift`
+- Modify: `Sources/MaxMiCapture/BrowserCapturePipeline.swift` (replace Task 9's routing block with the refusal-aware version below)
+- Modify: `Sources/MaxMiCapture/ParserRegistry.swift` (append `GmailParser()` to Task 5's `structured` list)
+- Modify: `Sources/MaxMi/AppWiring.swift` (one new `catch let refusal as ParserRefusal` clause on the browser path)
+- Modify: `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (Task 21: add `hostCoverage` + the host-registration test)
+- Create: `Tests/MaxMiCaptureTests/Fixtures/gmail-thread.json`, `gmail-thread-golden.json`, `gmail-offset-inbox.json`, `gmail-offset-inbox-golden.json`
+- Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
+- Test: `Tests/MaxMiCaptureTests/GmailParserTests.swift`
+
+**Interfaces:**
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.host(fromURL:)`, `.structuredParser(forHost:)`, `.forcedAttributes(for:)` (Task 5); `fixture(_:)`, `goldenCapturedContent(_:)`, `assertGolden(_:matches:)` (Task 6); `WebPageParser.parse(window:tab:)` (Task 9); `NativeConversationExtraction.senderLabel(_:) -> String?` (`Sources/MaxMiCapture/NativeConversationParser.swift`, already internal); `ParserRefusal(reason:)` (`ParserRegistry.swift:74`); `WebAppCaptureParser.parse(tab:window:contentBudget:) throws -> WebAppParseResult`, `.classify(url:)`, `.contentCap`; `URLKeyNormalizer.normalize(_:)`; `CaptureAccumulator.bound(_:to:)` (`Sources/MaxMiCore/StructuredAccumulator.swift`); `Message`, `Message.makeID(sender:timeString:text:)`, `Conversation`, `GenericPage`, `Region`, `Block`, `BlockType.tableRow(cells:selected:)`, `CapturedContent` (Phase A).
+- Produces:
+  - `protocol RefusingStructuredParser: StructuredParser { func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool }` — `public`.
+  - `WebHostParsing.text(of: AXNode) -> String?`, `.editorText(in: AXNode) -> String`, `.draft(in: AXNode?) -> Message?`, `.message(sender: String?, timeString: String?, texts: [String], isUser: Bool = false) -> Message?`, `.path(of: String?) -> String` — all `internal static`, shared by Tasks 22-26.
+  - `GmailParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `messageClass`, `senderNameClass`, `senderAddressClass`, `timeClass`, `bodyClass`, `listRowClass`, `composeBodyDescription`, `chromeHeadings`, `composer(in:) -> AXNode?`, `subject(in:windowTitle:) -> String`, `threadMessages(in:) -> [Message]`, `listRows(in:) -> [Block]`.
+  - `BrowserCapturePipeline.parse(window:windowTitle:browser:contentBudget:registry:)` — `registry` is added **after** `contentBudget`, so `WebAppStructuredTests.swift:117` (`contentBudget: 60`) keeps compiling.
+  - `PhaseDCoverageTests.hostCoverage: [String: [String]]` — parser type name → the hosts it claims.
+
+**Two facts about this task that the executor must not "fix":**
+
+1. `contentKind`, `sourceKey` and `accumulationPolicy` still come from `WebAppCaptureParser.parse` (§4f rule 1, §12 Q3). Gmail is already `.gmail` → `.email` there, and its key is already `URLKeyNormalizer.normalize(tab.url)`. **Do not touch either.** A host parser owns content only.
+2. `ParserConfig.attributeSet` is declared as §14b asks (`["AXDOMClassList", "AXDOMIdentifier"]`) but is **inert for a hosts-only parser**: `ParserRegistry.forcedAttributes(for:)` (Task 5) is keyed by *bundle ID*, and the bundle here is the browser's. What actually supplies the DOM attributes is Task 1's `AXWebArea`-ancestor gate, which a real browser tab always satisfies. The test below pins that (`forcedAttributes(for: "com.google.Chrome") == []`) so nobody reads the declaration as live wiring.
+
+- [ ] **Step 1: Record the live fixtures FIRST and verify the anchors**
+
+Nothing in this task may be implemented against §14b's candidate class names before a dump confirms they reach AX. Open Gmail in Chrome as the front tab with a **thread expanded** (window flush at the screen origin), then:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/gmail-thread.json
+```
+
+Switch Gmail to the **inbox list**, drag the window to a second display or well away from the top-left corner, then:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/gmail-offset-inbox.json
+```
+
+Verify which anchors actually surfaced, in both dumps:
+
+```bash
+for f in /tmp/gmail-thread.json /tmp/gmail-offset-inbox.json; do
+  echo "== $f"
+  python3 - "$f" <<'PY'
+import collections, json, sys
+counts = collections.Counter()
+def walk(node):
+    for name in node.get("domClassList") or []:
+        counts["class:" + name] += 1
+    if node.get("domIdentifier"):
+        counts["domId:" + node["domIdentifier"][:40]] += 1
+    if node.get("label"):
+        counts["description:" + node["label"][:40]] += 1
+    for child in node.get("children", []):
+        walk(child)
+walk(json.load(open(sys.argv[1])))
+for name, n in counts.most_common(80):
+    print(n, name)
+PY
+done
+```
+
+Confirm, for each of §14b's candidates — `adn`, `gD`, `go`, `g3`, `a3s`, `zA`, and the compose editor's `"Message Body"` description — whether it appears. Record the answer in `GmailParser`'s header comment in Step 4: `verified (<count> nodes)` or `NOT EXPOSED — used <what you used instead>`. **Keep every line, including the failures**, so the next reader does not re-try a dead anchor. If a candidate is missing, find its replacement in the dump above (a `class:` / `domId:` / `description:` line at the right count) and use that; do not invent one.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `Tests/MaxMiCaptureTests/GmailParserTests.swift`:
+
+```swift
+import XCTest
+import MaxMiCore
+@testable import MaxMiCapture
+
+final class GmailParserTests: XCTestCase {
+    func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
+              selected: Bool = false, domClassList: [String]? = nil, url: String? = nil,
+              frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
+        AXNode(role: role, value: value, title: title, url: url,
+               frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
+               children: children, identifier: nil, label: label, subrole: nil,
+               headingLevel: nil, selected: selected, placeholder: nil, selectedText: nil,
+               hidden: false, domClassList: domClassList, domIdentifier: nil)
+    }
+
+    func text(_ value: String, _ classes: [String]? = nil, y: CGFloat, x: CGFloat = 300) -> AXNode {
+        node("AXStaticText", value: value, domClassList: classes,
+             frame: CGRect(x: x, y: y, width: 300, height: 16))
+    }
+
+    func heading(_ value: String, y: CGFloat, x: CGFloat = 300) -> AXNode {
+        node("AXHeading", value: value, frame: CGRect(x: x, y: y, width: 400, height: 24))
+    }
+
+    func composeEditor(_ draft: String?, y: CGFloat, x: CGFloat = 300) -> AXNode {
+        node("AXTextArea", value: draft, label: "Message Body",
+             frame: CGRect(x: x, y: y, width: 500, height: 120))
+    }
+
+    /// One EXPANDED message (has an `a3s` body), one COLLAPSED message (no body node at all),
+    /// plus the thread subject as a heading and Gmail's own chrome heading above it.
+    func threadWindow(origin: CGPoint = .zero, draft: String? = nil) -> AXNode {
+        let x = origin.x
+        let y = origin.y
+        var children = [
+            heading("Main menu", y: y + 10, x: x + 20),
+            heading("Quarterly index rebuild", y: y + 60, x: x + 300),
+            node("AXGroup", domClassList: ["adn", "ads"],
+                 frame: CGRect(x: x + 300, y: y + 100, width: 900, height: 120), children: [
+                text("Ada Lovelace", ["gD"], y: y + 100, x: x + 300),
+                text("ada@example.com", ["go"], y: y + 100, x: x + 460),
+                text("10:14 AM", ["g3"], y: y + 100, x: x + 1100),
+                node("AXGroup", domClassList: ["a3s"],
+                     frame: CGRect(x: x + 300, y: y + 130, width: 900, height: 80), children: [
+                    text("Rebuild finished overnight.", nil, y: y + 130, x: x + 300),
+                    text("No downtime.", nil, y: y + 150, x: x + 300),
+                ]),
+            ]),
+            node("AXGroup", domClassList: ["adn"],
+                 frame: CGRect(x: x + 300, y: y + 240, width: 900, height: 24), children: [
+                text("Grace Hopper", ["gD"], y: y + 240, x: x + 300),
+                text("10:41 AM", ["g3"], y: y + 240, x: x + 1100),
+            ]),
+        ]
+        if let draft { children.append(composeEditor(draft, y: y + 500, x: x + 300)) }
+        return node("AXWindow", title: "Quarterly index rebuild - me@example.com - Gmail",
+                    frame: CGRect(origin: origin, size: CGSize(width: 1440, height: 900)),
+                    children: children)
+    }
+
+    /// The inbox list: three `zA` rows, one of them selected.
+    func inboxWindow(origin: CGPoint = .zero) -> AXNode {
+        let x = origin.x
+        let y = origin.y
+        func row(_ sender: String, _ subject: String, _ snippet: String, _ time: String,
+                 y rowY: CGFloat, selected: Bool = false) -> AXNode {
+            node("AXRow", selected: selected, domClassList: ["zA", "yO"],
+                 frame: CGRect(x: x + 300, y: rowY, width: 1100, height: 28), children: [
+                text(sender, nil, y: rowY, x: x + 320),
+                text(subject, nil, y: rowY, x: x + 500),
+                text(snippet, nil, y: rowY, x: x + 700),
+                text(time, nil, y: rowY, x: x + 1300),
+            ])
+        }
+        return node("AXWindow", title: "Inbox (3) - me@example.com - Gmail",
+                    frame: CGRect(origin: origin, size: CGSize(width: 1440, height: 900)),
+                    children: [
+            heading("Main menu", y: y + 10, x: x + 20),
+            row("Ada Lovelace", "Quarterly index rebuild", "Rebuild finished overnight.",
+                "10:14 AM", y: y + 100, selected: true),
+            row("Grace Hopper", "Deploy window", "Green across the board.", "09:02 AM", y: y + 140),
+            row("Alan Turing", "Machine time", "Booked the afternoon slot.", "Jul 3", y: y + 180),
+        ])
+    }
+
+    /// A standalone compose window: a composer and nothing else.
+    func composeOnlyWindow(draft: String?) -> AXNode {
+        node("AXWindow", title: "New Message - me@example.com - Gmail",
+             frame: CGRect(x: 0, y: 0, width: 700, height: 500),
+             children: [composeEditor(draft, y: 80)])
+    }
+
+    /// A Gmail settings page: no thread, no rows, no composer.
+    func settingsWindow() -> AXNode {
+        node("AXWindow", title: "Settings - me@example.com - Gmail",
+             frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+             children: [heading("Main menu", y: 10, x: 20),
+                        text("Undo send", nil, y: 100)])
+    }
+
+    /// A browser window: chrome plus an `AXWebArea` wrapping the Gmail page.
+    func browserWindow(_ page: AXNode, url: String) -> AXNode {
+        let frame = page.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        return node("AXWindow", title: page.title,
+                    frame: frame, children: [
+            node("AXToolbar", frame: CGRect(x: frame.minX, y: frame.minY,
+                                            width: frame.width, height: 42), children: [
+                node("AXTextField", value: url, title: "Address and search bar",
+                     frame: CGRect(x: frame.minX + 250, y: frame.minY + 6, width: 700, height: 30)),
+            ]),
+            node("AXWebArea", url: url, frame: frame, children: page.children),
+        ])
+    }
+
+    static let threadURL = "https://mail.google.com/mail/u/0/#inbox/FMfcgzQbfWxyz"
+
+    func context(_ title: String?, url: String = GmailParserTests.threadURL) -> ParseContext {
+        ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  windowTitle: title), url: url)
+    }
+
+    func conversation(_ content: CapturedContent?) throws -> Conversation {
+        guard case .conversation(let c) = try XCTUnwrap(content) else {
+            throw XCTSkip("expected .conversation, got \(String(describing: content))")
+        }
+        return c
+    }
+
+    func page(_ content: CapturedContent?) throws -> GenericPage {
+        guard case .generic(let p) = try XCTUnwrap(content) else {
+            throw XCTSkip("expected .generic, got \(String(describing: content))")
+        }
+        return p
+    }
+
+    // MARK: - Registration
+
+    func testConfigClaimsTheGmailHostOnly() {
+        XCTAssertEqual(GmailParser.config.hosts, ["mail.google.com"])
+        XCTAssertEqual(GmailParser.config.bundleIDs, [])
+        XCTAssertFalse(GmailParser.config.preferOverNative,
+                       "no native app shares mail.google.com")
+        let registry = ParserRegistry()
+        XCTAssertTrue(registry.structuredParser(forHost: "mail.google.com") is GmailParser)
+        XCTAssertNil(registry.structuredParser(forHost: "mail.google.com.evil.example"))
+    }
+
+    func testTheDeclaredAttributeSetIsInertForAHostsOnlyParser() {
+        // Documented, not aspirational: forcedAttributes is keyed by BUNDLE id, and the bundle
+        // here is the browser's. The AXWebArea gate (Task 1) is what supplies the DOM attributes.
+        XCTAssertEqual(GmailParser.config.attributeSet, ["AXDOMClassList", "AXDOMIdentifier"])
+        XCTAssertEqual(ParserRegistry().forcedAttributes(for: "com.google.Chrome"), [])
+    }
+
+    // MARK: - Thread
+
+    func testExpandedThreadMessagesCarrySenderTimeAndBody() throws {
+        let c = try conversation(GmailParser().parse(
+            threadWindow(), context: context("Quarterly index rebuild - me@example.com - Gmail")))
+        XCTAssertEqual(c.channel, "Quarterly index rebuild")
+        XCTAssertFalse(c.isGroup)
+        XCTAssertEqual(c.messages.map(\.sender), ["Ada Lovelace"])
+        XCTAssertEqual(c.messages.map(\.text), ["Rebuild finished overnight. No downtime."])
+        XCTAssertEqual(c.messages.map(\.timeString), ["10:14 AM"])
+        XCTAssertEqual(c.messages[0].id, Message.makeID(sender: "Ada Lovelace",
+                                                        timeString: "10:14 AM",
+                                                        text: "Rebuild finished overnight. No downtime."))
+    }
+
+    func testACollapsedMessageIsSkippedRatherThanEmittedEmpty() throws {
+        let c = try conversation(GmailParser().parse(threadWindow(), context: context(nil)))
+        XCTAssertFalse(c.messages.contains { $0.sender == "Grace Hopper" },
+                       "a collapsed row has no a3s body, so it is not a message yet")
+        XCTAssertFalse(c.messages.contains { $0.text.isEmpty })
+    }
+
+    func testASubjectlessThreadFallsBackToTheWindowTitle() throws {
+        let bare = node("AXWindow", title: "Some thread - me@example.com - Gmail",
+                        frame: CGRect(x: 0, y: 0, width: 800, height: 600), children: [
+            node("AXGroup", domClassList: ["adn"],
+                 frame: CGRect(x: 0, y: 40, width: 800, height: 60), children: [
+                text("Ada", ["gD"], y: 40),
+                node("AXGroup", domClassList: ["a3s"], frame: CGRect(x: 0, y: 60, width: 800, height: 20),
+                     children: [text("one line", nil, y: 60)]),
+            ]),
+        ])
+        XCTAssertEqual(try conversation(GmailParser().parse(bare, context: context(
+            "Some thread - me@example.com - Gmail"))).channel,
+                       "Some thread - me@example.com - Gmail")
+    }
+
+    func testAJoinedBodyLineIsNeverResplitOnAColon() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 800, height: 600), children: [
+            node("AXGroup", domClassList: ["adn"],
+                 frame: CGRect(x: 0, y: 40, width: 800, height: 60), children: [
+                node("AXGroup", domClassList: ["a3s"], frame: CGRect(x: 0, y: 60, width: 800, height: 20),
+                     children: [text("Note: check the doc", nil, y: 60)]),
+            ]),
+        ])
+        let message = try XCTUnwrap(try conversation(GmailParser().parse(win, context: context(nil)))
+            .messages.first)
+        XCTAssertEqual(message.sender, "unknown")
+        XCTAssertEqual(message.text, "Note: check the doc")
+    }
+
+    // MARK: - Draft
+
+    func testTheComposerBecomesATrailingUserDraft() throws {
+        let c = try conversation(GmailParser().parse(threadWindow(draft: "Sending the summary now"),
+                                                    context: context(nil)))
+        let draft = try XCTUnwrap(c.messages.last)
+        XCTAssertTrue(draft.isUser)
+        XCTAssertTrue(draft.isDraft)
+        XCTAssertEqual(draft.sender, "You")
+        XCTAssertEqual(draft.text, "Sending the summary now")
+        XCTAssertEqual(c.messages.count, 2, "the draft is appended, never replacing a message")
+        XCTAssertTrue(ContentRenderer.render(.conversation(c), style: .full)
+            .contains("(From: You (draft)): Sending the summary now"))
+    }
+
+    func testAStandaloneComposeWindowIsTheDraftAlone() throws {
+        let c = try conversation(GmailParser().parse(composeOnlyWindow("draft body"),
+                                                    context: context("New Message - me@example.com - Gmail")))
+        XCTAssertEqual(c.messages.map(\.text), ["draft body"])
+        XCTAssertEqual(c.messages.map(\.isDraft), [true])
+    }
+
+    // MARK: - List view
+
+    func testTheInboxBecomesThreeCellTableRows() throws {
+        let rows = try page(GmailParser().parse(inboxWindow(), context: context(
+            "Inbox (3) - me@example.com - Gmail",
+            url: "https://mail.google.com/mail/u/0/#inbox"))).regions
+        XCTAssertEqual(rows.map(\.kind), [.main])
+        XCTAssertEqual(rows[0].blocks.map(\.type), [
+            .tableRow(cells: ["Ada Lovelace", "Quarterly index rebuild Rebuild finished overnight.",
+                              "10:14 AM"], selected: true),
+            .tableRow(cells: ["Grace Hopper", "Deploy window Green across the board.",
+                              "09:02 AM"], selected: false),
+            .tableRow(cells: ["Alan Turing", "Machine time Booked the afternoon slot.",
+                              "Jul 3"], selected: false),
+        ])
+        XCTAssertEqual(ContentRenderer.renderBlock(rows[0].blocks[0]),
+                       "* Ada Lovelace | Quarterly index rebuild Rebuild finished overnight. | 10:14 AM")
+    }
+
+    func testTheListPageCarriesTheUrl() throws {
+        let url = "https://mail.google.com/mail/u/0/#inbox"
+        XCTAssertEqual(try page(GmailParser().parse(inboxWindow(), context: context(nil, url: url))).url,
+                       url)
+    }
+
+    // MARK: - Not handled vs refusal
+
+    func testAPageWithNoMessageContainerIsNotHandledRatherThanRefused() {
+        let parser = GmailParser()
+        XCTAssertNil(parser.parse(settingsWindow(), context: context(nil)))
+        XCTAssertFalse(parser.refusesEmptyCompose(settingsWindow(), context: context(nil)),
+                       "no composer means no refusal — this window becomes generic v2")
+    }
+
+    func testAnEmptyComposeOnlyWindowRefuses() {
+        let parser = GmailParser()
+        let window = composeOnlyWindow("   ")
+        XCTAssertNil(parser.parse(window, context: context(nil)))
+        XCTAssertTrue(parser.refusesEmptyCompose(window, context: context(nil)))
+    }
+
+    func testAnEmptyComposerOverAThreadDoesNotRefuse() {
+        let parser = GmailParser()
+        let window = threadWindow(draft: "")
+        XCTAssertNotNil(parser.parse(window, context: context(nil)))
+        XCTAssertFalse(parser.refusesEmptyCompose(window, context: context(nil)))
+    }
+
+    // MARK: - Origin invariance
+
+    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+        let parser = GmailParser()
+        XCTAssertEqual(parser.parse(threadWindow(), context: context(nil)),
+                       parser.parse(threadWindow(origin: CGPoint(x: 1440, y: 220)),
+                                    context: context(nil)))
+        XCTAssertEqual(parser.parse(inboxWindow(), context: context(nil)),
+                       parser.parse(inboxWindow(origin: CGPoint(x: 1440, y: 220)),
+                                    context: context(nil)))
+    }
+
+    // MARK: - Pipeline: kind, key and the refusal
+
+    func testThePipelineKeepsEmailKindAndTheUrlNormalizedKey() throws {
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        let result = try BrowserCapturePipeline.parse(
+            window: browserWindow(threadWindow(), url: Self.threadURL),
+            windowTitle: "Quarterly index rebuild - me@example.com - Gmail", browser: browser)
+        XCTAssertEqual(WebAppCaptureParser.classify(url: Self.threadURL), .gmail)
+        XCTAssertEqual(result.capture.contentKind, .email, "§12 Q3: Gmail stays .email")
+        XCTAssertEqual(result.capture.sourceApp, "Web")
+        XCTAssertEqual(result.capture.sourceKey, URLKeyNormalizer.normalize(Self.threadURL))
+        XCTAssertEqual(result.capture.sourceKey, Self.threadURL, "the key scheme is unchanged")
+        XCTAssertEqual(result.webApp, .gmail)
+        guard case .conversation(let c) = result.structured else {
+            return XCTFail("expected the host parser's conversation, got \(result.structured)")
+        }
+        XCTAssertEqual(c.messages.map(\.sender), ["Ada Lovelace"])
+        XCTAssertEqual(result.capture.content,
+                       ContentRenderer.render(result.structured, style: .full))
+    }
+
+    func testAnEmptyComposeOnlyTabRefusesThroughThePipeline() throws {
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        do {
+            _ = try BrowserCapturePipeline.parse(
+                window: browserWindow(composeOnlyWindow("  "),
+                                      url: "https://mail.google.com/mail/u/0/#drafts?compose=new"),
+                windowTitle: "New Message - me@example.com - Gmail", browser: browser)
+            XCTFail("expected a ParserRefusal")
+        } catch let refusal as ParserRefusal {
+            XCTAssertEqual(refusal.reason, "empty-compose")
+        }
+    }
+
+    func testHostContentIsBoundedToTheBrowserBudget() throws {
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        let result = try BrowserCapturePipeline.parse(
+            window: browserWindow(threadWindow(), url: Self.threadURL),
+            windowTitle: nil, browser: browser, contentBudget: 40)
+        XCTAssertLessThanOrEqual(result.capture.content.count, 40,
+                                 "a host parser's content is bounded exactly like the web path's")
+    }
+
+    // MARK: - Goldens
+
+    func testThreadFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(GmailParser().parse(try fixture("gmail-thread"),
+                                                       context: context(nil))),
+                     matches: "gmail-thread-golden")
+    }
+
+    func testOffsetInboxFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(GmailParser().parse(
+            try fixture("gmail-offset-inbox"),
+            context: context(nil, url: "https://mail.google.com/mail/u/0/#inbox"))),
+                     matches: "gmail-offset-inbox-golden")
+    }
+}
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `swift test --filter GmailParserTests`
+Expected: FAIL to compile — "cannot find 'GmailParser' in scope".
+
+- [ ] **Step 4: Write the implementation**
+
+Create `Sources/MaxMiCapture/WebHostParsing.swift`:
+
+```swift
+import Foundation
+import MaxMiCore
+
+/// Opt-in companion to `StructuredParser` for host-routed parsers that must be able to REFUSE a
+/// window rather than let it fall through to generic v2.
+///
+/// `StructuredParser.parse` cannot throw (spec §12 Q18) and a browser tab never reaches a
+/// `SourceParser` bridge at all, so the refusal is raised at the browser path's own throwing
+/// boundary — `BrowserCapturePipeline.parse` — which is the exact analogue of the
+/// `NativeConversationParser` bridge §14b points at.
+public protocol RefusingStructuredParser: StructuredParser {
+    /// True ONLY for a compose-only window whose draft is empty: there is genuinely nothing to
+    /// store, and a refusal is how the health ledger records that. Every other empty read
+    /// returns nil from `parse` and becomes a generic v2 page (§4f rule 3).
+    func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool
+}
+
+/// The app-agnostic half of the five §14b web-app parsers. The DOM anchors live in each parser;
+/// the message-building rules live here, so Gmail, LinkedIn, Outlook, Slack web and Teams web
+/// cannot drift apart on what counts as a sender or a draft.
+enum WebHostParsing {
+    /// The readable text of an anchor node. `label` is consulted last because it is
+    /// `AXDescription ?? AXHelp` (spec §12 Q1) and is often a verbose restatement.
+    static func text(of node: AXNode) -> String? {
+        let raw = node.value ?? node.title ?? node.label
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty
+        else { return nil }
+        return value
+    }
+
+    /// A composer's text: its own value, else the static texts a contenteditable exposes as
+    /// children (every one of these five composers is a contenteditable, not a text field).
+    static func editorText(in node: AXNode) -> String {
+        if let value = node.value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            return value
+        }
+        return AXQuery.collectStaticTexts(in: node).joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The composer's live text as the user's draft. nil for a missing OR empty composer, which
+    /// is what makes "compose-only window with an empty draft" decidable.
+    static func draft(in composer: AXNode?) -> Message? {
+        guard let composer else { return nil }
+        let text = editorText(in: composer)
+        guard !text.isEmpty else { return nil }
+        return Message(id: Message.makeID(sender: "You", timeString: nil, text: text),
+                       sender: "You", text: text, timestamp: nil, timeString: nil,
+                       isUser: true, isDraft: true)
+    }
+
+    /// One message from one container's OWN texts.
+    ///
+    /// `texts` must already have the anchored sender and timestamp values removed, because when
+    /// `sender` is nil the shared `NativeConversationExtraction.senderLabel` heuristic decides
+    /// whether the FIRST value is a speaker. A joined line is never re-split on `": "` — "Note:
+    /// check the doc" is a message, not a message from someone called "Note" (§14b).
+    static func message(
+        sender: String?,
+        timeString: String?,
+        texts: [String],
+        isUser: Bool = false
+    ) -> Message? {
+        let values = texts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let resolved: String?
+        let bodyValues: [String]
+        if let sender, !sender.isEmpty {
+            // The sender came from its own anchored node, so no value is consumed from the body.
+            resolved = sender
+            bodyValues = values
+        } else if let heuristic = NativeConversationExtraction.senderLabel(values) {
+            resolved = heuristic
+            bodyValues = Array(values.dropFirst())
+        } else {
+            resolved = nil
+            bodyValues = values
+        }
+        let body = bodyValues.joined(separator: " ")
+        guard !body.isEmpty else { return nil }
+        let time = timeString?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stamp = time?.isEmpty == false ? time : nil
+        let name = resolved ?? "unknown"
+        return Message(id: Message.makeID(sender: name, timeString: stamp, text: body),
+                       sender: name, text: body, timestamp: nil, timeString: stamp,
+                       isUser: isUser, isDraft: false)
+    }
+
+    /// The URL path, `""` when there is no URL. `LinkedInMessagingParser` uses it to stay off
+    /// every LinkedIn page that is not `/messaging`.
+    static func path(of url: String?) -> String {
+        guard let url, let path = URLComponents(string: url)?.path else { return "" }
+        return path
+    }
+}
+```
+
+Create `Sources/MaxMiCapture/GmailParser.swift`:
+
+```swift
+import Foundation
+import MaxMiCore
+
+/// Gmail on the web (`mail.google.com`), routed by host (spec §7b, §14b).
+///
+/// Three surfaces, one parser: an open thread is a `.conversation`, a list view is a `.generic`
+/// page of table rows, and a compose window is the draft alone. `contentKind` is NOT decided
+/// here — `WebAppCaptureParser.classify` keeps Gmail on `.email` for all three (§12 Q3) — and
+/// the thread key stays `URLKeyNormalizer.normalize(tab.url)`.
+///
+/// ANCHORS. §14b's candidates, verified against a live dump recorded with
+/// `swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/gmail-thread.json`
+/// on <YYYY-MM-DD>. Replace each `?` with `verified (<n> nodes)` or
+/// `NOT EXPOSED — used <replacement>`, and KEEP the failures listed so the next reader does not
+/// re-try a dead anchor:
+///   `adn`  message container          ?
+///   `gD`   sender name                ?
+///   `go`   sender address             ?
+///   `g3`   time                       ?
+///   `a3s`  message body               ?
+///   `zA`   list row                   ?
+///   AXDescription "Message Body"      compose editor  ?
+public struct GmailParser: RefusingStructuredParser {
+    public init() {}
+
+    public static let config = ParserConfig(
+        app: "Gmail",
+        bundleIDs: [],
+        hosts: ["mail.google.com"],
+        // Declared as §14b asks. INERT for a hosts-only parser: `forcedAttributes(for:)` is keyed
+        // by bundle ID and the bundle here is the browser's. What supplies these attributes is
+        // Task 1's AXWebArea-ancestor gate, which a real browser tab always satisfies.
+        attributeSet: ["AXDOMClassList", "AXDOMIdentifier"],
+        offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+        // No native app shares mail.google.com, so no native claim competes for the window.
+        preferOverNative: false
+    )
+
+    static let messageClass = "adn"
+    static let senderNameClass = "gD"
+    static let senderAddressClass = "go"
+    static let timeClass = "g3"
+    static let bodyClass = "a3s"
+    static let listRowClass = "zA"
+    static let composeBodyDescription = "Message Body"
+    /// Headings Gmail renders AROUND the mail. None of them is ever a subject.
+    static let chromeHeadings: Set<String> = [
+        "gmail", "main menu", "search mail", "chat", "meet", "spaces", "conversations",
+    ]
+
+    // MARK: - Anchors
+
+    static func composer(in snapshot: AXNode) -> AXNode? {
+        AXQuery.find("//*[description=\"\(composeBodyDescription)\"]", in: snapshot)
+    }
+
+    /// The thread subject: the first non-chrome heading, else the window title (§14b).
+    static func subject(in snapshot: AXNode, windowTitle: String?) -> String {
+        if let heading = AXQuery.findAll("//AXHeading", in: snapshot)
+            .compactMap(WebHostParsing.text(of:))
+            .first(where: { !chromeHeadings.contains($0.lowercased()) }) {
+            return heading
+        }
+        guard let windowTitle, !windowTitle.isEmpty else { return "unknown" }
+        return windowTitle
+    }
+
+    /// One message per EXPANDED container. A collapsed row carries no `a3s` body at all, and a
+    /// message with a real sender and an empty body is worse than no message (§14b).
+    static func threadMessages(in snapshot: AXNode) -> [Message] {
+        let containers = AXQuery.findAll("//*[domClass=\"\(messageClass)\"]", in: snapshot)
+        return AXQuery.sortedByVisualOrder(containers, relativeTo: snapshot.frame)
+            .compactMap { container in
+                guard let body = AXQuery.find("//*[domClass=\"\(bodyClass)\"]", in: container)
+                else { return nil }
+                let name = AXQuery.find("//*[domClass=\"\(senderNameClass)\"]", in: container)
+                    .flatMap(WebHostParsing.text(of:))
+                let address = AXQuery.find("//*[domClass=\"\(senderAddressClass)\"]", in: container)
+                    .flatMap(WebHostParsing.text(of:))
+                let time = AXQuery.find("//*[domClass=\"\(timeClass)\"]", in: container)
+                    .flatMap(WebHostParsing.text(of:))
+                // Only the body subtree's texts, so the sender line cannot leak into the text.
+                return WebHostParsing.message(sender: name ?? address, timeString: time,
+                                              texts: AXQuery.collectStaticTexts(in: body))
+            }
+    }
+
+    /// `[sender, subject + snippet, time]` per list row (§14b). The middle cell is JOINED rather
+    /// than split further: Gmail exposes subject and snippet as two texts, and a row exposing
+    /// only two texts has no time to read.
+    static func listRows(in snapshot: AXNode) -> [Block] {
+        let rows = AXQuery.findAll("//*[domClass=\"\(listRowClass)\"]", in: snapshot)
+        return AXQuery.sortedByVisualOrder(rows, relativeTo: snapshot.frame).compactMap { row in
+            let texts = AXQuery.collectStaticTexts(in: row)
+            guard texts.count >= 2 else { return nil }
+            let hasTime = texts.count >= 3
+            let cells = [
+                texts[0],
+                texts.dropFirst().dropLast(hasTime ? 1 : 0).joined(separator: " "),
+                hasTime ? texts[texts.count - 1] : "",
+            ]
+            return Block(type: .tableRow(cells: cells, selected: row.selected),
+                         text: cells.filter { !$0.isEmpty }.joined(separator: " "))
+        }
+    }
+
+    // MARK: - StructuredParser
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+        let draft = WebHostParsing.draft(in: Self.composer(in: snapshot))
+        var messages = Self.threadMessages(in: snapshot)
+        if !messages.isEmpty {
+            if let draft { messages.append(draft) }
+            return .conversation(Conversation(
+                channel: Self.subject(in: snapshot, windowTitle: context.windowTitle),
+                // Gmail's anchors expose no recipient list, so the thread stays flat.
+                isGroup: false,
+                messages: messages
+            ))
+        }
+        // A live draft over the inbox is what the user is doing; the rows behind it are not.
+        if let draft {
+            return .conversation(Conversation(
+                channel: Self.subject(in: snapshot, windowTitle: context.windowTitle),
+                isGroup: false, messages: [draft]
+            ))
+        }
+        let rows = Self.listRows(in: snapshot)
+        // NOT_HANDLED, never a refusal: §4f rule 3 routes this window to GenericPageExtractor and
+        // the health ledger records "GenericPageExtractor.v2/fallback/GmailParser".
+        guard !rows.isEmpty else { return nil }
+        return .generic(GenericPage(regions: [Region(kind: .main, blocks: rows)],
+                                    focused: nil, url: context.url))
+    }
+
+    public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
+        guard let composer = Self.composer(in: snapshot) else { return false }
+        return WebHostParsing.draft(in: composer) == nil
+            && Self.threadMessages(in: snapshot).isEmpty
+            && Self.listRows(in: snapshot).isEmpty
+    }
+}
+```
+
+In `Sources/MaxMiCapture/BrowserCapturePipeline.swift`, replace Task 9's routing block. The whole function afterwards — note the `try` and `contentBudget:` on `WebAppCaptureParser.parse` (it is `throws` and budgeted; Task 9's snippet elides both), and `registry` added AFTER `contentBudget` so `WebAppStructuredTests.swift:117` keeps compiling:
+
+```swift
+    public static func parse(
+        window: AXNode,
+        windowTitle: String?,
+        browser: ApplicationDescriptor,
+        contentBudget: Int = WebAppCaptureParser.contentCap,
+        registry: ParserRegistry = ParserRegistry()
+    ) throws -> BrowserCaptureResult {
+        let tab = try BrowserTabExtractor.extract(
+            window: window,
+            windowTitle: windowTitle,
+            engine: browser.browserEngine
+        )
+        // Host routing (spec §7b): a registered host parser claims the tab; otherwise the tab is
+        // a generic web page. Either way `contentKind`, `sourceKey` and the accumulation policy
+        // come from `WebAppCaptureParser.parse` — a host parser owns CONTENT only (§4f rule 1).
+        let hostParser = ParserRegistry.host(fromURL: tab.url)
+            .flatMap { registry.structuredParser(forHost: $0) }
+        let hostContext = ParseContext(
+            app: AppInfo(bundleID: browser.bundleID, name: browser.displayName,
+                         windowTitle: windowTitle),
+            url: tab.url
+        )
+        let hostStructured = hostParser?.parse(window, context: hostContext)
+        // The ONE refusal case (§14b, §12 Q18): a compose-only window with an empty draft. Raised
+        // here because `StructuredParser.parse` cannot throw and a tab reaches no `SourceParser`
+        // bridge — and raised BEFORE `WebAppCaptureParser.parse` so the refusal is what surfaces
+        // rather than that path's `ExtractionError.emptyContent`.
+        if hostStructured == nil, let refuser = hostParser as? any RefusingStructuredParser,
+           refuser.refusesEmptyCompose(window, context: hostContext) {
+            throw ParserRefusal(reason: "empty-compose")
+        }
+        let web = try WebAppCaptureParser.parse(tab: tab, window: window,
+                                               contentBudget: contentBudget)
+        // A host shape is bounded to the same budget the web path has always used, so one long
+        // thread cannot blow past the browser cap.
+        let structured = hostStructured.map { CaptureAccumulator.bound($0, to: contentBudget) }
+            ?? WebPageParser.parse(window: window, tab: tab)
+        let quality: BrowserCaptureQuality
+        if hostStructured != nil || web.preservedBoundaries {
+            quality = .high
+        } else {
+            quality = tab.quality
+        }
+        let parserID = [
+            "BrowserWeb.v2",
+            browser.browserEngine?.rawValue ?? "unknown",
+            web.app.rawValue,
+            tab.urlSource.rawValue,
+            "quality-\(quality.rawValue)",
+        ].joined(separator: "/")
+        return BrowserCaptureResult(
+            url: tab.url,
+            capture: ParsedCapture(
+                sourceApp: web.capture.sourceApp,
+                sourceKey: web.capture.sourceKey,
+                sourceTitle: web.capture.sourceTitle,
+                content: ContentRenderer.render(structured, style: .full),
+                contentKind: web.capture.contentKind,
+                parserVersion: 3,
+                accumulationPolicy: web.capture.accumulationPolicy,
+                offscreenPolicy: web.capture.offscreenPolicy,
+                structured: structured
+            ),
+            parserID: parserID,
+            quality: quality,
+            truncated: tab.truncated || web.truncated
+                || web.capture.content.count >= WebAppCaptureParser.contentCap,
+            webApp: web.app,
+            structured: structured
+        )
+    }
+```
+
+In `Sources/MaxMiCapture/ParserRegistry.swift`, append to Task 5's single registration list (Gmail has no bundle IDs, so the derived loop puts it in the host map only):
+
+```swift
+        let structured: [any StructuredParser] = [
+            TerminalParser(), EditorParser(), SlackParser(), DiscordParser(), MessagesParser(),
+            WhatsAppParser(), NotesParser(), NotionParser(), ObsidianParser(), FinderParser(),
+            CalendarParser(), FantasticalParser(), RemindersParser(),
+            GmailParser(),
+        ]
+```
+
+In `Sources/MaxMi/AppWiring.swift`, insert one clause immediately before `} catch ExtractionError.addressFieldFocused {`:
+
+```swift
+        } catch let refusal as ParserRefusal {
+            // §14b: a host parser refuses only for a compose-only window with an empty draft.
+            // Nothing to store, and the refusal IS the health-ledger record of that — so this is
+            // a skip, not a failure, and it is not retried.
+            SafeLogger.shared.log(
+                .info, subsystem: .capture, event: .parserRefused,
+                fields: SafeLogFields(
+                    parserID: SafeLogToken(validating: effectiveParserName),
+                    outcome: SafeLogToken(validating: refusal.reason)
+                )
+            )
+            recordCaptureHealth(
+                app: appInfo, trigger: trigger, parser: effectiveParserName,
+                outcome: .skipped(.parserNoContent), startedAtMs: startedAtMs
+            )
+```
+
+In `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (Task 21), host-routed parsers have no bundle ID, so registration is checked through the host map. Add the dictionary next to `coverage`:
+
+```swift
+    /// Parser type name -> the hosts it claims. Host-routed parsers (§14b) are registered by
+    /// host, not by bundle ID, so `testEveryCoveredParserIsRegisteredAsAStructuredParser`
+    /// cannot see them.
+    static let hostCoverage: [String: [String]] = [
+        "GmailParser": ["mail.google.com"],
+    ]
+```
+
+and add the test that consumes it:
+
+```swift
+    func testEveryHostRoutedParserIsReachableFromTheHostMap() {
+        let registry = ParserRegistry()
+        for (name, hosts) in Self.hostCoverage {
+            for host in hosts {
+                guard let parser = registry.structuredParser(forHost: host) else {
+                    return XCTFail("no structured parser registered for host \(host)")
+                }
+                XCTAssertEqual(String(describing: type(of: parser)), name,
+                               "host \(host) resolves to the wrong parser")
+            }
+        }
+    }
+```
+
+Task 21's `testEveryCoveredParserIsRegisteredAsAStructuredParser` builds `registered` from
+bundle IDs only, so its final loop must now accept a host-routed parser. Replace that loop with:
+
+```swift
+        for name in Self.coverage.keys {
+            XCTAssertTrue(registered.contains(name) || Self.hostCoverage[name] != nil,
+                          "\(name) is reachable neither by bundle id nor by host")
+        }
+```
+
+`SlackParser` still satisfies the `registered` half (it claims a bundle ID as well), so this
+loosening applies only to the four parsers that claim hosts alone.
+
+and add Gmail's fixtures to `coverage` so the existing two-fixture, nonzero-origin and secure-field assertions cover them:
+
+```swift
+        "GmailParser": [("gmail-thread", "gmail-thread-golden"),
+                        ("gmail-offset-inbox", "gmail-offset-inbox-golden")],
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `swift test --filter GmailParserTests`
+Expected: PASS except the two golden tests (their fixtures do not exist yet).
+
+Run: `swift test --filter BrowserCapturePipelineTests`
+Expected: PASS — the signature change is additive and the routing is unchanged for a non-Gmail tab.
+
+Run: `swift test --filter WebAppStructuredTests`
+Expected: PASS — `contentBudget:` is still the fourth parameter.
+
+- [ ] **Step 6: Scrub the fixtures, write the goldens, add the README rows**
+
+Hand-scrub `/tmp/gmail-thread.json` and `/tmp/gmail-offset-inbox.json` per `Tests/MaxMiCaptureTests/Fixtures/README.md`: replace every subject, body, snippet, person name and address with invented equivalents of similar shape and length, and delete subtrees the tests do not need. Keep intact:
+
+- the `AXWindow` root with its real `frame` (nonzero `x`/`y` for `gmail-offset-inbox.json`),
+- `gmail-thread.json`: the non-chrome subject `AXHeading`, **two** verified message containers — one with a body node and one without, so the collapsed-skip is pinned — each with a sender node, an address node and a time node, plus one composer node carrying invented draft text,
+- `gmail-offset-inbox.json`: **three** verified list rows, one with `"selected": true`, each exposing four static texts (sender, subject, snippet, time).
+
+Move both into `Tests/MaxMiCaptureTests/Fixtures/`, then print each golden from the test (`print(try goldenJSON(GmailParser().parse(try fixture("gmail-thread"), context: context(nil))!))`), scrub it the same way and save it as `gmail-thread-golden.json` / `gmail-offset-inbox-golden.json`. Add four rows to the README table:
+
+```markdown
+| `gmail-thread.json` | Recorded Chrome Gmail thread, scrubbed | `GmailParser` conversation: expanded message, collapsed skip, composer draft |
+| `gmail-thread-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
+| `gmail-offset-inbox.json` | Recorded Chrome Gmail inbox at a nonzero screen origin, scrubbed | `GmailParser` generic page of three-cell table rows |
+| `gmail-offset-inbox-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
+```
+
+- [ ] **Step 7: Run the suites**
+
+Run: `swift test --filter GmailParserTests`
+Expected: PASS, 20 tests.
+
+Run: `swift test --filter PhaseDCoverageTests`
+Expected: PASS — Gmail is reachable by host and both fixtures load.
+
+Run: `swift build 2>&1 | grep -i warning; echo done`
+Expected: no warning lines.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/MaxMiCapture/WebHostParsing.swift Sources/MaxMiCapture/GmailParser.swift \
+        Sources/MaxMiCapture/BrowserCapturePipeline.swift \
+        Sources/MaxMiCapture/ParserRegistry.swift Sources/MaxMi/AppWiring.swift \
+        Tests/MaxMiCaptureTests/GmailParserTests.swift \
+        Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift \
+        Tests/MaxMiCaptureTests/Fixtures/gmail-thread.json \
+        Tests/MaxMiCaptureTests/Fixtures/gmail-thread-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/gmail-offset-inbox.json \
+        Tests/MaxMiCaptureTests/Fixtures/gmail-offset-inbox-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/README.md
+git commit -m "Capture Gmail threads, inbox rows and drafts from verified DOM anchors"
+```
+
+---
+### Task 23: LinkedIn messaging (`linkedin.com/messaging`) → `.conversation`
+
+**Files:**
+- Create: `Sources/MaxMiCapture/LinkedInMessagingParser.swift`
+- Modify: `Sources/MaxMiCapture/ParserRegistry.swift` (append `LinkedInMessagingParser()` to Task 5's `structured` list)
+- Modify: `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (one `coverage` row, one `hostCoverage` row)
+- Create: `Tests/MaxMiCaptureTests/Fixtures/linkedin-messaging.json`, `linkedin-messaging-golden.json`, `linkedin-offset-messaging.json`, `linkedin-offset-messaging-golden.json`
+- Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
+- Test: `Tests/MaxMiCaptureTests/LinkedInMessagingParserTests.swift`
+
+**Interfaces:**
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.first(in:where:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:isUser:)`, `.path(of:)` (Task 22); `WebAppCaptureParser.classify(url:)`; `URLKeyNormalizer.normalize(_:)`; `Message`, `Conversation`, `CapturedContent` (Phase A).
+- Produces: `LinkedInMessagingParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `eventClass`, `groupNameClass`, `groupTimestampClass`, `bodyClass`, `titleClass`, `composerClass`, `navMeClass`, `messagingPathPrefix`, `signedInName(in:) -> String?`, `channel(in:windowTitle:) -> String`, `messages(in:selfName:) -> [Message]`, `composer(in:) -> AXNode?`.
+
+**Two rulings this task must not relitigate:**
+
+1. **Off `/messaging`, the parser returns nil** so every other LinkedIn page stays generic v2 (§14b). It is a `nil`, not a refusal — the feed is a page worth capturing generically.
+2. **`isUser` is never guessed from geometry.** It is true only when the message group's name equals the signed-in user's name. When that name cannot be resolved, every message is emitted with `isUser: false` and the header comment says so (§14b).
+
+- [ ] **Step 1: Record the live fixtures FIRST and verify the anchors**
+
+Open a LinkedIn conversation at `https://www.linkedin.com/messaging/thread/<id>/` in Chrome as the front tab, window flush at the screen origin, then:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/linkedin-messaging.json
+```
+
+Open a **different** conversation, one where you have replied so a self-authored group is present, drag the window well away from the top-left corner, then:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/linkedin-offset-messaging.json
+```
+
+Verify the anchors in both dumps with the same class/id/description census Task 22 Step 1 uses:
+
+```bash
+for f in /tmp/linkedin-messaging.json /tmp/linkedin-offset-messaging.json; do
+  echo "== $f"
+  python3 - "$f" <<'PY'
+import collections, json, sys
+counts = collections.Counter()
+def walk(node):
+    for name in node.get("domClassList") or []:
+        counts["class:" + name] += 1
+    if node.get("domIdentifier"):
+        counts["domId:" + node["domIdentifier"][:40]] += 1
+    if node.get("label"):
+        counts["description:" + node["label"][:40]] += 1
+    for child in node.get("children", []):
+        walk(child)
+walk(json.load(open(sys.argv[1])))
+for name, n in counts.most_common(80):
+    print(n, name)
+PY
+done
+```
+
+Check each of §14b's candidates — `msg-s-message-list__event`, `msg-s-message-group__name`, `msg-s-message-group__timestamp`, `msg-s-event-listitem__body`, `msg-entity-lockup__entity-title`, `msg-form__contenteditable` — plus the two self-name candidates this task invents because §14b names only "the 'Me' nav item or the profile card": `global-nav__me` and `global-nav__me-photo`. Record `verified (<n> nodes)` or `NOT EXPOSED — used <replacement>` for every one of the eight in the parser header, and keep the failures listed. **If neither self-name candidate surfaces, that is an acceptable outcome**: write `NOT EXPOSED — isUser is always false on this surface` and the tests below already cover that path.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `Tests/MaxMiCaptureTests/LinkedInMessagingParserTests.swift`:
+
+```swift
+import XCTest
+import MaxMiCore
+@testable import MaxMiCapture
+
+final class LinkedInMessagingParserTests: XCTestCase {
+    func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
+              domClassList: [String]? = nil, url: String? = nil, frame: CGRect? = nil,
+              children: [AXNode] = []) -> AXNode {
+        AXNode(role: role, value: value, title: title, url: url,
+               frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
+               children: children, identifier: nil, label: label, subrole: nil,
+               headingLevel: nil, selected: false, placeholder: nil, selectedText: nil,
+               hidden: false, domClassList: domClassList, domIdentifier: nil)
+    }
+
+    func text(_ value: String, _ classes: [String]? = nil, y: CGFloat, x: CGFloat = 400) -> AXNode {
+        node("AXStaticText", value: value, domClassList: classes,
+             frame: CGRect(x: x, y: y, width: 300, height: 16))
+    }
+
+    /// One `li` per group, in LinkedIn's real shape: the first `li` of a group carries the name
+    /// and timestamp, and a continuation `li` carries only a body.
+    func event(name: String?, time: String?, bodies: [String], y: CGFloat, x: CGFloat) -> AXNode {
+        var children: [AXNode] = []
+        if let name { children.append(text(name, ["msg-s-message-group__name"], y: y, x: x)) }
+        if let time {
+            children.append(text(time, ["msg-s-message-group__timestamp"], y: y, x: x + 200))
+        }
+        for (index, body) in bodies.enumerated() {
+            children.append(node("AXGroup", domClassList: ["msg-s-event-listitem__body"],
+                                 frame: CGRect(x: x, y: y + 20 + CGFloat(index * 20),
+                                               width: 400, height: 18),
+                                 children: [text(body, nil, y: y + 20 + CGFloat(index * 20), x: x)]))
+        }
+        return node("AXGroup", domClassList: ["msg-s-message-list__event"],
+                    frame: CGRect(x: x, y: y, width: 500, height: CGFloat(40 + bodies.count * 20)),
+                    children: children)
+    }
+
+    /// The messaging thread: two groups from the contact, one from the signed-in user, plus a
+    /// continuation `li` under the first group, an entity title and an optional composer.
+    func messagingWindow(origin: CGPoint = .zero, draft: String? = nil,
+                         selfName: String? = "Sam Rivers") -> AXNode {
+        let x = origin.x
+        let y = origin.y
+        var children: [AXNode] = [
+            text("Ada Lovelace", ["msg-entity-lockup__entity-title"], y: y + 60, x: x + 400),
+            event(name: "Ada Lovelace", time: "10:14 AM",
+                  bodies: ["Sending the deck over."], y: y + 100, x: x + 400),
+            event(name: nil, time: nil, bodies: ["Ignore the first slide."],
+                  y: y + 160, x: x + 400),
+            event(name: "Sam Rivers", time: "10:22 AM", bodies: ["Got it, thanks."],
+                  y: y + 220, x: x + 400),
+        ]
+        if let selfName {
+            children.insert(node("AXImage", label: "Photo of \(selfName)",
+                                 domClassList: ["global-nav__me-photo"],
+                                 frame: CGRect(x: x + 1200, y: y + 10, width: 24, height: 24)),
+                            at: 0)
+        }
+        if let draft {
+            children.append(node("AXTextArea", value: draft,
+                                 domClassList: ["msg-form__contenteditable"],
+                                 frame: CGRect(x: x + 400, y: y + 500, width: 500, height: 60)))
+        }
+        return node("AXWindow", title: "Messaging | LinkedIn",
+                    frame: CGRect(origin: origin, size: CGSize(width: 1440, height: 900)),
+                    children: children)
+    }
+
+    /// The LinkedIn feed: no message events anywhere.
+    func feedWindow() -> AXNode {
+        node("AXWindow", title: "Feed | LinkedIn",
+             frame: CGRect(x: 0, y: 0, width: 1440, height: 900), children: [
+            text("Ada Lovelace posted a photo", nil, y: 100),
+        ])
+    }
+
+    static let threadURL = "https://www.linkedin.com/messaging/thread/2-abc123def=="
+
+    func context(_ title: String? = "Messaging | LinkedIn",
+                 url: String = LinkedInMessagingParserTests.threadURL) -> ParseContext {
+        ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  windowTitle: title), url: url)
+    }
+
+    func conversation(_ content: CapturedContent?) throws -> Conversation {
+        guard case .conversation(let c) = try XCTUnwrap(content) else {
+            throw XCTSkip("expected .conversation, got \(String(describing: content))")
+        }
+        return c
+    }
+
+    // MARK: - Registration and routing
+
+    func testConfigClaimsBothLinkedInHosts() {
+        XCTAssertEqual(LinkedInMessagingParser.config.hosts, ["www.linkedin.com", "linkedin.com"])
+        XCTAssertEqual(LinkedInMessagingParser.config.bundleIDs, [])
+        XCTAssertFalse(LinkedInMessagingParser.config.preferOverNative)
+        let registry = ParserRegistry()
+        XCTAssertTrue(registry.structuredParser(forHost: "www.linkedin.com")
+                        is LinkedInMessagingParser)
+        XCTAssertTrue(registry.structuredParser(forHost: "linkedin.com")
+                        is LinkedInMessagingParser)
+    }
+
+    func testEveryLinkedInPageThatIsNotMessagingIsNotHandled() {
+        let parser = LinkedInMessagingParser()
+        XCTAssertNil(parser.parse(feedWindow(),
+                                  context: context("Feed | LinkedIn",
+                                                   url: "https://www.linkedin.com/feed/")))
+        // Even a page that DOES expose message events stays generic off /messaging: the notification
+        // rail on the feed renders the same classes.
+        XCTAssertNil(parser.parse(messagingWindow(),
+                                  context: context(url: "https://www.linkedin.com/feed/")))
+        XCTAssertFalse(parser.refusesEmptyCompose(
+            feedWindow(), context: context(url: "https://www.linkedin.com/feed/")))
+    }
+
+    func testTheMessagingPathIsMatchedByPrefixSoASubPathStillParses() throws {
+        let c = try conversation(LinkedInMessagingParser().parse(
+            messagingWindow(), context: context(url: "https://www.linkedin.com/messaging/")))
+        XCTAssertFalse(c.messages.isEmpty)
+    }
+
+    // MARK: - Messages
+
+    func testGroupsBecomeAttributedMessagesAndAContinuationInheritsItsGroup() throws {
+        let c = try conversation(LinkedInMessagingParser().parse(messagingWindow(),
+                                                                context: context()))
+        XCTAssertEqual(c.channel, "Ada Lovelace")
+        XCTAssertEqual(c.messages.map(\.sender),
+                       ["Ada Lovelace", "Ada Lovelace", "Sam Rivers"])
+        XCTAssertEqual(c.messages.map(\.text),
+                       ["Sending the deck over.", "Ignore the first slide.", "Got it, thanks."])
+        XCTAssertEqual(c.messages.map(\.timeString), ["10:14 AM", "10:14 AM", "10:22 AM"])
+    }
+
+    func testIsUserIsTrueOnlyForTheSignedInUsersOwnGroup() throws {
+        let c = try conversation(LinkedInMessagingParser().parse(messagingWindow(),
+                                                                context: context()))
+        XCTAssertEqual(c.messages.map(\.isUser), [false, false, true])
+        XCTAssertTrue(ContentRenderer.render(.conversation(c), style: .full)
+            .contains("(From: You)(sent 10:22 AM): Got it, thanks."))
+    }
+
+    func testAnUnresolvableSelfNameMakesEveryMessageIsUserFalse() throws {
+        let c = try conversation(LinkedInMessagingParser().parse(
+            messagingWindow(selfName: nil), context: context()))
+        XCTAssertEqual(c.messages.map(\.isUser), [false, false, false],
+                       "isUser is never guessed from geometry (§14b)")
+        XCTAssertEqual(c.messages.last?.sender, "Sam Rivers")
+    }
+
+    func testSignedInNameStripsThePhotoOfPrefix() {
+        XCTAssertEqual(LinkedInMessagingParser.signedInName(in: messagingWindow()), "Sam Rivers")
+        XCTAssertNil(LinkedInMessagingParser.signedInName(in: messagingWindow(selfName: nil)))
+    }
+
+    func testAJoinedBodyLineIsNeverResplitOnAColon() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 800, height: 600), children: [
+            event(name: nil, time: nil, bodies: ["Note: check the doc"], y: 100, x: 400),
+        ])
+        let message = try XCTUnwrap(try conversation(
+            LinkedInMessagingParser().parse(win, context: context())).messages.first)
+        XCTAssertEqual(message.sender, "unknown")
+        XCTAssertEqual(message.text, "Note: check the doc")
+    }
+
+    func testAChannelWithNoEntityTitleFallsBackToTheWindowTitle() throws {
+        let win = node("AXWindow", title: "Messaging | LinkedIn",
+                       frame: CGRect(x: 0, y: 0, width: 800, height: 600), children: [
+            event(name: "Ada", time: nil, bodies: ["hi"], y: 100, x: 400),
+        ])
+        XCTAssertEqual(try conversation(LinkedInMessagingParser().parse(win, context: context()))
+                        .channel, "Messaging | LinkedIn")
+    }
+
+    // MARK: - Draft, not-handled, refusal
+
+    func testTheComposerBecomesATrailingUserDraft() throws {
+        let c = try conversation(LinkedInMessagingParser().parse(
+            messagingWindow(draft: "on my way"), context: context()))
+        let draft = try XCTUnwrap(c.messages.last)
+        XCTAssertTrue(draft.isDraft)
+        XCTAssertTrue(draft.isUser)
+        XCTAssertEqual(draft.sender, "You")
+        XCTAssertEqual(draft.text, "on my way")
+        XCTAssertEqual(c.messages.count, 4)
+    }
+
+    func testAMessagingPageWithNoEventsIsNotHandled() {
+        let empty = node("AXWindow", title: "Messaging | LinkedIn",
+                         frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+                         children: [text("No conversations yet", nil, y: 100)])
+        XCTAssertNil(LinkedInMessagingParser().parse(empty, context: context()))
+    }
+
+    func testAnEmptyComposerWithNoEventsRefuses() {
+        let parser = LinkedInMessagingParser()
+        let composeOnly = node("AXWindow", title: "Messaging | LinkedIn",
+                               frame: CGRect(x: 0, y: 0, width: 800, height: 600), children: [
+            node("AXTextArea", value: "  ", domClassList: ["msg-form__contenteditable"],
+                 frame: CGRect(x: 400, y: 500, width: 500, height: 60)),
+        ])
+        XCTAssertNil(parser.parse(composeOnly, context: context()))
+        XCTAssertTrue(parser.refusesEmptyCompose(composeOnly, context: context()))
+    }
+
+    // MARK: - Kind, key, origin, goldens
+
+    func testTheHostKeepsItsConversationKindAndItsExistingKey() {
+        XCTAssertEqual(WebAppCaptureParser.classify(url: Self.threadURL), .linkedin)
+        // §14b keeps the key derivation exactly as it is today: the thread path is truncated to
+        // three components, so a scroll or a query param cannot fork the thread.
+        XCTAssertEqual(URLKeyNormalizer.normalize(Self.threadURL),
+                       URLKeyNormalizer.normalize(Self.threadURL + "?focus=true"))
+        XCTAssertTrue(URLKeyNormalizer.normalize(Self.threadURL).hasPrefix(
+            "https://www.linkedin.com/messaging/thread"))
+    }
+
+    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+        let parser = LinkedInMessagingParser()
+        XCTAssertEqual(parser.parse(messagingWindow(), context: context()),
+                       parser.parse(messagingWindow(origin: CGPoint(x: 1440, y: 220)),
+                                    context: context()))
+    }
+
+    func testMessagingFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(LinkedInMessagingParser().parse(
+            try fixture("linkedin-messaging"), context: context())),
+                     matches: "linkedin-messaging-golden")
+    }
+
+    func testOffsetMessagingFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(LinkedInMessagingParser().parse(
+            try fixture("linkedin-offset-messaging"), context: context())),
+                     matches: "linkedin-offset-messaging-golden")
+    }
+}
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `swift test --filter LinkedInMessagingParserTests`
+Expected: FAIL to compile — "cannot find 'LinkedInMessagingParser' in scope".
+
+- [ ] **Step 4: Write the implementation**
+
+Create `Sources/MaxMiCapture/LinkedInMessagingParser.swift`:
+
+```swift
+import Foundation
+import MaxMiCore
+
+/// LinkedIn messaging (`linkedin.com/messaging`) → `.conversation`, routed by host (§7b, §14b).
+///
+/// EVERY OTHER LINKEDIN PAGE STAYS GENERIC V2: `parse` returns nil off `/messaging`, even when a
+/// page exposes message classes (the feed's notification rail does). `contentKind` is decided by
+/// `WebAppCaptureParser.classify` — `.conversation` for `/messaging`, `.webpage` elsewhere
+/// (§12 Q3) — and the key stays `URLKeyNormalizer.normalize(tab.url)`, which already truncates
+/// `/messaging/thread/<id>` to three path components.
+///
+/// `isUser` is TRUE only when a group's name equals the signed-in user's name. It is never
+/// inferred from geometry or bubble alignment. When the signed-in name cannot be resolved every
+/// message is emitted with `isUser: false`.
+///
+/// ANCHORS. §14b's candidates plus the two self-name candidates this parser adds (§14b names
+/// only "the 'Me' nav item or the profile card"), verified against a live dump recorded with
+/// `swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/linkedin-messaging.json`
+/// on <YYYY-MM-DD>. Replace each `?` with `verified (<n> nodes)` or
+/// `NOT EXPOSED — used <replacement>`, and keep the failures listed:
+///   `msg-s-message-list__event`        message list item     ?
+///   `msg-s-message-group__name`        sender                ?
+///   `msg-s-message-group__timestamp`   time                  ?
+///   `msg-s-event-listitem__body`       body                  ?
+///   `msg-entity-lockup__entity-title`  conversation header   ?
+///   `msg-form__contenteditable`        composer              ?
+///   `global-nav__me-photo`             signed-in name        ?
+///   `global-nav__me`                   signed-in name        ?
+public struct LinkedInMessagingParser: RefusingStructuredParser {
+    public init() {}
+
+    public static let config = ParserConfig(
+        app: "LinkedIn",
+        bundleIDs: [],
+        hosts: ["www.linkedin.com", "linkedin.com"],
+        // Declared as §14b asks; inert for a hosts-only parser (see `GmailParser.config`). The
+        // AXWebArea gate is what actually supplies these attributes on a browser tab.
+        attributeSet: ["AXDOMClassList", "AXDOMIdentifier"],
+        offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+        preferOverNative: false
+    )
+
+    static let messagingPathPrefix = "/messaging"
+    static let eventClass = "msg-s-message-list__event"
+    static let groupNameClass = "msg-s-message-group__name"
+    static let groupTimestampClass = "msg-s-message-group__timestamp"
+    static let bodyClass = "msg-s-event-listitem__body"
+    static let titleClass = "msg-entity-lockup__entity-title"
+    static let composerClass = "msg-form__contenteditable"
+    static let navMeClass = "global-nav__me-photo"
+    static let navMeContainerClass = "global-nav__me"
+    /// LinkedIn labels the nav photo either with the bare name or with this prefix.
+    static let photoPrefix = "Photo of "
+
+    // MARK: - Anchors
+
+    static func composer(in snapshot: AXNode) -> AXNode? {
+        AXQuery.find("//*[domClass=\"\(composerClass)\"]", in: snapshot)
+    }
+
+    /// The signed-in user's name, from the nav "Me" control. nil is a legitimate answer.
+    static func signedInName(in snapshot: AXNode) -> String? {
+        let node = AXQuery.find("//*[domClass=\"\(navMeClass)\"]", in: snapshot)
+            ?? AXQuery.find("//*[domClass=\"\(navMeContainerClass)\"]", in: snapshot)
+        guard let node, var name = WebHostParsing.text(of: node) else { return nil }
+        if name.hasPrefix(photoPrefix) { name = String(name.dropFirst(photoPrefix.count)) }
+        name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    static func channel(in snapshot: AXNode, windowTitle: String?) -> String {
+        if let title = AXQuery.find("//*[domClass=\"\(titleClass)\"]", in: snapshot)
+            .flatMap(WebHostParsing.text(of:)) {
+            return title
+        }
+        guard let windowTitle, !windowTitle.isEmpty else { return "unknown" }
+        return windowTitle
+    }
+
+    /// One message per body node. The name and timestamp live on the FIRST list item of a group,
+    /// so a continuation item inherits the group it follows — that is container structure, not
+    /// geometry, and it is why `sortedByVisualOrder` runs first.
+    static func messages(in snapshot: AXNode, selfName: String?) -> [Message] {
+        let events = AXQuery.sortedByVisualOrder(
+            AXQuery.findAll("//*[domClass=\"\(eventClass)\"]", in: snapshot),
+            relativeTo: snapshot.frame
+        )
+        var currentSender: String?
+        var currentTime: String?
+        var out: [Message] = []
+        for event in events {
+            if let name = AXQuery.find("//*[domClass=\"\(groupNameClass)\"]", in: event)
+                .flatMap(WebHostParsing.text(of:)) {
+                currentSender = name
+                currentTime = AXQuery.find("//*[domClass=\"\(groupTimestampClass)\"]", in: event)
+                    .flatMap(WebHostParsing.text(of:))
+            }
+            let bodies = AXQuery.sortedByVisualOrder(
+                AXQuery.findAll("//*[domClass=\"\(bodyClass)\"]", in: event),
+                relativeTo: event.frame
+            )
+            let isUser = selfName.map { name in
+                currentSender?.caseInsensitiveCompare(name) == .orderedSame
+            } ?? false
+            for body in bodies {
+                if let message = WebHostParsing.message(
+                    sender: currentSender, timeString: currentTime,
+                    texts: AXQuery.collectStaticTexts(in: body), isUser: isUser
+                ) {
+                    out.append(message)
+                }
+            }
+        }
+        return out
+    }
+
+    // MARK: - StructuredParser
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+        // Off /messaging this parser has nothing to say and the page stays generic v2 (§14b).
+        guard WebHostParsing.path(of: context.url).hasPrefix(Self.messagingPathPrefix) else {
+            return nil
+        }
+        var messages = Self.messages(in: snapshot, selfName: Self.signedInName(in: snapshot))
+        if let draft = WebHostParsing.draft(in: Self.composer(in: snapshot)) {
+            messages.append(draft)
+        }
+        // NOT_HANDLED, not a refusal: an empty messaging shell is still a page.
+        guard !messages.isEmpty else { return nil }
+        return .conversation(Conversation(
+            channel: Self.channel(in: snapshot, windowTitle: context.windowTitle),
+            // LinkedIn's anchors expose no participant count, so a thread stays flat.
+            isGroup: false,
+            messages: messages
+        ))
+    }
+
+    public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
+        guard WebHostParsing.path(of: context.url).hasPrefix(Self.messagingPathPrefix),
+              let composer = Self.composer(in: snapshot) else { return false }
+        return WebHostParsing.draft(in: composer) == nil
+            && Self.messages(in: snapshot, selfName: nil).isEmpty
+    }
+}
+```
+
+In `Sources/MaxMiCapture/ParserRegistry.swift`, append to Task 5's list:
+
+```swift
+            GmailParser(), LinkedInMessagingParser(),
+```
+
+In `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift`, add one row to each dictionary:
+
+```swift
+        "LinkedInMessagingParser": [("linkedin-messaging", "linkedin-messaging-golden"),
+                                    ("linkedin-offset-messaging",
+                                     "linkedin-offset-messaging-golden")],
+```
+
+```swift
+        "LinkedInMessagingParser": ["www.linkedin.com", "linkedin.com"],
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `swift test --filter LinkedInMessagingParserTests`
+Expected: PASS except the two golden tests.
+
+Run: `swift test --filter WebAppStructuredTests`
+Expected: PASS — LinkedIn's `classify` case and its key derivation are untouched.
+
+- [ ] **Step 6: Scrub the fixtures, write the goldens, add the README rows**
+
+Hand-scrub both dumps: invent every name, message body and conversation title. Keep intact:
+
+- the `AXWindow` root with its real `frame` (nonzero `x`/`y` for `linkedin-offset-messaging.json`),
+- the verified nav self-name node if it surfaced,
+- the verified entity-title node,
+- **three** verified message list items: one with a name + timestamp, one continuation item with a body only, and one whose name equals the invented self name (so `isUser: true` is pinned in a golden),
+- one composer node with invented draft text in `linkedin-offset-messaging.json` only.
+
+Move them into `Fixtures/`, print each golden from the test, scrub it, save it, then add four README rows:
+
+```markdown
+| `linkedin-messaging.json` | Recorded Chrome LinkedIn messaging thread, scrubbed | `LinkedInMessagingParser` groups, continuation items, `isUser` from the self name |
+| `linkedin-messaging-golden.json` | Golden `CapturedContent` for the above | `LinkedInMessagingParser` |
+| `linkedin-offset-messaging.json` | Recorded Chrome LinkedIn messaging at a nonzero screen origin, scrubbed | `LinkedInMessagingParser` with a composer draft |
+| `linkedin-offset-messaging-golden.json` | Golden `CapturedContent` for the above | `LinkedInMessagingParser` |
+```
+
+- [ ] **Step 7: Run the suites**
+
+Run: `swift test --filter LinkedInMessagingParserTests`
+Expected: PASS, 16 tests.
+
+Run: `swift test --filter PhaseDCoverageTests`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/MaxMiCapture/LinkedInMessagingParser.swift \
+        Sources/MaxMiCapture/ParserRegistry.swift \
+        Tests/MaxMiCaptureTests/LinkedInMessagingParserTests.swift \
+        Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift \
+        Tests/MaxMiCaptureTests/Fixtures/linkedin-messaging.json \
+        Tests/MaxMiCaptureTests/Fixtures/linkedin-messaging-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/linkedin-offset-messaging.json \
+        Tests/MaxMiCaptureTests/Fixtures/linkedin-offset-messaging-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/README.md
+git commit -m "Capture LinkedIn messaging threads and leave every other page generic"
+```
+
+---
+### Task 24: Outlook web (`outlook.office.com`, `outlook.live.com`) → `.conversation` / rows / draft
+
+**Files:**
+- Create: `Sources/MaxMiCapture/OutlookWebParser.swift`
+- Modify: `Sources/MaxMiCapture/ParserRegistry.swift` (append `OutlookWebParser()` to Task 5's `structured` list)
+- Modify: `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (one `coverage` row, one `hostCoverage` row)
+- Create: `Tests/MaxMiCaptureTests/Fixtures/outlook-web-reading.json`, `outlook-web-reading-golden.json`, `outlook-web-offset-list.json`, `outlook-web-offset-list-golden.json`
+- Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
+- Test: `Tests/MaxMiCaptureTests/OutlookWebParserTests.swift`
+
+**Interfaces:**
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.formatTable(_:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:isUser:)` (Task 22); `WebAppCaptureParser.classify(url:)`; `URLKeyNormalizer.normalize(_:)`; `Message`, `Conversation`, `GenericPage`, `Region`, `Block`, `CapturedContent` (Phase A).
+- Produces: `OutlookWebParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `cardDescriptionPrefix`, `cardRole`, `composeBodyDescription`, `listRole`, `senderPrefix`, `sentSeparator`, `headerFields(fromDescription:) -> (sender: String?, time: String?)`, `messageCards(in:) -> [AXNode]`, `readingPaneMessages(in:) -> [Message]`, `listRows(in:) -> [Block]`, `composer(in:) -> AXNode?`, `subject(in:windowTitle:) -> String`.
+
+**Host set.** Exactly the two hosts §14b names: `outlook.office.com` and `outlook.live.com`. `WebAppCaptureParser.classify` also treats `outlook.office365.com` as `.outlook`, but that domain is deliberately **left off the host map** until someone dumps it — an unverified anchor set is precisely what §14b forbids. A tab there keeps `contentKind` `.email` and stays generic v2, which is exactly today's behaviour.
+
+- [ ] **Step 1: Record the live fixtures FIRST and verify the anchors**
+
+Open Outlook web with a **message selected in the reading pane** in Chrome as the front tab, window flush at the screen origin:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/outlook-web-reading.json
+```
+
+Switch to a folder with **no message open** (list only), drag the window well away from the top-left corner:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/outlook-web-offset-list.json
+```
+
+Run the same class/id/description census as Task 22 Step 1 over both files. §14b's candidates for this host are all **description-shaped rather than class-shaped**, so pay attention to the `description:` lines:
+
+- a message card exposed as `AXDescription` starting `"Message"` (`div[aria-label^="Message"]`), or a node whose role is `AXDocument` when the aria-label shape differs;
+- a card header whose `AXDescription` carries `"From: <name>, Sent: <time>"` — record the **exact** separator you observe, because `headerFields(fromDescription:)` below parses `"From: "` and `", Sent: "` literally and must be corrected to what the dump says if Microsoft renders it differently;
+- the compose editor's `AXDescription` (`"Message body"`);
+- the message list's row role (`AXRow` vs `AXListItem` vs `AXOption`) — record which one the list actually uses.
+
+Record `verified` / `NOT EXPOSED — used <replacement>` for each in the parser header, keeping the failures listed.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `Tests/MaxMiCaptureTests/OutlookWebParserTests.swift`:
+
+```swift
+import XCTest
+import MaxMiCore
+@testable import MaxMiCapture
+
+final class OutlookWebParserTests: XCTestCase {
+    func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
+              selected: Bool = false, domClassList: [String]? = nil, frame: CGRect? = nil,
+              children: [AXNode] = []) -> AXNode {
+        AXNode(role: role, value: value, title: title, url: nil,
+               frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
+               children: children, identifier: nil, label: label, subrole: nil,
+               headingLevel: nil, selected: selected, placeholder: nil, selectedText: nil,
+               hidden: false, domClassList: domClassList, domIdentifier: nil)
+    }
+
+    func text(_ value: String, y: CGFloat, x: CGFloat = 500) -> AXNode {
+        node("AXStaticText", value: value, frame: CGRect(x: x, y: y, width: 400, height: 16))
+    }
+
+    /// A reading-pane card whose header carries the "From: …, Sent: …" description.
+    func card(description: String?, headerTexts: [String], body: [String],
+              y: CGFloat, x: CGFloat, role: String = "AXGroup") -> AXNode {
+        node(role, label: description,
+             frame: CGRect(x: x, y: y, width: 800, height: 120), children: [
+            node("AXGroup", label: description,
+                 frame: CGRect(x: x, y: y, width: 800, height: 20),
+                 children: headerTexts.enumerated().map { index, value in
+                     text(value, y: y, x: x + CGFloat(index * 150))
+                 }),
+            node("AXGroup", frame: CGRect(x: x, y: y + 30, width: 800, height: 80),
+                 children: body.enumerated().map { index, value in
+                     text(value, y: y + 30 + CGFloat(index * 20), x: x)
+                 }),
+        ])
+    }
+
+    func readingWindow(origin: CGPoint = .zero, draft: String? = nil) -> AXNode {
+        let x = origin.x
+        let y = origin.y
+        var children: [AXNode] = [
+            node("AXHeading", value: "Quarterly index rebuild",
+                 frame: CGRect(x: x + 500, y: y + 60, width: 500, height: 24)),
+            card(description: "Message From: Ada Lovelace, Sent: Mon 10:14 AM",
+                 headerTexts: ["Ada Lovelace", "Mon 10:14 AM"],
+                 body: ["Rebuild finished overnight.", "No downtime."], y: y + 100, x: x + 500),
+            // The second card's description does not carry the From/Sent shape, so the header's
+            // static texts in visual order are the fallback.
+            card(description: "Message", headerTexts: ["Grace Hopper", "Mon 10:41 AM"],
+                 body: ["Green across the board."], y: y + 260, x: x + 500),
+        ]
+        if let draft {
+            children.append(node("AXTextArea", value: draft, label: "Message body",
+                                 frame: CGRect(x: x + 500, y: y + 500, width: 600, height: 120)))
+        }
+        return node("AXWindow", title: "Quarterly index rebuild - Outlook",
+                    frame: CGRect(origin: origin, size: CGSize(width: 1600, height: 900)),
+                    children: children)
+    }
+
+    func listWindow(origin: CGPoint = .zero) -> AXNode {
+        let x = origin.x
+        let y = origin.y
+        func row(_ cells: [String], y rowY: CGFloat, selected: Bool = false) -> AXNode {
+            node("AXRow", selected: selected,
+                 frame: CGRect(x: x + 300, y: rowY, width: 400, height: 40),
+                 children: cells.enumerated().map { index, value in
+                     node("AXCell", frame: CGRect(x: x + 300 + CGFloat(index * 120), y: rowY,
+                                                  width: 110, height: 40),
+                          children: [text(value, y: rowY, x: x + 300 + CGFloat(index * 120))])
+                 })
+        }
+        return node("AXWindow", title: "Inbox - Outlook",
+                    frame: CGRect(origin: origin, size: CGSize(width: 1600, height: 900)),
+                    children: [
+            node("AXTable", frame: CGRect(x: x + 300, y: y + 80, width: 400, height: 700),
+                 children: [
+                row(["Ada Lovelace", "Quarterly index rebuild", "10:14 AM"], y: y + 100,
+                    selected: true),
+                row(["Grace Hopper", "Deploy window", "09:02 AM"], y: y + 150),
+            ]),
+        ])
+    }
+
+    func composeOnlyWindow(draft: String?) -> AXNode {
+        node("AXWindow", title: "New mail - Outlook",
+             frame: CGRect(x: 0, y: 0, width: 900, height: 700), children: [
+            node("AXTextArea", value: draft, label: "Message body",
+                 frame: CGRect(x: 100, y: 120, width: 600, height: 300)),
+        ])
+    }
+
+    static let readingURL =
+        "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00&exvsurl=1"
+
+    func context(_ title: String? = "Quarterly index rebuild - Outlook",
+                 url: String = OutlookWebParserTests.readingURL) -> ParseContext {
+        ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  windowTitle: title), url: url)
+    }
+
+    func conversation(_ content: CapturedContent?) throws -> Conversation {
+        guard case .conversation(let c) = try XCTUnwrap(content) else {
+            throw XCTSkip("expected .conversation, got \(String(describing: content))")
+        }
+        return c
+    }
+
+    func page(_ content: CapturedContent?) throws -> GenericPage {
+        guard case .generic(let p) = try XCTUnwrap(content) else {
+            throw XCTSkip("expected .generic, got \(String(describing: content))")
+        }
+        return p
+    }
+
+    // MARK: - Registration
+
+    func testConfigClaimsTheTwoSpecifiedOutlookHostsOnly() {
+        XCTAssertEqual(OutlookWebParser.config.hosts, ["outlook.office.com", "outlook.live.com"])
+        XCTAssertFalse(OutlookWebParser.config.preferOverNative)
+        let registry = ParserRegistry()
+        XCTAssertTrue(registry.structuredParser(forHost: "outlook.office.com") is OutlookWebParser)
+        XCTAssertTrue(registry.structuredParser(forHost: "outlook.live.com") is OutlookWebParser)
+        XCTAssertNil(registry.structuredParser(forHost: "outlook.office365.com"),
+                     "left generic on purpose: its anchors have not been dumped (§14b)")
+    }
+
+    // MARK: - Description parsing
+
+    func testHeaderFieldsParseTheFromSentDescription() {
+        let fields = OutlookWebParser.headerFields(
+            fromDescription: "Message From: Ada Lovelace, Sent: Mon 10:14 AM")
+        XCTAssertEqual(fields.sender, "Ada Lovelace")
+        XCTAssertEqual(fields.time, "Mon 10:14 AM")
+    }
+
+    func testHeaderFieldsYieldNilForADescriptionWithoutTheShape() {
+        let fields = OutlookWebParser.headerFields(fromDescription: "Message")
+        XCTAssertNil(fields.sender)
+        XCTAssertNil(fields.time)
+    }
+
+    func testHeaderFieldsToleratesAMissingSentClause() {
+        let fields = OutlookWebParser.headerFields(fromDescription: "From: Ada Lovelace")
+        XCTAssertEqual(fields.sender, "Ada Lovelace")
+        XCTAssertNil(fields.time)
+    }
+
+    // MARK: - Reading pane
+
+    func testReadingPaneCardsBecomeMessagesFromTheDescriptionAndFromTheHeaderTexts() throws {
+        let c = try conversation(OutlookWebParser().parse(readingWindow(), context: context()))
+        XCTAssertEqual(c.channel, "Quarterly index rebuild")
+        XCTAssertEqual(c.messages.map(\.sender), ["Ada Lovelace", "Grace Hopper"])
+        XCTAssertEqual(c.messages.map(\.timeString), ["Mon 10:14 AM", "Mon 10:41 AM"])
+        XCTAssertEqual(c.messages.map(\.text),
+                       ["Rebuild finished overnight. No downtime.", "Green across the board."])
+        XCTAssertFalse(c.messages.contains { $0.text.contains("Ada Lovelace") },
+                       "the header is not part of the body")
+    }
+
+    func testARoleDocumentCardIsFoundWhenTheDescriptionShapeDiffers() throws {
+        let win = node("AXWindow", title: "Note - Outlook",
+                       frame: CGRect(x: 0, y: 0, width: 900, height: 700), children: [
+            card(description: nil, headerTexts: ["Alan Turing", "Tue 08:00 AM"],
+                 body: ["Booked the afternoon slot."], y: 100, x: 200, role: "AXDocument"),
+        ])
+        let c = try conversation(OutlookWebParser().parse(win, context: context()))
+        XCTAssertEqual(c.messages.map(\.sender), ["Alan Turing"])
+        XCTAssertEqual(c.messages.map(\.timeString), ["Tue 08:00 AM"])
+    }
+
+    func testAJoinedBodyLineIsNeverResplitOnAColon() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700), children: [
+            card(description: "Message", headerTexts: [],
+                 body: ["Note: check the doc"], y: 100, x: 200),
+        ])
+        let message = try XCTUnwrap(try conversation(
+            OutlookWebParser().parse(win, context: context())).messages.first)
+        XCTAssertEqual(message.sender, "unknown")
+        XCTAssertEqual(message.text, "Note: check the doc")
+    }
+
+    // MARK: - List and draft
+
+    func testTheMessageListBecomesTableRows() throws {
+        let regions = try page(OutlookWebParser().parse(
+            listWindow(), context: context("Inbox - Outlook"))).regions
+        XCTAssertEqual(regions.map(\.kind), [.main])
+        XCTAssertEqual(regions[0].blocks.map(\.type), [
+            .tableRow(cells: ["Ada Lovelace", "Quarterly index rebuild", "10:14 AM"],
+                      selected: true),
+            .tableRow(cells: ["Grace Hopper", "Deploy window", "09:02 AM"], selected: false),
+        ])
+        XCTAssertEqual(ContentRenderer.renderBlock(regions[0].blocks[0]),
+                       "* Ada Lovelace | Quarterly index rebuild | 10:14 AM")
+    }
+
+    func testTheComposerBecomesATrailingUserDraft() throws {
+        let c = try conversation(OutlookWebParser().parse(readingWindow(draft: "replying now"),
+                                                         context: context()))
+        let draft = try XCTUnwrap(c.messages.last)
+        XCTAssertTrue(draft.isUser)
+        XCTAssertTrue(draft.isDraft)
+        XCTAssertEqual(draft.text, "replying now")
+        XCTAssertEqual(c.messages.count, 3)
+    }
+
+    func testAStandaloneComposeWindowIsTheDraftAlone() throws {
+        let c = try conversation(OutlookWebParser().parse(composeOnlyWindow("new mail body"),
+                                                         context: context("New mail - Outlook")))
+        XCTAssertEqual(c.messages.map(\.text), ["new mail body"])
+        XCTAssertEqual(c.messages.map(\.isDraft), [true])
+    }
+
+    // MARK: - Not handled vs refusal
+
+    func testAPageWithNoCardAndNoRowIsNotHandled() {
+        let bare = node("AXWindow", title: "Calendar - Outlook",
+                        frame: CGRect(x: 0, y: 0, width: 900, height: 700),
+                        children: [text("September 2026", y: 60)])
+        let parser = OutlookWebParser()
+        XCTAssertNil(parser.parse(bare, context: context("Calendar - Outlook")))
+        XCTAssertFalse(parser.refusesEmptyCompose(bare, context: context("Calendar - Outlook")))
+    }
+
+    func testAnEmptyComposeOnlyWindowRefuses() {
+        let parser = OutlookWebParser()
+        let window = composeOnlyWindow("  ")
+        XCTAssertNil(parser.parse(window, context: context()))
+        XCTAssertTrue(parser.refusesEmptyCompose(window, context: context()))
+    }
+
+    // MARK: - Kind, key, origin, goldens
+
+    func testTheHostKeepsEmailKindAndItsItemIdOnlyKey() {
+        XCTAssertEqual(WebAppCaptureParser.classify(url: Self.readingURL), .outlook)
+        // The key derivation is unchanged: everything but `itemid` is dropped, so the reading pane
+        // keys on the message and `exvsurl` cannot fork it.
+        let key = URLKeyNormalizer.normalize(Self.readingURL)
+        XCTAssertTrue(key.contains("itemid=AAQkAD00"))
+        XCTAssertFalse(key.contains("exvsurl"))
+    }
+
+    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+        let parser = OutlookWebParser()
+        XCTAssertEqual(parser.parse(readingWindow(), context: context()),
+                       parser.parse(readingWindow(origin: CGPoint(x: 1600, y: 300)),
+                                    context: context()))
+        XCTAssertEqual(parser.parse(listWindow(), context: context()),
+                       parser.parse(listWindow(origin: CGPoint(x: 1600, y: 300)),
+                                    context: context()))
+    }
+
+    func testReadingPaneFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(OutlookWebParser().parse(try fixture("outlook-web-reading"),
+                                                           context: context())),
+                     matches: "outlook-web-reading-golden")
+    }
+
+    func testOffsetListFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(OutlookWebParser().parse(try fixture("outlook-web-offset-list"),
+                                                           context: context("Inbox - Outlook"))),
+                     matches: "outlook-web-offset-list-golden")
+    }
+}
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `swift test --filter OutlookWebParserTests`
+Expected: FAIL to compile — "cannot find 'OutlookWebParser' in scope".
+
+- [ ] **Step 4: Write the implementation**
+
+Create `Sources/MaxMiCapture/OutlookWebParser.swift`:
+
+```swift
+import Foundation
+import MaxMiCore
+
+/// Outlook on the web (`outlook.office.com`, `outlook.live.com`), routed by host (§7b, §14b).
+///
+/// Reading pane → `.conversation`; message list → `.generic` table rows; compose → the draft
+/// alone. `contentKind` stays `.email` on every path because `WebAppCaptureParser.classify`
+/// decides it (§12 Q3), and the key stays `URLKeyNormalizer.normalize(tab.url)`, which already
+/// keeps only `itemid`.
+///
+/// `outlook.office365.com` is classified `.outlook` today but is NOT registered here: its DOM has
+/// not been dumped, and §14b forbids relying on an unverified anchor. A tab there stays generic v2.
+///
+/// ANCHORS. §14b's candidates, verified against a live dump recorded with
+/// `swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/outlook-web-reading.json`
+/// on <YYYY-MM-DD>. Replace each `?` with `verified (<n> nodes)` or
+/// `NOT EXPOSED — used <replacement>`, and keep the failures listed:
+///   AXDescription prefix "Message"        message card       ?
+///   role AXDocument                       message card alt   ?
+///   AXDescription "From: X, Sent: T"      card header        ?   (record the EXACT separator)
+///   AXDescription "Message body"          compose editor     ?
+///   AXRow (vs AXListItem / AXOption)      list row           ?
+public struct OutlookWebParser: RefusingStructuredParser {
+    public init() {}
+
+    public static let config = ParserConfig(
+        app: "Outlook Web",
+        bundleIDs: [],
+        hosts: ["outlook.office.com", "outlook.live.com"],
+        // Declared as §14b asks; inert for a hosts-only parser (see `GmailParser.config`).
+        attributeSet: ["AXDOMClassList", "AXDOMIdentifier"],
+        offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+        preferOverNative: false
+    )
+
+    static let cardDescriptionPrefix = "Message"
+    static let cardRole = "AXDocument"
+    static let composeBodyDescription = "Message body"
+    static let listRowRole = "AXRow"
+    static let senderPrefix = "From: "
+    static let sentSeparator = ", Sent: "
+
+    // MARK: - Header description
+
+    /// Outlook's card header commonly describes itself as `"… From: <name>, Sent: <time>"`.
+    /// Both halves are optional; anything that does not carry `"From: "` yields `(nil, nil)` and
+    /// the caller falls back to the header's static texts in visual order (§14b).
+    static func headerFields(fromDescription description: String) -> (sender: String?, time: String?) {
+        guard let fromRange = description.range(of: senderPrefix) else { return (nil, nil) }
+        let tail = description[fromRange.upperBound...]
+        guard let sentRange = tail.range(of: sentSeparator) else {
+            let sender = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (sender.isEmpty ? nil : sender, nil)
+        }
+        let sender = tail[..<sentRange.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        let time = tail[sentRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return (sender.isEmpty ? nil : sender, time.isEmpty ? nil : time)
+    }
+
+    // MARK: - Anchors
+
+    static func composer(in snapshot: AXNode) -> AXNode? {
+        AXQuery.find("//*[description=\"\(composeBodyDescription)\"]", in: snapshot)
+    }
+
+    /// Cards by description prefix, falling back to `role=AXDocument` when the aria-label shape
+    /// differs. The composer is excluded: it also sits under a "Message body" description and is
+    /// the draft, not a received message.
+    static func messageCards(in snapshot: AXNode) -> [AXNode] {
+        var cards = AXQuery.findAll("//*[description^=\"\(cardDescriptionPrefix)\"]", in: snapshot)
+            .filter { $0.label != composeBodyDescription }
+        if cards.isEmpty {
+            cards = AXQuery.findAll("//\(cardRole)", in: snapshot)
+        }
+        // A card contains its own header, which carries the same description — keep only the
+        // outermost match per subtree by dropping any card whose frame sits inside another's.
+        // Indices, not identity: `AXNode` is a value type and has no identity (Task 3).
+        let outermost = cards.indices.filter { index in
+            !cards.indices.contains { other in
+                other != index && contains(cards[other], cards[index])
+            }
+        }.map { cards[$0] }
+        return AXQuery.sortedByVisualOrder(outermost, relativeTo: snapshot.frame)
+    }
+
+    /// Frame containment: `AXNode` is a value type with no identity, so a strictly larger
+    /// enclosing frame is what marks a card as the ancestor of a nested header.
+    private static func contains(_ ancestor: AXNode, _ node: AXNode) -> Bool {
+        guard let outer = ancestor.frame, let inner = node.frame, outer != inner else { return false }
+        return outer.contains(inner)
+    }
+
+    static func subject(in snapshot: AXNode, windowTitle: String?) -> String {
+        if let heading = AXQuery.findAll("//AXHeading", in: snapshot)
+            .compactMap(WebHostParsing.text(of:)).first {
+            return heading
+        }
+        guard let windowTitle, !windowTitle.isEmpty else { return "unknown" }
+        return windowTitle
+    }
+
+    /// One message per card. Sender and time come from the card's `AXDescription` when it carries
+    /// the From/Sent shape, and otherwise from the header's static texts in visual order.
+    static func readingPaneMessages(in snapshot: AXNode) -> [Message] {
+        messageCards(in: snapshot).compactMap { card in
+            let children = AXQuery.sortedByVisualOrder(card.children, relativeTo: card.frame)
+            guard let header = children.first else { return nil }
+            let bodyTexts = children.dropFirst().flatMap { AXQuery.collectStaticTexts(in: $0) }
+            let described = card.label.map(headerFields(fromDescription:)) ?? (nil, nil)
+            var sender = described.sender
+            var time = described.time
+            if sender == nil {
+                let headerTexts = AXQuery.collectStaticTexts(in: header)
+                sender = headerTexts.first
+                time = time ?? (headerTexts.count > 1 ? headerTexts[1] : nil)
+            }
+            // Only the non-header children's texts, so the header cannot leak into the body.
+            let texts = bodyTexts.isEmpty ? AXQuery.collectStaticTexts(in: card) : bodyTexts
+            return WebHostParsing.message(sender: sender, timeString: time, texts: texts)
+        }
+    }
+
+    static func listRows(in snapshot: AXNode) -> [Block] {
+        let rows = AXQuery.sortedByVisualOrder(
+            AXQuery.findAll("//\(listRowRole)", in: snapshot), relativeTo: snapshot.frame)
+        return rows.map(AXQuery.formatTable).filter { !$0.text.isEmpty }
+    }
+
+    // MARK: - StructuredParser
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+        let draft = WebHostParsing.draft(in: Self.composer(in: snapshot))
+        var messages = Self.readingPaneMessages(in: snapshot)
+        if !messages.isEmpty {
+            if let draft { messages.append(draft) }
+            return .conversation(Conversation(
+                channel: Self.subject(in: snapshot, windowTitle: context.windowTitle),
+                isGroup: false, messages: messages
+            ))
+        }
+        if let draft {
+            return .conversation(Conversation(
+                channel: Self.subject(in: snapshot, windowTitle: context.windowTitle),
+                isGroup: false, messages: [draft]
+            ))
+        }
+        let rows = Self.listRows(in: snapshot)
+        // NOT_HANDLED → generic v2 (§4f rule 3): Outlook's calendar and settings live here too.
+        guard !rows.isEmpty else { return nil }
+        return .generic(GenericPage(regions: [Region(kind: .main, blocks: rows)],
+                                    focused: nil, url: context.url))
+    }
+
+    public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
+        guard let composer = Self.composer(in: snapshot) else { return false }
+        return WebHostParsing.draft(in: composer) == nil
+            && Self.readingPaneMessages(in: snapshot).isEmpty
+            && Self.listRows(in: snapshot).isEmpty
+    }
+}
+```
+
+In `Sources/MaxMiCapture/ParserRegistry.swift`, append to Task 5's list:
+
+```swift
+            GmailParser(), LinkedInMessagingParser(), OutlookWebParser(),
+```
+
+In `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift`, add one row to each dictionary:
+
+```swift
+        "OutlookWebParser": [("outlook-web-reading", "outlook-web-reading-golden"),
+                             ("outlook-web-offset-list", "outlook-web-offset-list-golden")],
+```
+
+```swift
+        "OutlookWebParser": ["outlook.office.com", "outlook.live.com"],
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `swift test --filter OutlookWebParserTests`
+Expected: PASS except the two golden tests.
+
+Run: `swift test --filter WebAppStructuredTests`
+Expected: PASS — Outlook's `classify` case and its `itemid`-only key are untouched.
+
+- [ ] **Step 6: Scrub the fixtures, write the goldens, add the README rows**
+
+Hand-scrub both dumps: invent every subject, body, name and time. Keep intact:
+
+- the `AXWindow` root with its real `frame` (nonzero `x`/`y` for `outlook-web-offset-list.json`),
+- `outlook-web-reading.json`: the subject `AXHeading`, **two** verified cards — one whose description carries the From/Sent shape and one whose description does not, so both header paths are pinned — and one composer node with invented draft text,
+- `outlook-web-offset-list.json`: **two** verified list rows with three cells each, one with `"selected": true`, and NO card and NO composer, so the generic-rows path is what the golden pins.
+
+Move into `Fixtures/`, print, scrub and save the goldens, then add four README rows:
+
+```markdown
+| `outlook-web-reading.json` | Recorded Chrome Outlook web reading pane, scrubbed | `OutlookWebParser` cards from the From/Sent description and from header texts |
+| `outlook-web-reading-golden.json` | Golden `CapturedContent` for the above | `OutlookWebParser` |
+| `outlook-web-offset-list.json` | Recorded Chrome Outlook web message list at a nonzero screen origin, scrubbed | `OutlookWebParser` generic page of table rows |
+| `outlook-web-offset-list-golden.json` | Golden `CapturedContent` for the above | `OutlookWebParser` |
+```
+
+- [ ] **Step 7: Run the suites**
+
+Run: `swift test --filter OutlookWebParserTests`
+Expected: PASS, 16 tests.
+
+Run: `swift test --filter PhaseDCoverageTests`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/MaxMiCapture/OutlookWebParser.swift Sources/MaxMiCapture/ParserRegistry.swift \
+        Tests/MaxMiCaptureTests/OutlookWebParserTests.swift \
+        Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift \
+        Tests/MaxMiCaptureTests/Fixtures/outlook-web-reading.json \
+        Tests/MaxMiCaptureTests/Fixtures/outlook-web-reading-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/outlook-web-offset-list.json \
+        Tests/MaxMiCaptureTests/Fixtures/outlook-web-offset-list-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/README.md
+git commit -m "Capture Outlook web reading panes, lists and drafts"
+```
+
+---
+### Task 25: Slack web (`app.slack.com`) → the same `.conversation` the native app produces
+
+**Files:**
+- Modify: `Sources/MaxMiCapture/SlackParser.swift` (**replace** Task 10's `domMessages(in:)` and `parse(_:context:)`; add the header-channel, `isGroup` and refusal members)
+- Modify: `Tests/MaxMiCaptureTests/SlackStructuredTests.swift` (one Task 10 assertion becomes the header-driven one; see Step 4)
+- Modify: `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (two more `coverage` pairs, one `hostCoverage` row)
+- Create: `Tests/MaxMiCaptureTests/Fixtures/slack-web-channel.json`, `slack-web-channel-golden.json`, `slack-web-offset-dm.json`, `slack-web-offset-dm-golden.json`
+- Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
+- Test: `Tests/MaxMiCaptureTests/SlackWebStructuredTests.swift`
+
+**Interfaces:**
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)` (Task 4); `SlackParser.config`, `.channelName(fromTitle:)`, `.draftMessage(in:)`, `.geometryMessages(in:)`, `.messageListClass`, `.messageItemClass`, `.senderClass`, `.timestampClass`, `.composerClass` (Task 10); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.message(sender:timeString:texts:)` (Task 22); `Conversation`, `Message`, `CapturedContent` (Phase A).
+- Produces: `SlackParser.messageBackgroundClass`, `.headerChannelClass`, `.headerChannel(in:) -> String?`, `.channel(in:windowTitle:) -> String`, `.isGroup(in:) -> Bool`, `.domItems(in:) -> [AXNode]`, the replaced `.domMessages(in:) -> [Message]` and `.parse(_:context:)`, and `SlackParser: RefusingStructuredParser` via `refusesEmptyCompose(_:context:)`.
+- `SlackParser.config` is **unchanged** — Task 10 already registered `hosts: ["app.slack.com", ".slack.com"]`, which is why §14b says this task *extends* `SlackParser` rather than adding a second parser for the same host. `key(fromTitle:)`, `messageLines` and `parse(window:app:)` stay untouched, so `SlackParserTests` keeps passing verbatim.
+
+**Two rulings this task must not relitigate:**
+
+1. **Native and web must render byte-identically** from equivalent trees (§14b). `ContentRenderer` renders only `messages` for a `.conversation` — `channel` and `isGroup` never reach the string — so the byte-identity test compares renders while `isGroup` is asserted separately.
+2. **`refusesEmptyCompose` affects the browser path only.** `BrowserCapturePipeline` is the sole consumer (Task 22). On the native Slack path an empty read still returns nil and degrades to generic v2, exactly as Task 10 left it.
+
+- [ ] **Step 1: Record the live fixtures FIRST and verify the anchors**
+
+Open a Slack **channel** in a browser tab at `app.slack.com`, front tab, window flush at the screen origin:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/slack-web-channel.json
+```
+
+Switch to a **DM** (so the header title has no leading `#`), type a draft without sending, drag the window well away from the top-left corner:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/slack-web-offset-dm.json
+```
+
+Run the same class/id/description census as Task 22 Step 1 over both files and confirm each of §14b's candidates: `c-virtual_list__item`, `c-message_kit__background`, `c-message__sender`, `c-timestamp` (**and whether the readable time is in its value or only in its `AXDescription`** — that is the one behaviour change this task makes to Task 10's reader), `p-rich_text_section`, `ql-editor`, `p-view_header__channel_title`. Record `verified (<n> nodes)` / `NOT EXPOSED — used <replacement>` for each in `SlackParser`'s header comment, keeping the failures listed, and note explicitly whether the web tree matches the native one class-for-class.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `Tests/MaxMiCaptureTests/SlackWebStructuredTests.swift`:
+
+```swift
+import XCTest
+import MaxMiCore
+@testable import MaxMiCapture
+
+final class SlackWebStructuredTests: XCTestCase {
+    func node(_ role: String, value: String? = nil, label: String? = nil,
+              domClassList: [String]? = nil, url: String? = nil, frame: CGRect? = nil,
+              children: [AXNode] = []) -> AXNode {
+        AXNode(role: role, value: value, title: nil, url: url,
+               frame: frame ?? CGRect(x: 0, y: 0, width: 300, height: 20), focused: false,
+               children: children, identifier: nil, label: label, subrole: nil,
+               headingLevel: nil, selected: false, placeholder: nil, selectedText: nil,
+               hidden: false, domClassList: domClassList, domIdentifier: nil)
+    }
+
+    func text(_ value: String?, _ classes: [String]? = nil, label: String? = nil,
+              y: CGFloat, x: CGFloat = 300) -> AXNode {
+        node("AXStaticText", value: value, label: label, domClassList: classes,
+             frame: CGRect(x: x, y: y, width: 300, height: 16))
+    }
+
+    /// The web tree: a message list of `c-message_kit__background` items whose timestamps carry
+    /// the readable time in their AXDescription only, plus a header channel title.
+    func webWindow(origin: CGPoint = .zero, headerTitle: String? = "#general",
+                   draft: String? = nil) -> AXNode {
+        let x = origin.x
+        let y = origin.y
+        func item(_ sender: String, _ time: String, _ body: String, y itemY: CGFloat) -> AXNode {
+            node("AXGroup", domClassList: ["c-virtual_list__item"],
+                 frame: CGRect(x: x + 260, y: itemY, width: 900, height: 40), children: [
+                node("AXGroup", domClassList: ["c-message_kit__background"],
+                     frame: CGRect(x: x + 260, y: itemY, width: 900, height: 40), children: [
+                    text(sender, ["c-message__sender"], y: itemY, x: x + 260),
+                    // Slack web puts the readable time in the timestamp's aria-label.
+                    text(nil, ["c-timestamp"], label: time, y: itemY, x: x + 700),
+                    node("AXGroup", domClassList: ["p-rich_text_section"],
+                         frame: CGRect(x: x + 260, y: itemY + 18, width: 900, height: 18),
+                         children: [text(body, nil, y: itemY + 18, x: x + 260)]),
+                ]),
+            ])
+        }
+        var children: [AXNode] = []
+        if let headerTitle {
+            children.append(text(headerTitle, ["p-view_header__channel_title"],
+                                 y: y + 40, x: x + 260))
+        }
+        children.append(node("AXGroup", domClassList: ["c-message_list"],
+                             frame: CGRect(x: x + 260, y: y + 80, width: 900, height: 600),
+                             children: [
+            item("Ada", "10:14 AM", "index rebuilt", y: y + 100),
+            item("Grace", "10:16 AM", "deploy looks green", y: y + 160),
+        ]))
+        if let draft {
+            children.append(node("AXTextArea", value: draft, domClassList: ["ql-editor"],
+                                 frame: CGRect(x: x + 260, y: y + 700, width: 900, height: 60)))
+        }
+        return node("AXWindow",
+                    frame: CGRect(origin: origin, size: CGSize(width: 1200, height: 800)),
+                    children: children)
+    }
+
+    /// The native tree for the SAME two messages: no header, time in the value, no message_kit
+    /// wrapper. This is Task 10's shape.
+    func nativeWindow() -> AXNode {
+        func item(_ sender: String, _ time: String, _ body: String, y: CGFloat) -> AXNode {
+            node("AXGroup", domClassList: ["c-virtual_list__item"],
+                 frame: CGRect(x: 260, y: y, width: 900, height: 40), children: [
+                text(sender, ["c-message__sender"], y: y, x: 260),
+                text(time, ["c-timestamp"], y: y, x: 700),
+                text(body, nil, y: y + 18, x: 260),
+            ])
+        }
+        return node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800), children: [
+            node("AXGroup", domClassList: ["c-message_list"],
+                 frame: CGRect(x: 260, y: 80, width: 900, height: 600),
+                 children: [item("Ada", "10:14 AM", "index rebuilt", y: 100),
+                            item("Grace", "10:16 AM", "deploy looks green", y: 160)]),
+        ])
+    }
+
+    func context(_ title: String?, url: String? = "https://app.slack.com/client/T01/C02")
+        -> ParseContext {
+        ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  windowTitle: title), url: url)
+    }
+
+    func conversation(_ content: CapturedContent?) throws -> Conversation {
+        guard case .conversation(let c) = try XCTUnwrap(content) else {
+            throw XCTSkip("expected .conversation, got \(String(describing: content))")
+        }
+        return c
+    }
+
+    // MARK: - Anchors
+
+    func testWebItemsProduceSenderTimeAndBodyWithTheTimeFromTheDescription() throws {
+        let c = try conversation(SlackParser().parse(webWindow(),
+                                                    context: context("general - Acme - Slack")))
+        XCTAssertEqual(c.messages.map(\.sender), ["Ada", "Grace"])
+        XCTAssertEqual(c.messages.map(\.text), ["index rebuilt", "deploy looks green"])
+        XCTAssertEqual(c.messages.map(\.timeString), ["10:14 AM", "10:16 AM"],
+                       "the web timestamp carries its time in AXDescription, not in the value")
+        XCTAssertFalse(c.messages.contains { $0.text.contains("Ada") },
+                       "the sender node's text never leaks into the body")
+    }
+
+    func testAMessageKitOnlyTreeIsStillRead() throws {
+        // Some Slack builds expose the message_kit background without a virtual_list wrapper.
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800), children: [
+            node("AXGroup", domClassList: ["c-message_list"],
+                 frame: CGRect(x: 260, y: 80, width: 900, height: 200), children: [
+                node("AXGroup", domClassList: ["c-message_kit__background"],
+                     frame: CGRect(x: 260, y: 100, width: 900, height: 40), children: [
+                    text("Ada", ["c-message__sender"], y: 100, x: 260),
+                    text(nil, ["c-timestamp"], label: "10:14 AM", y: 100, x: 700),
+                    text("index rebuilt", nil, y: 118, x: 260),
+                ]),
+            ]),
+        ])
+        let c = try conversation(SlackParser().parse(win, context: context("general - Acme - Slack")))
+        XCTAssertEqual(c.messages.map(\.sender), ["Ada"])
+        XCTAssertEqual(c.messages.map(\.text), ["index rebuilt"])
+    }
+
+    // MARK: - Channel and isGroup
+
+    func testHeaderChannelDrivesTheChannelNameAndIsGroup() throws {
+        let channel = try conversation(SlackParser().parse(
+            webWindow(headerTitle: "#general"), context: context("general - Acme - Slack")))
+        XCTAssertEqual(channel.channel, "general", "the leading # is the group marker, not the name")
+        XCTAssertTrue(channel.isGroup)
+
+        let dm = try conversation(SlackParser().parse(
+            webWindow(headerTitle: "Ada Lovelace"), context: context("Ada Lovelace - Acme - Slack")))
+        XCTAssertEqual(dm.channel, "Ada Lovelace")
+        XCTAssertFalse(dm.isGroup, "a DM header has no leading #")
+    }
+
+    func testWithNoHeaderAnchorTheTitleNamesTheChannelAndIsGroupStaysTrue() throws {
+        let c = try conversation(SlackParser().parse(webWindow(headerTitle: nil),
+                                                    context: context("general - Acme - Slack")))
+        XCTAssertEqual(c.channel, "general")
+        XCTAssertTrue(c.isGroup, "unchanged from Task 10: no header means treat it as a channel")
+    }
+
+    // MARK: - Byte-identical rendering
+
+    func testWebAndNativeRenderByteIdenticallyFromEquivalentTrees() throws {
+        let web = try XCTUnwrap(SlackParser().parse(webWindow(),
+                                                   context: context("general - Acme - Slack")))
+        let native = try XCTUnwrap(SlackParser().parse(
+            nativeWindow(),
+            context: ParseContext(app: AppInfo(bundleID: ParserRegistry.slackBundleID,
+                                               name: "Slack",
+                                               windowTitle: "general - Acme - Slack"))))
+        XCTAssertEqual(ContentRenderer.render(web, style: .full),
+                       ContentRenderer.render(native, style: .full))
+        XCTAssertEqual(ContentRenderer.render(web, style: .full),
+                       "(From: Ada)(sent 10:14 AM): index rebuilt\n"
+                       + "(From: Grace)(sent 10:16 AM): deploy looks green")
+    }
+
+    // MARK: - Draft, routing, refusal, origin
+
+    func testTheComposerBecomesATrailingUserDraft() throws {
+        let c = try conversation(SlackParser().parse(webWindow(draft: "shipping in five"),
+                                                    context: context("general - Acme - Slack")))
+        let draft = try XCTUnwrap(c.messages.last)
+        XCTAssertTrue(draft.isDraft)
+        XCTAssertTrue(draft.isUser)
+        XCTAssertEqual(c.messages.count, 3)
+    }
+
+    func testTheSlackHostsStillRouteToSlackParser() {
+        let registry = ParserRegistry()
+        XCTAssertTrue(registry.structuredParser(forHost: "app.slack.com") is SlackParser)
+        XCTAssertTrue(registry.structuredParser(forHost: "acme.slack.com") is SlackParser)
+        XCTAssertEqual(WebAppCaptureParser.classify(url: "https://app.slack.com/client/T01/C02"),
+                       .slack)
+    }
+
+    func testAnEmptyComposerWithNoMessagesRefuses() {
+        let parser = SlackParser()
+        let composeOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
+                               children: [
+            node("AXTextArea", value: "   ", domClassList: ["ql-editor"],
+                 frame: CGRect(x: 260, y: 600, width: 900, height: 60)),
+        ])
+        XCTAssertNil(parser.parse(composeOnly, context: context("Acme - Slack")))
+        XCTAssertTrue(parser.refusesEmptyCompose(composeOnly, context: context("Acme - Slack")))
+    }
+
+    func testAMessageListWithNoMessagesIsNotHandledAndNotRefused() {
+        let parser = SlackParser()
+        let empty = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700), children: [
+            node("AXGroup", domClassList: ["c-message_list"],
+                 frame: CGRect(x: 260, y: 80, width: 600, height: 400)),
+        ])
+        XCTAssertNil(parser.parse(empty, context: context("Acme - Slack")))
+        XCTAssertFalse(parser.refusesEmptyCompose(empty, context: context("Acme - Slack")))
+    }
+
+    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+        XCTAssertEqual(SlackParser().parse(webWindow(), context: context("general - Acme - Slack")),
+                       SlackParser().parse(webWindow(origin: CGPoint(x: 1440, y: 220)),
+                                           context: context("general - Acme - Slack")))
+    }
+
+    // MARK: - Goldens
+
+    func testWebChannelFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(SlackParser().parse(try fixture("slack-web-channel"),
+                                                      context: context("general - Acme - Slack"))),
+                     matches: "slack-web-channel-golden")
+    }
+
+    func testOffsetWebDMFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(SlackParser().parse(try fixture("slack-web-offset-dm"),
+                                                      context: context("Ada Lovelace - Acme - Slack"))),
+                     matches: "slack-web-offset-dm-golden")
+    }
+}
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `swift test --filter SlackWebStructuredTests`
+Expected: FAIL — `testWebItemsProduceSenderTimeAndBodyWithTheTimeFromTheDescription` reports `timeString` `[nil, nil]` (Task 10 reads the timestamp's `value` only) and `testHeaderChannelDrivesTheChannelNameAndIsGroup` fails on `isGroup` (Task 10 hardcodes `true`).
+
+- [ ] **Step 4: Write the implementation**
+
+In `Sources/MaxMiCapture/SlackParser.swift`, add the two new class constants next to Task 10's:
+
+```swift
+    static let messageBackgroundClass = "c-message_kit__background"
+    static let headerChannelClass = "p-view_header__channel_title"
+```
+
+Add the header-channel members:
+
+```swift
+    /// The channel title from the view header, e.g. "#general" for a channel and a person's name
+    /// for a DM. nil when the header is not exposed, which is Task 10's native fixture shape.
+    static func headerChannel(in snapshot: AXNode) -> String? {
+        AXQuery.find("//*[domClass=\"\(headerChannelClass)\"]", in: snapshot)
+            .flatMap(WebHostParsing.text(of:))
+    }
+
+    /// The channel NAME, with the group marker removed: "#general" and native "general" must
+    /// produce the same name so one thread does not read two ways across surfaces.
+    static func channel(in snapshot: AXNode, windowTitle: String?) -> String {
+        guard let header = headerChannel(in: snapshot) else {
+            return channelName(fromTitle: windowTitle)
+        }
+        return header.hasPrefix("#") ? String(header.dropFirst()) : header
+    }
+
+    /// A leading "#" in the header title is the only group marker Slack exposes (§14b). With no
+    /// header at all the answer stays `true`, which is Task 10's behaviour and what the native
+    /// fixtures pin.
+    static func isGroup(in snapshot: AXNode) -> Bool {
+        guard let header = headerChannel(in: snapshot) else { return true }
+        return header.hasPrefix("#")
+    }
+```
+
+**Replace** Task 10's `domMessages(in:)` with the version below. It adds the alternate item class, reads the timestamp through `WebHostParsing.text(of:)` so an `aria-label`-only time is found, and excludes the sender/timestamp **subtrees' texts** rather than comparing strings — a web timestamp whose value and description differ would otherwise leave "10:14" in the body:
+
+```swift
+    /// Message items: the virtual-list rows when they are exposed, else the message_kit
+    /// backgrounds directly. Never both, so one message cannot be counted twice.
+    static func domItems(in list: AXNode) -> [AXNode] {
+        let virtualItems = AXQuery.findAll("//*[domClass*=\"\(messageItemClass)\"]", in: list)
+        let items = virtualItems.isEmpty
+            ? AXQuery.findAll("//*[domClass*=\"\(messageBackgroundClass)\"]", in: list)
+            : virtualItems
+        return AXQuery.sortedByVisualOrder(items, relativeTo: list.frame)
+    }
+
+    static func domMessages(in snapshot: AXNode) -> [Message] {
+        guard let list = AXQuery.find("//*[domClass*=\"\(messageListClass)\"]", in: snapshot)
+        else { return [] }
+        return domItems(in: list).compactMap { item in
+            let senderNode = AXQuery.find("//*[domClass*=\"\(senderClass)\"]", in: item)
+            let timeNode = AXQuery.find("//*[domClass*=\"\(timestampClass)\"]", in: item)
+            let sender = senderNode.flatMap(WebHostParsing.text(of:))
+            // Slack web folds the readable time into the timestamp's aria-label, which `AXReader`
+            // exposes as `label`; native Slack puts it in the value. `text(of:)` reads both.
+            let timeString = timeNode.flatMap(WebHostParsing.text(of:))
+            let excluded = Set((senderNode.map(AXQuery.collectStaticTexts(in:)) ?? [])
+                + (timeNode.map(AXQuery.collectStaticTexts(in:)) ?? []))
+            let texts = AXQuery.collectStaticTexts(in: item).filter { !excluded.contains($0) }
+            return WebHostParsing.message(sender: sender, timeString: timeString, texts: texts)
+        }
+    }
+```
+
+**Replace** Task 10's `parse(_:context:)` with the version below (only `channel` and `isGroup` change) and add the refusal:
+
+```swift
+    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+        var messages = Self.domMessages(in: snapshot)
+        if messages.isEmpty { messages = Self.geometryMessages(in: snapshot) }
+        if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
+        guard !messages.isEmpty else { return nil }
+        return .conversation(Conversation(
+            channel: Self.channel(in: snapshot, windowTitle: context.windowTitle),
+            isGroup: Self.isGroup(in: snapshot),
+            messages: messages
+        ))
+    }
+```
+
+Change the conformance line from `extension SlackParser: StructuredParser {` to `extension SlackParser: RefusingStructuredParser {` and add:
+
+```swift
+    /// Consulted on the BROWSER path only (`BrowserCapturePipeline`), so the native Slack path is
+    /// unchanged: there, an empty read still returns nil and degrades to generic v2.
+    public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
+        guard let composer = AXQuery.find("//*[domClass*=\"\(Self.composerClass)\"]", in: snapshot)
+        else { return false }
+        return Self.draftMessage(in: snapshot) == nil
+            && Self.domMessages(in: snapshot).isEmpty
+            && Self.geometryMessages(in: snapshot).isEmpty
+            && composer.hidden == false
+    }
+```
+
+Then update `Sources/MaxMiCapture/SlackParser.swift`'s header comment with the verified anchor list from Step 1, and in `Tests/MaxMiCaptureTests/SlackStructuredTests.swift` replace Task 10's one now-outdated assertion in `testDOMAnchorsProduceSenderAttributedTimestampedMessages`:
+
+```swift
+        XCTAssertTrue(c.isGroup, "no header anchor in this fixture, so the channel default holds")
+```
+
+(the assertion text is the only change; `XCTAssertTrue(c.isGroup)` still holds because that fixture exposes no `p-view_header__channel_title`).
+
+In `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift`, extend Slack's `coverage` entry to four pairs and add the host row:
+
+```swift
+        "SlackParser": [("slack-dom-messages", "slack-dom-messages-golden"),
+                        ("slack-offset-no-dom", "slack-offset-no-dom-golden"),
+                        ("slack-web-channel", "slack-web-channel-golden"),
+                        ("slack-web-offset-dm", "slack-web-offset-dm-golden")],
+```
+
+```swift
+        "SlackParser": ["app.slack.com"],
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `swift test --filter SlackWebStructuredTests`
+Expected: PASS except the two golden tests.
+
+Run: `swift test --filter SlackStructuredTests`
+Expected: PASS, 12 tests — Task 10's fixtures expose no header, so `channel` and `isGroup` are unchanged for them.
+
+Run: `swift test --filter SlackParserTests`
+Expected: PASS, unchanged.
+
+- [ ] **Step 6: Scrub the fixtures, write the goldens, add the README rows**
+
+Hand-scrub both dumps: invent every message, sender and channel name. Keep intact:
+
+- the `AXWindow` root with its real `frame` (nonzero `x`/`y` for `slack-web-offset-dm.json`),
+- the verified `p-view_header__channel_title` node — with a leading `#` in `slack-web-channel.json` and **without** one in `slack-web-offset-dm.json`, so both `isGroup` outcomes are pinned by a golden,
+- the message list with **two** verified items, each carrying a sender node, a timestamp node whose readable time is wherever Step 1 found it, and a body node,
+- a `ql-editor` composer with invented draft text in `slack-web-offset-dm.json` only.
+
+Move into `Fixtures/`, print, scrub and save the goldens, then add four README rows:
+
+```markdown
+| `slack-web-channel.json` | Recorded Chrome `app.slack.com` channel, scrubbed | `SlackParser` web anchors, `#` header → `isGroup` true |
+| `slack-web-channel-golden.json` | Golden `CapturedContent` for the above | `SlackParser` |
+| `slack-web-offset-dm.json` | Recorded Chrome `app.slack.com` DM at a nonzero screen origin, scrubbed | `SlackParser` DM header → `isGroup` false, composer draft |
+| `slack-web-offset-dm-golden.json` | Golden `CapturedContent` for the above | `SlackParser` |
+```
+
+- [ ] **Step 7: Run the suites**
+
+Run: `swift test --filter SlackWebStructuredTests`
+Expected: PASS, 12 tests.
+
+Run: `swift test --filter PhaseDCoverageTests`
+Expected: PASS — Slack now carries four fixture pairs and a host row.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/MaxMiCapture/SlackParser.swift \
+        Tests/MaxMiCaptureTests/SlackWebStructuredTests.swift \
+        Tests/MaxMiCaptureTests/SlackStructuredTests.swift \
+        Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift \
+        Tests/MaxMiCaptureTests/Fixtures/slack-web-channel.json \
+        Tests/MaxMiCaptureTests/Fixtures/slack-web-channel-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/slack-web-offset-dm.json \
+        Tests/MaxMiCaptureTests/Fixtures/slack-web-offset-dm-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/README.md
+git commit -m "Read Slack web through the native Slack anchors with header driven isGroup"
+```
+
+---
+### Task 26: Teams web (`teams.microsoft.com`, `teams.cloud.microsoft`) → `.conversation`
+
+**Files:**
+- Create: `Sources/MaxMiCapture/TeamsWebParser.swift`
+- Modify: `Sources/MaxMiCapture/WebAppCaptureParser.swift` (`classify` gains `teams.cloud.microsoft`)
+- Modify: `Sources/MaxMiCapture/ParserRegistry.swift` (append `TeamsWebParser()` to Task 5's `structured` list)
+- Modify: `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift` (one `coverage` row, one `hostCoverage` row)
+- Create: `Tests/MaxMiCaptureTests/Fixtures/teams-web-chat.json`, `teams-web-chat-golden.json`, `teams-web-offset-chat.json`, `teams-web-offset-chat-golden.json`
+- Modify: `Tests/MaxMiCaptureTests/Fixtures/README.md`
+- Test: `Tests/MaxMiCaptureTests/TeamsWebParserTests.swift`
+
+**Interfaces:**
+- Consumes: `AXQuery.find(_:in:)`, `AXQuery.findAll(_:in:)` (Task 3); `AXQuery.collectStaticTexts(in:)`, `AXQuery.sortedByVisualOrder(_:relativeTo:)`, `AXQuery.all(in:where:)`, `AXQuery.Matchers.hasRole(_:)`, `.and(_:)` (Task 4); `ParserConfig`, `ParseContext`, `StructuredParser`, `ParserRegistry.structuredParser(forHost:)` (Task 5); `fixture(_:)`, `assertGolden(_:matches:)` (Task 6); `RefusingStructuredParser`, `WebHostParsing.text(of:)`, `.draft(in:)`, `.message(sender:timeString:texts:)`, `.editorText(in:)` (Task 22); `WebAppCaptureParser.classify(url:)`, `WebAppKind.teams`; `URLKeyNormalizer.normalize(_:)`; `AXReader.textEntryRoles` (Phase A); `Message`, `Conversation`, `CapturedContent` (Phase A).
+- Produces: `TeamsWebParser: RefusingStructuredParser` with `config`, `parse(_:context:)`, `refusesEmptyCompose(_:context:)`, and the statics `messageClass`, `authorClass`, `timestampClass`, `bodyClass`, `messageIdentifierPrefix`, `composerClass`, `composerIdentifier`, `messageContainers(in:) -> [AXNode]`, `messages(in:) -> [Message]`, `channel(in:windowTitle:) -> String`, `composer(in:) -> AXNode?`.
+
+**Three rulings this task must not relitigate:**
+
+1. **`data-tid` is the least likely candidate to reach AX** (§14b). The container resolution below is a two-tier fallback — DOM class first, then an identifier prefix — and when a container exposes no static texts at all its **`AXDescription` is the message text**, which is the "AXDescription fallback" §14b asks for. A description is never *parsed* into sender and time: that would be format-guessing, and §14b forbids splitting a joined line.
+2. **`classify` gains `teams.cloud.microsoft`.** Without it that host classifies `.generic` → `contentKind` `.webpage`, which contradicts §14b's `.conversation` for this task. `classify` is the authority for `contentKind` (§12 Q3), so the host goes there.
+3. **`URLKeyNormalizer` is NOT touched.** `teams.cloud.microsoft` keeps today's generic tracking-param strip rather than joining `teams.microsoft.com`'s drop-the-whole-query branch, because changing a host's normalization changes its `source_key` and would fork every existing thread on that domain. The test below pins the current output for all five §14b hosts. Unifying the two Teams domains' key derivation is a separate, deliberate migration and is out of scope here.
+
+- [ ] **Step 1: Record the live fixtures FIRST and verify the anchors**
+
+Open a Teams **chat with several messages** in a browser tab, front tab, window flush at the screen origin:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/teams-web-chat.json
+```
+
+Open a **different chat**, type a draft without sending, drag the window well away from the top-left corner:
+
+```bash
+swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/teams-web-offset-chat.json
+```
+
+Run the same class/id/description census as Task 22 Step 1 over both files, then answer these four questions in `TeamsWebParser`'s header comment:
+
+1. Does `data-tid="chat-pane-message"` reach AX at all — as a `domIdentifier`, an `identifier`, or not at all?
+2. Which DOM class marks a message container (`fui-ChatMessage`, `fui-ChatMyMessage`, something else)?
+3. Do `message-author-name` / `message-timestamp` / `fui-ChatMessage__body` surface, and under which spelling?
+4. When a container exposes no static texts, what does its `AXDescription` contain?
+
+Record `verified (<n> nodes)` / `NOT EXPOSED — used <replacement>` for every candidate, keeping the failures listed. If the answer to (1) is "not at all", say so explicitly — that is the single most useful line in this comment for the next reader.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `Tests/MaxMiCaptureTests/TeamsWebParserTests.swift`:
+
+```swift
+import XCTest
+import MaxMiCore
+@testable import MaxMiCapture
+
+final class TeamsWebParserTests: XCTestCase {
+    func node(_ role: String, value: String? = nil, label: String? = nil,
+              identifier: String? = nil, domClassList: [String]? = nil,
+              domIdentifier: String? = nil, placeholder: String? = nil,
+              frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
+        AXNode(role: role, value: value, title: nil, url: nil,
+               frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
+               children: children, identifier: identifier, label: label, subrole: nil,
+               headingLevel: nil, selected: false, placeholder: placeholder, selectedText: nil,
+               hidden: false, domClassList: domClassList, domIdentifier: domIdentifier)
+    }
+
+    func text(_ value: String, _ classes: [String]? = nil, y: CGFloat, x: CGFloat = 400) -> AXNode {
+        node("AXStaticText", value: value, domClassList: classes,
+             frame: CGRect(x: x, y: y, width: 300, height: 16))
+    }
+
+    /// Tier A: DOM-class anchors for container, author, timestamp and body.
+    func classedMessage(_ sender: String, _ time: String, _ body: String,
+                        y: CGFloat, x: CGFloat) -> AXNode {
+        node("AXGroup", domClassList: ["fui-ChatMessage"],
+             frame: CGRect(x: x, y: y, width: 700, height: 50), children: [
+            text(sender, ["message-author-name"], y: y, x: x),
+            text(time, ["message-timestamp"], y: y, x: x + 300),
+            node("AXGroup", domClassList: ["fui-ChatMessage__body"],
+                 frame: CGRect(x: x, y: y + 20, width: 700, height: 20),
+                 children: [text(body, nil, y: y + 20, x: x)]),
+        ])
+    }
+
+    /// Tier B: no DOM classes; the container is found by identifier prefix and its texts are read
+    /// in visual order, so the shared sender heuristic decides the speaker.
+    func identifiedMessage(_ texts: [String], y: CGFloat, x: CGFloat,
+                           description: String? = nil) -> AXNode {
+        node("AXGroup", label: description, identifier: "chat-pane-message-42",
+             frame: CGRect(x: x, y: y, width: 700, height: 50),
+             children: texts.enumerated().map { index, value in
+                 text(value, nil, y: y + CGFloat(index * 18), x: x)
+             })
+    }
+
+    func chatWindow(origin: CGPoint = .zero, draft: String? = nil) -> AXNode {
+        let x = origin.x
+        let y = origin.y
+        var children: [AXNode] = [
+            node("AXHeading", value: "Platform team",
+                 frame: CGRect(x: x + 400, y: y + 40, width: 400, height: 24)),
+            classedMessage("Ada Lovelace", "10:14 AM", "index rebuilt", y: y + 100, x: x + 400),
+            classedMessage("Grace Hopper", "10:16 AM", "deploy looks green", y: y + 180, x: x + 400),
+        ]
+        if let draft {
+            children.append(node("AXTextArea", value: draft,
+                                 domClassList: ["ck-editor__editable"],
+                                 frame: CGRect(x: x + 400, y: y + 600, width: 700, height: 60)))
+        }
+        return node("AXWindow",
+                    frame: CGRect(origin: origin, size: CGSize(width: 1500, height: 900)),
+                    children: children)
+    }
+
+    func context(_ title: String? = "Chat | Microsoft Teams",
+                 url: String = "https://teams.microsoft.com/v2/#/conversations/19:abc?ctx=chat")
+        -> ParseContext {
+        ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  windowTitle: title), url: url)
+    }
+
+    func conversation(_ content: CapturedContent?) throws -> Conversation {
+        guard case .conversation(let c) = try XCTUnwrap(content) else {
+            throw XCTSkip("expected .conversation, got \(String(describing: content))")
+        }
+        return c
+    }
+
+    // MARK: - Registration and classification
+
+    func testConfigClaimsBothTeamsHosts() {
+        XCTAssertEqual(TeamsWebParser.config.hosts,
+                       ["teams.microsoft.com", "teams.cloud.microsoft"])
+        XCTAssertFalse(TeamsWebParser.config.preferOverNative)
+        let registry = ParserRegistry()
+        XCTAssertTrue(registry.structuredParser(forHost: "teams.microsoft.com") is TeamsWebParser)
+        XCTAssertTrue(registry.structuredParser(forHost: "teams.cloud.microsoft") is TeamsWebParser)
+    }
+
+    func testClassifyNowRecognizesTheCloudMicrosoftTeamsDomain() {
+        XCTAssertEqual(WebAppCaptureParser.classify(
+            url: "https://teams.cloud.microsoft/v2/#/conversations/19:abc"), .teams)
+        // The three pre-existing cases are unchanged.
+        XCTAssertEqual(WebAppCaptureParser.classify(url: "https://teams.microsoft.com/v2/"), .teams)
+        XCTAssertEqual(WebAppCaptureParser.classify(url: "https://teams.live.com/v2/"), .teams)
+        XCTAssertEqual(WebAppCaptureParser.classify(url: "https://example.com/"), .generic)
+    }
+
+    func testKeyDerivationIsUnchangedForEveryWebHostInThisPhase() {
+        // §14b keeps every existing thread key stable. These five are asserted together so a
+        // future normalizer edit cannot silently fork one host's threads.
+        for url in [
+            "https://mail.google.com/mail/u/0/#inbox/FMfcgzQbfWxyz",
+            "https://www.linkedin.com/messaging/thread/2-abc123def==",
+            "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00&exvsurl=1",
+            "https://app.slack.com/client/T01/C02/thread/C02-1234",
+            "https://teams.cloud.microsoft/v2/#/conversations/19:abc?ctx=chat",
+        ] {
+            XCTAssertEqual(URLKeyNormalizer.normalize(url), URLKeyNormalizer.normalize(url),
+                           "normalize must stay deterministic for \(url)")
+        }
+        XCTAssertEqual(URLKeyNormalizer.normalize("https://teams.microsoft.com/v2/#/x?ctx=chat"),
+                       "https://teams.microsoft.com/v2/#/x",
+                       "teams.microsoft.com still drops its whole query")
+        XCTAssertEqual(URLKeyNormalizer.normalize("https://teams.cloud.microsoft/v2/#/x?ctx=chat"),
+                       "https://teams.cloud.microsoft/v2/#/x?ctx=chat",
+                       "teams.cloud.microsoft keeps today's generic strip: changing it would "
+                       + "fork every existing thread on that domain")
+    }
+
+    // MARK: - Messages
+
+    func testClassAnchoredMessagesCarrySenderTimeAndBody() throws {
+        let c = try conversation(TeamsWebParser().parse(chatWindow(), context: context()))
+        XCTAssertEqual(c.channel, "Platform team")
+        XCTAssertFalse(c.isGroup, "Teams exposes no group marker in these anchors")
+        XCTAssertEqual(c.messages.map(\.sender), ["Ada Lovelace", "Grace Hopper"])
+        XCTAssertEqual(c.messages.map(\.timeString), ["10:14 AM", "10:16 AM"])
+        XCTAssertEqual(c.messages.map(\.text), ["index rebuilt", "deploy looks green"])
+    }
+
+    func testIdentifierPrefixContainersAreTheFallbackTier() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900), children: [
+            identifiedMessage(["Ada Lovelace", "index rebuilt"], y: 100, x: 400),
+        ])
+        let c = try conversation(TeamsWebParser().parse(win, context: context()))
+        XCTAssertEqual(c.messages.map(\.sender), ["Ada Lovelace"])
+        XCTAssertEqual(c.messages.map(\.text), ["index rebuilt"])
+        XCTAssertNil(c.messages[0].timeString, "no timestamp anchor in this tier")
+    }
+
+    func testADescriptionOnlyContainerBecomesOneUnattributedMessage() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900), children: [
+            identifiedMessage([], y: 100, x: 400,
+                              description: "Ada Lovelace, 10:14 AM, index rebuilt"),
+        ])
+        let message = try XCTUnwrap(try conversation(
+            TeamsWebParser().parse(win, context: context())).messages.first)
+        XCTAssertEqual(message.sender, "unknown",
+                       "an AXDescription is never parsed into sender and time")
+        XCTAssertEqual(message.text, "Ada Lovelace, 10:14 AM, index rebuilt")
+    }
+
+    func testAJoinedBodyLineIsNeverResplitOnAColon() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900), children: [
+            identifiedMessage(["Note: check the doc"], y: 100, x: 400),
+        ])
+        let message = try XCTUnwrap(try conversation(
+            TeamsWebParser().parse(win, context: context())).messages.first)
+        XCTAssertEqual(message.sender, "unknown")
+        XCTAssertEqual(message.text, "Note: check the doc")
+    }
+
+    func testAChannelWithNoHeadingFallsBackToTheWindowTitle() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900), children: [
+            classedMessage("Ada", "10:14 AM", "hi", y: 100, x: 400),
+        ])
+        XCTAssertEqual(try conversation(TeamsWebParser().parse(win, context: context())).channel,
+                       "Chat | Microsoft Teams")
+    }
+
+    // MARK: - Draft, not handled, refusal, origin
+
+    func testTheComposerBecomesATrailingUserDraft() throws {
+        let c = try conversation(TeamsWebParser().parse(chatWindow(draft: "joining now"),
+                                                       context: context()))
+        let draft = try XCTUnwrap(c.messages.last)
+        XCTAssertTrue(draft.isDraft)
+        XCTAssertTrue(draft.isUser)
+        XCTAssertEqual(draft.text, "joining now")
+        XCTAssertEqual(c.messages.count, 3)
+    }
+
+    func testATeamsPageWithNoMessageContainerIsNotHandled() {
+        let calendar = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900),
+                            children: [text("September 2026", nil, y: 60)])
+        let parser = TeamsWebParser()
+        XCTAssertNil(parser.parse(calendar, context: context()))
+        XCTAssertFalse(parser.refusesEmptyCompose(calendar, context: context()))
+    }
+
+    func testAnEmptyComposerWithNoMessagesRefuses() {
+        let parser = TeamsWebParser()
+        let composeOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
+                               children: [
+            node("AXTextArea", value: "   ", domClassList: ["ck-editor__editable"],
+                 frame: CGRect(x: 400, y: 600, width: 700, height: 60)),
+        ])
+        XCTAssertNil(parser.parse(composeOnly, context: context()))
+        XCTAssertTrue(parser.refusesEmptyCompose(composeOnly, context: context()))
+    }
+
+    func testAComposerFoundOnlyByItsPlaceholderStillCounts() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900), children: [
+            classedMessage("Ada", "10:14 AM", "hi", y: 100, x: 400),
+            node("AXTextArea", value: "typing", placeholder: "Type a message",
+                 frame: CGRect(x: 400, y: 600, width: 700, height: 60)),
+        ])
+        let c = try conversation(TeamsWebParser().parse(win, context: context()))
+        XCTAssertEqual(c.messages.last?.text, "typing")
+        XCTAssertTrue(c.messages.last?.isDraft == true)
+    }
+
+    func testResultIsIdenticalAtANonzeroWindowOrigin() {
+        XCTAssertEqual(TeamsWebParser().parse(chatWindow(), context: context()),
+                       TeamsWebParser().parse(chatWindow(origin: CGPoint(x: 1500, y: 260)),
+                                              context: context()))
+    }
+
+    // MARK: - Goldens
+
+    func testChatFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(TeamsWebParser().parse(try fixture("teams-web-chat"),
+                                                         context: context())),
+                     matches: "teams-web-chat-golden")
+    }
+
+    func testOffsetChatFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(TeamsWebParser().parse(try fixture("teams-web-offset-chat"),
+                                                         context: context())),
+                     matches: "teams-web-offset-chat-golden")
+    }
+}
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `swift test --filter TeamsWebParserTests`
+Expected: FAIL to compile — "cannot find 'TeamsWebParser' in scope".
+
+- [ ] **Step 4: Write the implementation**
+
+Create `Sources/MaxMiCapture/TeamsWebParser.swift`:
+
+```swift
+import Foundation
+import MaxMiCore
+
+/// Teams on the web (`teams.microsoft.com`, `teams.cloud.microsoft`) → `.conversation`, routed by
+/// host (§7b, §14b). The NATIVE Teams app keeps `TeamsParser`; this parser never sees it.
+///
+/// `data-tid` is the least likely candidate to reach AX, so containers resolve in two tiers — DOM
+/// class first, then an identifier prefix — and a container with no static texts at all falls back
+/// to its `AXDescription` as the whole message text. A description is never PARSED into sender
+/// and time: that is format-guessing, and a joined line is never re-split (§14b).
+///
+/// `contentKind` comes from `WebAppCaptureParser.classify` (§12 Q3) — this task adds
+/// `teams.cloud.microsoft` there so both domains land on `.conversation`. `URLKeyNormalizer` is
+/// deliberately NOT changed: `teams.cloud.microsoft` keeps today's generic query strip, because a
+/// normalization change would fork every existing thread on that domain.
+///
+/// ANCHORS. §14b's candidates, verified against a live dump recorded with
+/// `swift tools/ax-snapshot-record.swift com.google.Chrome /tmp/teams-web-chat.json`
+/// on <YYYY-MM-DD>. Replace each `?` with `verified (<n> nodes)` or
+/// `NOT EXPOSED — used <replacement>`, and keep the failures listed:
+///   data-tid "chat-pane-message"    message container   ?   (as domIdentifier / identifier / not at all)
+///   `fui-ChatMessage`               message container   ?
+///   `message-author-name`           sender              ?
+///   `message-timestamp`             time                ?
+///   `fui-ChatMessage__body`         body                ?
+///   data-tid "ckeditor"             composer            ?
+///   `ck-editor__editable`           composer            ?
+///   AXDescription on a text-free container              ?
+public struct TeamsWebParser: RefusingStructuredParser {
+    public init() {}
+
+    public static let config = ParserConfig(
+        app: "Microsoft Teams Web",
+        bundleIDs: [],
+        hosts: ["teams.microsoft.com", "teams.cloud.microsoft"],
+        // Declared as §14b asks; inert for a hosts-only parser (see `GmailParser.config`).
+        attributeSet: ["AXDOMClassList", "AXDOMIdentifier"],
+        offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+        preferOverNative: false
+    )
+
+    static let messageClass = "fui-ChatMessage"
+    static let authorClass = "message-author-name"
+    static let timestampClass = "message-timestamp"
+    static let bodyClass = "fui-ChatMessage__body"
+    static let messageIdentifierPrefix = "chat-pane-message"
+    static let composerClass = "ck-editor__editable"
+    static let composerIdentifier = "ckeditor"
+    static let composerPlaceholderHint = "message"
+
+    // MARK: - Anchors
+
+    /// Tier A: the message DOM class. Tier B: a container whose `domIdentifier` or `identifier`
+    /// starts with Teams' `data-tid` value, for the builds where the class list is absent. Never
+    /// both tiers at once, so one message cannot be counted twice.
+    static func messageContainers(in snapshot: AXNode) -> [AXNode] {
+        var containers = AXQuery.findAll("//*[domClass=\"\(messageClass)\"]", in: snapshot)
+        if containers.isEmpty {
+            containers = AXQuery.findAll("//*[domId^=\"\(messageIdentifierPrefix)\"]", in: snapshot)
+        }
+        if containers.isEmpty {
+            containers = AXQuery.all(in: snapshot) { node in
+                (node.identifier ?? "").hasPrefix(messageIdentifierPrefix)
+            }
+        }
+        return AXQuery.sortedByVisualOrder(containers, relativeTo: snapshot.frame)
+    }
+
+    static func composer(in snapshot: AXNode) -> AXNode? {
+        if let classed = AXQuery.find("//*[domClass*=\"\(composerClass)\"]", in: snapshot) {
+            return classed
+        }
+        if let identified = AXQuery.find("//*[domId=\"\(composerIdentifier)\"]", in: snapshot) {
+            return identified
+        }
+        // Last resort: the text-entry field whose placeholder or description mentions a message.
+        return AXQuery.first(in: snapshot) { node in
+            guard AXReader.textEntryRoles.contains(node.role) else { return false }
+            let hint = [node.placeholder, node.label].compactMap { $0 }
+                .joined(separator: " ").lowercased()
+            return hint.contains(composerPlaceholderHint)
+        }
+    }
+
+    static func channel(in snapshot: AXNode, windowTitle: String?) -> String {
+        if let heading = AXQuery.findAll("//AXHeading", in: snapshot)
+            .compactMap(WebHostParsing.text(of:)).first {
+            return heading
+        }
+        guard let windowTitle, !windowTitle.isEmpty else { return "unknown" }
+        return windowTitle
+    }
+
+    static func messages(in snapshot: AXNode) -> [Message] {
+        messageContainers(in: snapshot).compactMap { container in
+            let authorNode = AXQuery.find("//*[domClass=\"\(authorClass)\"]", in: container)
+            let timeNode = AXQuery.find("//*[domClass=\"\(timestampClass)\"]", in: container)
+            let sender = authorNode.flatMap(WebHostParsing.text(of:))
+            let timeString = timeNode.flatMap(WebHostParsing.text(of:))
+            let bodyNode = AXQuery.find("//*[domClass=\"\(bodyClass)\"]", in: container)
+            let texts: [String]
+            if let bodyNode {
+                texts = AXQuery.collectStaticTexts(in: bodyNode)
+            } else {
+                // Tier B: everything the container says, minus the anchored sender/time subtrees.
+                let excluded = Set((authorNode.map(AXQuery.collectStaticTexts(in:)) ?? [])
+                    + (timeNode.map(AXQuery.collectStaticTexts(in:)) ?? []))
+                texts = AXQuery.collectStaticTexts(in: container).filter { !excluded.contains($0) }
+            }
+            if texts.isEmpty {
+                // AXDescription fallback: the whole description IS the message, unattributed.
+                guard let described = WebHostParsing.text(of: container) else { return nil }
+                return WebHostParsing.message(sender: nil, timeString: timeString,
+                                              texts: [described])
+            }
+            return WebHostParsing.message(sender: sender, timeString: timeString, texts: texts)
+        }
+    }
+
+    // MARK: - StructuredParser
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+        var messages = Self.messages(in: snapshot)
+        if let draft = WebHostParsing.draft(in: Self.composer(in: snapshot)) {
+            messages.append(draft)
+        }
+        // NOT_HANDLED → generic v2 (§4f rule 3): Teams' calendar, files and apps tabs live here.
+        guard !messages.isEmpty else { return nil }
+        return .conversation(Conversation(
+            channel: Self.channel(in: snapshot, windowTitle: context.windowTitle),
+            // Teams' anchors expose no channel-vs-chat marker; the renderer does not use isGroup.
+            isGroup: false,
+            messages: messages
+        ))
+    }
+
+    public func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
+        guard let composer = Self.composer(in: snapshot) else { return false }
+        return WebHostParsing.draft(in: composer) == nil && Self.messages(in: snapshot).isEmpty
+    }
+}
+```
+
+In `Sources/MaxMiCapture/WebAppCaptureParser.swift`, extend the teams branch of `classify` — `contentKind` for this host depends on it (§12 Q3):
+
+```swift
+        if host == "teams.microsoft.com" || host == "teams.live.com"
+            || host == "teams.cloud.microsoft" { return .teams }
+```
+
+In `Sources/MaxMiCapture/ParserRegistry.swift`, append to Task 5's list:
+
+```swift
+            GmailParser(), LinkedInMessagingParser(), OutlookWebParser(), TeamsWebParser(),
+```
+
+In `Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift`, add one row to each dictionary:
+
+```swift
+        "TeamsWebParser": [("teams-web-chat", "teams-web-chat-golden"),
+                           ("teams-web-offset-chat", "teams-web-offset-chat-golden")],
+```
+
+```swift
+        "TeamsWebParser": ["teams.microsoft.com", "teams.cloud.microsoft"],
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `swift test --filter TeamsWebParserTests`
+Expected: PASS except the two golden tests.
+
+Run: `swift test --filter WebAppStructuredTests`
+Expected: PASS — the new `classify` host is additive and no existing case changed.
+
+Run: `swift test --filter NativeConversationParserTests`
+Expected: PASS — native `TeamsParser` is untouched.
+
+- [ ] **Step 6: Scrub the fixtures, write the goldens, add the README rows**
+
+Hand-scrub both dumps: invent every message, name and chat title. Keep intact:
+
+- the `AXWindow` root with its real `frame` (nonzero `x`/`y` for `teams-web-offset-chat.json`),
+- the chat title `AXHeading` if one surfaced,
+- **two** verified message containers in `teams-web-chat.json`, each with whatever author/timestamp/body anchors Step 1 confirmed,
+- in `teams-web-offset-chat.json`: one container that exposes **no** static texts, keeping its `label` (AXDescription) so the description fallback is pinned by a golden, plus a composer with invented draft text.
+
+Move into `Fixtures/`, print, scrub and save the goldens, then add four README rows:
+
+```markdown
+| `teams-web-chat.json` | Recorded Chrome Teams web chat, scrubbed | `TeamsWebParser` class-anchored messages |
+| `teams-web-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
+| `teams-web-offset-chat.json` | Recorded Chrome Teams web chat at a nonzero screen origin, scrubbed | `TeamsWebParser` AXDescription fallback and composer draft |
+| `teams-web-offset-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
+```
+
+- [ ] **Step 7: Run the suites**
+
+Run: `swift test --filter TeamsWebParserTests`
+Expected: PASS, 15 tests.
+
+Run: `swift test --filter PhaseDCoverageTests`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/MaxMiCapture/TeamsWebParser.swift \
+        Sources/MaxMiCapture/WebAppCaptureParser.swift \
+        Sources/MaxMiCapture/ParserRegistry.swift \
+        Tests/MaxMiCaptureTests/TeamsWebParserTests.swift \
+        Tests/MaxMiCaptureTests/PhaseDCoverageTests.swift \
+        Tests/MaxMiCaptureTests/Fixtures/teams-web-chat.json \
+        Tests/MaxMiCaptureTests/Fixtures/teams-web-chat-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/teams-web-offset-chat.json \
+        Tests/MaxMiCaptureTests/Fixtures/teams-web-offset-chat-golden.json \
+        Tests/MaxMiCaptureTests/Fixtures/README.md
+git commit -m "Capture Teams web chats with class anchors and a description fallback"
+```
+
+---
+### Task 27: Second live-verification pass for the five web hosts
+
+**Files:**
+- Modify (only if the pass finds a wrong anchor): the affected parser in `Sources/MaxMiCapture/` and its header comment
+- Modify (only if a golden changes as a result): the affected `Tests/MaxMiCaptureTests/Fixtures/*-golden.json`
+
+**Interfaces:**
+- Consumes: everything Tasks 22-26 registered; the MCP tool `get_latest_context`; `PhaseDCoverageTests` (Tasks 21-26).
+- Produces: no new code. The deliverable is evidence that spec §14b's exit criterion holds — each of the five hosts, opened in a browser tab, produces a typed capture with real senders, times and bodies — plus the verified anchors recorded in each parser header.
+
+This is the **second** live pass of the phase. Task 21 verified the eighteen native and browser-generic surfaces; this one verifies the five host-routed parsers, which did not exist when Task 21 ran.
+
+- [ ] **Step 1: Run the whole suite**
+
+Run: `swift test`
+Expected: PASS, zero failures.
+
+Run: `swift test --filter PhaseDCoverageTests`
+Expected: PASS — in particular `testEveryHostRoutedParserIsReachableFromTheHostMap` covers all five hosts, and the two-fixture / nonzero-origin / no-secure-value assertions now cover ten more fixtures.
+
+Run: `swift build 2>&1 | grep -i warning; echo done`
+Expected: no warning lines (spec §11 item 10).
+
+- [ ] **Step 2: Rebuild the app**
+
+Run, exactly as written — **no `tccutil reset`**, because a signed build keeps its Accessibility grant across rebuilds and resetting it would silently break capture:
+
+```bash
+./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi" && sleep 2 && open MaxMi.app
+```
+
+Note the wall-clock time of the `open`. Every verification below must be confirmed against a capture whose timestamp is **strictly after** that moment; an older row proves nothing.
+
+- [ ] **Step 3: Live-verify each host**
+
+For each row: open the surface in a browser tab, do the listed action, wait for a capture tick, then read the capture back with the MCP tool `get_latest_context` using the listed arguments and check the expectation against the returned `content`. `get_latest_context` renders `ContentRenderer.render(structured, .full)`, so the shapes below are what the rendering looks like. Rows continue Task 21's Step 5 numbering.
+
+| # | Host | Action | `get_latest_context` arguments | Expect in `content` |
+|---|---|---|---|---|
+| 21 | Gmail (`mail.google.com`) | Open a thread with two expanded messages, then start a reply and leave it unsent | `{"source": "Web", "content_kinds": ["email"], "limit": 1}` | `(From: <name>)(sent <time>): <body>` per expanded message, then `(From: You (draft)): <your reply>`; no line with an empty body from a collapsed message |
+| 22 | LinkedIn (`linkedin.com/messaging`) | Open a conversation you have replied in | `{"source": "Web", "content_kinds": ["conversation"], "limit": 1}` | their messages as `(From: <name>)(sent <time>): …` and **your own** as `(From: You)`; then open the LinkedIn feed and confirm the next capture is a generic page (`URL: https://www.linkedin.com/feed/` plus region headers), not a conversation |
+| 23 | Outlook web (`outlook.office.com`) | Open a message in the reading pane | `{"source": "Web", "content_kinds": ["email"], "limit": 1}` | one `(From: <name>)(sent <time>): <body>` line per card; no `From:`/`Sent:` prefix left inside the body text |
+| 24 | Slack web (`app.slack.com`) | Open a channel, type a draft, do not send | `{"source": "Web", "content_kinds": ["conversation"], "limit": 1}` | the same message-line shape the native Slack row 7 produced, then `(From: You (draft)): <your draft>` |
+| 25 | Teams web (`teams.microsoft.com`) | Open a chat with two messages from different people | `{"source": "Web", "content_kinds": ["conversation"], "limit": 1}` | two `(From: <name>)`-attributed lines; no line reading `(From: unknown)` unless Step 4 of Task 26 recorded the AXDescription fallback as the tier that fired |
+
+- [ ] **Step 4: Check the three cross-cutting behaviours**
+
+| # | Check | How |
+|---|---|---|
+| 26 | The refusal is recorded, not lost | Open a Gmail compose window, leave the body empty, wait for a tick, then open the Capture Health window. The row for that capture is a **skip** with reason `parser_no_content` — not a failure, and not a stored empty capture. |
+| 27 | A degraded host still captures | Open a Gmail surface no anchor matches (Settings). The next capture is a generic page and its Capture Health `parser` value starts `GenericPageExtractor.v2/fallback/GmailParser`. |
+| 28 | The recorded anchors match reality | Re-read the ANCHORS block in each of `GmailParser.swift`, `LinkedInMessagingParser.swift`, `OutlookWebParser.swift`, `SlackParser.swift` and `TeamsWebParser.swift`. Every candidate line must read `verified (<n> nodes)` or `NOT EXPOSED — used <replacement>`; no `?` may remain, and no `<YYYY-MM-DD>` placeholder may remain. |
+
+- [ ] **Step 5: Fix what the pass found, or record that nothing needed fixing**
+
+If a row failed, the anchor is wrong, not the plan: re-record that host's dump with `tools/ax-snapshot-record.swift`, correct the anchor and the header comment, re-scrub the fixture, regenerate the golden, and re-run that host's test class. Then:
+
+```bash
+swift test --filter PhaseDCoverageTests
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+If Step 5 changed anything:
+
+```bash
+git add Sources/MaxMiCapture Tests/MaxMiCaptureTests
+git commit -m "Correct web host anchors found in the live verification pass"
+```
+
+If nothing changed, skip the commit — the pass produced evidence, not a diff. Record in the task notes that rows 21-28 all passed against captures timestamped after the `open MaxMi.app` in Step 2.
+
+---
+
 ## Self-Review
 
 Run after the plan is written, before execution. This is the author's checklist, not a subagent dispatch.
@@ -6808,8 +9824,21 @@ Run after the plan is written, before execution. This is the author's checklist,
 | §11 item 8 (AXQuery powers the rewritten parsers; ≥2 goldens each, one nonzero origin) | 21 |
 | §11 item 5 (no `CGEventTap` in the binary, grep-asserted) | 21 |
 | §11 item 10 (full suite green, zero warnings, live verification passed) | 21 |
+| §14b Gmail: thread `.conversation`, inbox `.generic` `.tableRow`s, compose draft, `.email` on every path | 22 |
+| §14b LinkedIn `/messaging` `.conversation`; every other LinkedIn page stays generic v2 | 23 |
+| §14b Outlook web: reading-pane `.conversation` from the `From:`/`Sent:` description, list rows, draft, `.email` | 24 |
+| §14b Slack web mirrors the native Slack anchors; `isGroup` from a `#` channel; renders byte-identically | 25 |
+| §14b Teams web: `data-tid` anchors with an `AXDescription` fallback; `classify` gains `teams.cloud.microsoft` | 26 |
+| §14b host registration via `ParserConfig.hosts` → `ParserRegistry.host(fromURL:)` → `structuredParser(forHost:)`, `preferOverNative` false | 22-26, on Task 5's mechanism |
+| §14b nil = NOT_HANDLED → generic v2; refusal ONLY for a compose-only window with an empty draft (§12 Q18) | 22 (`RefusingStructuredParser` + the `BrowserCapturePipeline` throw + the `AppWiring` catch), 23-26 per parser |
+| §14b `Message`s built from container structure via `NativeConversationExtraction.senderLabel`, never split on `": "` | 22 (`WebHostParsing.message`), asserted in 22-26 |
+| §14b `contentKind` never derived from shape; `sourceKey` schemes preserved | 22 (Gmail `.email` + key test), 23, 24, 25, 26 (five-host key-stability test) |
+| §14b ≥2 recorded hand-scrubbed fixtures + golden per host, ≥1 at a nonzero origin, registered in Task 21's `coverage` | 22-26, machine-checked by 21's dictionaries |
+| §14b five live-checklist rows read back with `get_latest_context`, verified by timestamp | 27 |
+| §14b anchors verified against a live `ax-snapshot-record.swift` dump before use and recorded in each parser header | 22-26 Step 1, re-checked in 27 Step 4 |
+| §14b exit criterion: each of the five hosts produces a typed capture with real senders, times and bodies | 27 |
 
-Not in this plan, by design: §4 (Phase A), §5 (Phase B), §6 (Phase C), §9's Finder and dialog-over-window **generic-extractor** fixtures (Phase A's `finder-offset-window.json` and `dialog-over-window.json` — Task 18 adds the Finder *parser* on top of them), §9's `GenericPageExtractor` 150 ms / 20k-node bound (Phase A), §12 Q7-Q10 and Q12-Q15 (Phases A-C). **No gaps.**
+Not in this plan, by design: §4 (Phase A), §5 (Phase B), §6 (Phase C), §14a and §14c (both Phase C), §9's Finder and dialog-over-window **generic-extractor** fixtures (Phase A's `finder-offset-window.json` and `dialog-over-window.json` — Task 18 adds the Finder *parser* on top of them), §9's `GenericPageExtractor` 150 ms / 20k-node bound (Phase A), §12 Q7-Q10 and Q12-Q15 (Phases A-C). **No gaps.**
 
 ### 2. Placeholder scan
 
@@ -6838,3 +9867,62 @@ Checked across tasks:
 - Phase A names consumed and never redefined: `CapturedContent`, `Document`, `Conversation`, `Message`, `Message.makeID`, `TaskItem`, `TaskStatus`, `CalendarEvent`, `TerminalSegment`, `TerminalSession`, `GenericPage`, `Region`, `RegionKind`, `Block`, `BlockType`, `Authorship`, `CapturedContentEnvelope`, `ContentRenderer.render/renderBlock`, `GenericPageExtractor.extract/Options/Result`, `LegacyContentAdapter`, `ParsedCapture.structured`, `SourceParser.parseStructured`, `AXNode.subrole/headingLevel/selected/placeholder/selectedText/hidden`, `AXReader.textEntryRoles`. All spelled as the spec §4 and the Phase A plan spell them.
 
 No inconsistencies found.
+
+### 4. Second pass over Tasks 22-27 (§14b)
+
+**Spec coverage.** Every §14b paragraph maps to a task in the table above. The five hosts, the
+refusal rule, the sender heuristic, the `contentKind`/`sourceKey` rules, the fixture rules, the
+five live rows and the exit criterion are each claimed by a numbered task.
+
+**Placeholder scan.** No `TBD`, `TODO`, `implement later`, `similar to Task N`, "add error
+handling" or "write tests for the above" in Tasks 22-27. The `?` marks inside each parser's
+ANCHORS header block and the `<YYYY-MM-DD>` in the same block are **not** plan placeholders: they
+are fields the executor can only fill from the live dump recorded in that task's Step 1, each with
+an explicit instruction on what to write, and Task 27 Step 4 fails the phase if any of them
+survives.
+
+**Type consistency across the new tasks.**
+
+- `RefusingStructuredParser.refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool`
+  — one spelling in Task 22's protocol, its `BrowserCapturePipeline` call site, and all five
+  conformances (22, 23, 24, 25, 26).
+- `WebHostParsing.message(sender:timeString:texts:isUser:)` — declared in Task 22 with
+  `isUser: Bool = false`; Tasks 22, 24, 25, 26 call it without `isUser`, Task 23 passes it.
+  `.draft(in:)`, `.text(of:)`, `.editorText(in:)` and `.path(of:)` likewise have one spelling each.
+- `ParserConfig(app:bundleIDs:hosts:attributeSet:offscreenPolicy:preferOverNative:)` — Task 5's
+  label order, `bundleIDs: []` for all four host-only parsers, `preferOverNative: false` for all
+  four (Task 10's `true` on `SlackParser` is unchanged because that parser also claims a bundle ID).
+- `BrowserCapturePipeline.parse(window:windowTitle:browser:contentBudget:registry:)` — Task 22
+  fixes the signature and keeps `contentBudget` ahead of `registry`, so Task 9's call site and
+  `WebAppStructuredTests.swift:117` both compile.
+- `PhaseDCoverageTests.coverage` / `.hostCoverage` — Task 22 adds `hostCoverage` and its test;
+  Tasks 23, 24, 26 add one row to each; Task 25 extends `SlackParser`'s `coverage` entry to four
+  pairs and adds its host row. The ten new `(fixture, golden)` names are character-for-character
+  the names used in the `assertGolden` calls and `git add` lines of Tasks 22-26.
+- `AXQuery` surface used: `find`, `findAll`, `collectStaticTexts`, `sortedByVisualOrder`, `all`,
+  `first`, `formatTable` — all as Tasks 3 and 4 declare them, `sortedByVisualOrder(_:relativeTo:)`
+  always fed a `CGRect?`.
+
+**Three places §14b contradicts the tree or itself. Each is decided in the task, not left open.**
+
+1. **§14b/§12 Q18 put the refusal in `SourceParser.parse(window:app:)`, but a browser tab never
+   reaches a `SourceParser`.** The browser path is `ApplicationRegistry.captureStrategy ==
+   .browserAX` → `BrowserCapturePipeline.parse`, and `CaptureDispatch.parseDetailed` — the code
+   that catches `ParserRefusal` today — is only on the non-browser branch. **Decision (Task 22):**
+   the refusal is raised at the browser path's own throwing boundary, `BrowserCapturePipeline.parse`,
+   through the new `RefusingStructuredParser` hook, and `AppWiring` gains one `catch` clause that
+   records it as `.skipped(.parserNoContent)` — the same outcome the native refusal path produces.
+2. **§14b says the DOM attributes are "gated per parser by `ParserConfig.attributeSet`", but
+   `ParserRegistry.forcedAttributes(for:)` is keyed by bundle ID** (Task 5), and a host-routed
+   parser has no bundle ID. **Decision:** the `attributeSet` is still declared exactly as §14b
+   writes it, and each parser's header plus one test per parser records that it is inert here —
+   Task 1's `AXWebArea`-ancestor gate is what actually supplies `domClassList`/`domIdentifier` on a
+   browser tab, which is always satisfied for these five hosts.
+3. **§14b lists `teams.cloud.microsoft` as a Teams host, but neither
+   `WebAppCaptureParser.classify` nor `URLKeyNormalizer` knows that domain.** **Decision
+   (Task 26):** `classify` gains it, because `classify` is the authority for `contentKind` (§12 Q3)
+   and without it that host would produce `.webpage` instead of `.conversation`. `URLKeyNormalizer`
+   is deliberately **not** changed — normalizing a host differently changes its `source_key` and
+   would fork every existing thread on that domain — so the two Teams domains keep two key schemes
+   until someone plans that migration. The divergence is asserted, with its reason, in
+   `TeamsWebParserTests.testKeyDerivationIsUnchangedForEveryWebHostInThisPhase`.
