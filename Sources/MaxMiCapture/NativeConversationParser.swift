@@ -344,7 +344,10 @@ enum NativeConversationExtraction {
 
     /// The first text of a bubble is its sender only when there is a body after it and the value
     /// looks like a label (short, single-line). A bubble with one text value has no sender at all.
-    private static func senderLabel(_ values: [String]) -> String? {
+    ///
+    /// Shared with `WebAppCaptureParser.messages`: a chat rendered in a browser exposes the same
+    /// container shape, so both paths must decide "is this first value a speaker?" identically.
+    static func senderLabel(_ values: [String]) -> String? {
         guard let first = values.first, values.count > 1,
               first.count <= 80, !first.contains("\n") else { return nil }
         return first

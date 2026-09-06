@@ -16,13 +16,18 @@ public struct WebAppParseResult: Sendable, Equatable {
     public let capture: ParsedCapture
     public let app: WebAppKind
     public let preservedBoundaries: Bool
+    /// True when bounding the typed shape dropped content — budgeted-away page blocks, or
+    /// messages shed off the front of a conversation. Independent of `TabCapture.truncated`,
+    /// which reports the tab TEXT hitting `BrowserTabExtractor`'s own cap.
+    public let truncated: Bool
 }
 
 /// Routes known web applications to semantic capture profiles while retaining a
 /// URL-keyed `Web` thread. No network or DOM injection is used; content remains the
 /// visible Accessibility tree and is bounded before it reaches storage or Gemini.
 public enum WebAppCaptureParser {
-    static let contentCap = 16_000
+    /// The browser content cap. Public because it is the default of a public parameter.
+    public static let contentCap = 16_000
     static let messageRoles: Set<String> = ["AXRow", "AXListItem"]
     static let textRoles: Set<String> = ["AXStaticText", "AXHeading", "AXLink"]
 
@@ -40,7 +45,13 @@ public enum WebAppCaptureParser {
         return .generic
     }
 
-    public static func parse(tab: TabCapture, window: AXNode) -> WebAppParseResult {
+    /// `contentBudget` is the cap both shapes are bounded to. It is a parameter only so a test can
+    /// drive the budget without a 16k fixture; production always uses `contentCap`.
+    public static func parse(
+        tab: TabCapture,
+        window: AXNode,
+        contentBudget: Int = contentCap
+    ) -> WebAppParseResult {
         let app = classify(url: tab.url)
         let isLinkedInMessaging = app == .linkedin
             && (URLComponents(string: tab.url)?.path.hasPrefix("/messaging") == true)
@@ -51,6 +62,10 @@ public enum WebAppCaptureParser {
         let typedMessages = isConversation ? messages(in: window) : []
         let structured: CapturedContent
         let preservedBoundaries: Bool
+        // Whether BOUNDING dropped content, which is a separate fact from the tab text having hit
+        // the extractor's own cap. Both feed `BrowserCaptureResult.truncated`, which is what the
+        // MCP layer discloses as "context was bounded".
+        var truncated = false
         if !typedMessages.isEmpty {
             structured = CaptureAccumulator.bound(
                 .conversation(Conversation(
@@ -60,20 +75,26 @@ public enum WebAppCaptureParser {
                     isGroup: false,
                     messages: typedMessages
                 )),
-                to: contentCap
+                to: contentBudget
             )
+            // `bound` sheds whole messages off the front, so a shorter list IS the truncation.
+            if case .conversation(let bounded) = structured {
+                truncated = bounded.messages.count < typedMessages.count
+            }
             preservedBoundaries = true
         } else {
             // Generic path: the v2 extractor over the page subtree, with the URL attached.
             var options = GenericPageExtractor.Options()
-            options.totalBudget = contentCap
+            options.totalBudget = contentBudget
             options.offscreenPolicy = .accessibilityScroll(maxSteps: 3, maxCharacters: 64_000)
-            structured = .generic(GenericPageExtractor.extract(
+            let extracted = GenericPageExtractor.extract(
                 window: pageSubtree(in: window, title: tab.title),
                 focusedElement: nil,
                 url: tab.url,
                 options: options
-            ).page)
+            )
+            structured = .generic(extracted.page)
+            truncated = extracted.truncated
             preservedBoundaries = false
         }
 
@@ -92,7 +113,10 @@ public enum WebAppCaptureParser {
             offscreenPolicy: .accessibilityScroll(maxSteps: 3, maxCharacters: 64_000),
             structured: structured
         )
-        return WebAppParseResult(capture: capture, app: app, preservedBoundaries: preservedBoundaries)
+        return WebAppParseResult(
+            capture: capture, app: app,
+            preservedBoundaries: preservedBoundaries, truncated: truncated
+        )
     }
 
     /// The subtree the generic path walks: the primary web area, or — when the window exposes
@@ -124,9 +148,9 @@ public enum WebAppCaptureParser {
 
     /// One `Message` per visible message container, built from that container's OWN text values:
     /// the first value becomes the sender only when it looks like a sender label
-    /// (`senderLabel`), and otherwise the container is one unattributed message keeping its full
-    /// text. A joined line is never re-split on `": "` — "Note: check the doc" is a message, not
-    /// a message from someone called "Note".
+    /// (`NativeConversationExtraction.senderLabel`, shared with the native chat parsers), and
+    /// otherwise the container is one unattributed message keeping its full text. A joined line is
+    /// never re-split on `": "` — "Note: check the doc" is a message, not a message from "Note".
     static func messages(in root: AXNode) -> [Message] {
         messageValues(in: root).compactMap(message(from:))
     }
@@ -151,7 +175,7 @@ public enum WebAppCaptureParser {
     }
 
     static func message(from values: [String]) -> Message? {
-        let sender = senderLabel(values)
+        let sender = NativeConversationExtraction.senderLabel(values)
         let text = (sender == nil ? values : Array(values.dropFirst())).joined(separator: " ")
         guard !text.isEmpty else { return nil }
         let name = sender ?? "unknown"
@@ -164,15 +188,6 @@ public enum WebAppCaptureParser {
             isUser: false,
             isDraft: false
         )
-    }
-
-    /// Mirrors `NativeConversationExtraction.senderLabel`: the first value names the speaker only
-    /// when the container has a body after it and that value reads like a label — short and
-    /// single-line. Anything else stays part of the message body.
-    static func senderLabel(_ values: [String]) -> String? {
-        guard let first = values.first, values.count > 1,
-              first.count <= 80, !first.contains("\n") else { return nil }
-        return first
     }
 
     private static func collectMessageContainers(

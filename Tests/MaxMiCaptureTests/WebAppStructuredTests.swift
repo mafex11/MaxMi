@@ -91,6 +91,65 @@ final class WebAppStructuredTests: XCTestCase {
         XCTAssertEqual(page.url, "https://example.com/x")
     }
 
+    /// A page can be far under the raw cap and still lose blocks to the region budgets. That is a
+    /// bounded capture and the pipeline has to say so, or the MCP disclosure goes silent.
+    func testBudgetedAwayPageBlocksReportTruncationEndToEnd() throws {
+        func paragraph(_ value: String, y: CGFloat) -> AXNode {
+            AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
+                   frame: CGRect(x: 10, y: y, width: 400, height: 16), focused: false, children: [])
+        }
+        let window = AXNode(role: "AXWindow", value: nil, title: "Long page", url: nil,
+                            frame: CGRect(x: 0, y: 0, width: 800, height: 600), focused: false,
+                            children: [
+            AXNode(role: "AXWebArea", value: nil, title: "Long page",
+                   url: "https://example.com/long",
+                   frame: CGRect(x: 0, y: 40, width: 800, height: 560), focused: false, children: [
+                paragraph("Paragraph one.", y: 60),
+                paragraph("Paragraph two.", y: 80),
+                paragraph("Paragraph three.", y: 100),
+                paragraph("Paragraph four.", y: 120),
+                paragraph("Paragraph five.", y: 140),
+            ]),
+        ])
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.apple.Safari"))
+        let result = try BrowserCapturePipeline.parse(
+            window: window, windowTitle: "Long page", browser: browser, contentBudget: 60
+        )
+        guard case .generic(let page) = try XCTUnwrap(result.capture.structured) else {
+            return XCTFail("expected .generic")
+        }
+        XCTAssertLessThan(page.regions[0].blocks.count, 5, "the budget must have dropped blocks")
+        XCTAssertLessThan(result.capture.content.count, WebAppCaptureParser.contentCap,
+                          "the raw page is far under the 16k cap, so only the budget signal can fire")
+        XCTAssertTrue(result.truncated)
+    }
+
+    func testConversationTruncationIsReportedWhenBoundingDropsMessages() {
+        func text(_ value: String, y: CGFloat) -> AXNode {
+            AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
+                   frame: CGRect(x: 0, y: y, width: 300, height: 16), focused: false, children: [])
+        }
+        func row(_ sender: String, _ body: String, y: CGFloat) -> AXNode {
+            AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 0, y: y, width: 400, height: 30), focused: false,
+                   children: [text(sender, y: y), text(body, y: y + 1)])
+        }
+        let window = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
+                            focused: false,
+                            children: [row("Alex", "first", y: 100), row("Sam", "second", y: 200)])
+        let tab = TabCapture(url: "https://app.slack.com/client/T/C", title: "general",
+                             content: "unused", urlSource: .webArea, quality: .high,
+                             truncated: false)
+
+        let whole = WebAppCaptureParser.parse(tab: tab, window: window)
+        XCTAssertEqual(whole.capture.content, "(From: Alex): first\n(From: Sam): second")
+        XCTAssertFalse(whole.truncated)
+
+        let bounded = WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: 30)
+        XCTAssertEqual(bounded.capture.content, "(From: Sam): second")
+        XCTAssertTrue(bounded.truncated, "a message was shed off the front")
+    }
+
     func testMessageLinesHelperIsUnchanged() {
         func text(_ value: String, y: CGFloat) -> AXNode {
             AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
