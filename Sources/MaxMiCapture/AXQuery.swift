@@ -67,7 +67,7 @@ public enum AXQuery {
     static func parsePath(_ path: String) -> [Step]? {
         guard !path.isEmpty else { return invalid(path, "empty path") }
         guard path.hasPrefix("/") else { return invalid(path, "a path must start with / or //") }
-        var chars = Array(path)
+        let chars = Array(path)
         var i = 0
         var steps: [Step] = []
         while i < chars.count {
@@ -96,6 +96,7 @@ public enum AXQuery {
             var index: Int? = nil
             while i < chars.count, chars[i] == "[" {
                 i += 1
+                // The grammar has no escape syntax; a literal `]` in a predicate value is rejected (fails closed).
                 guard let close = chars[i...].firstIndex(of: "]") else {
                     return invalid(path, "unterminated [")
                 }
