@@ -23,14 +23,14 @@ final class AgentPromptsTests: XCTestCase {
 
     func testConversationPromptHasOnlyNewMessagesAndUsesConversationRules() {
         let prompt = AgentPrompts.summarizeCaptureForDisplay(.init(
-            variant: .conversation, appLabel: "Slack", sourceTitle: "maxmi-dev",
+            variant: .conversation, appLabel: "Slack", sourceTitle: "project-chat",
             url: nil, kind: .conversation, capturedAtISO8601: "2026-09-03T08:05:00Z",
             trigger: .conversationChanged, onScreenMain: "",
             renderedDelta: "(From: You): I will review it.", typedText: "",
-            channel: "#maxmi-dev", isGroup: true, hasMeaningfulContent: true
+            channel: "#project-chat", isGroup: true, hasMeaningfulContent: true
         ))
 
-        XCTAssertTrue(prompt.contains("channel: #maxmi-dev"))
+        XCTAssertTrue(prompt.contains("channel: #project-chat"))
         XCTAssertTrue(prompt.contains("isGroup: true"))
         XCTAssertTrue(prompt.contains("at most 45 words"))
         XCTAssertFalse(prompt.contains("ON SCREEN (main):"))
@@ -40,11 +40,69 @@ final class AgentPromptsTests: XCTestCase {
     func testSessionPromptUsesTimelineInsteadOfEvidenceLanguage() {
         let prompt = AgentPrompts.summarizeForDisplay(
             appLabel: "Warp",
-            timelineText: "09:02–09:14 Warp (terminal ~/code/MaxMi): ran swift test ×3",
+            timelineText: "09:02–09:14 Warp (terminal ~/scratch/demo-project): ran swift test ×3",
             maxChars: 6_000
         )
         XCTAssertTrue(prompt.contains("timeline's chronological order"))
         XCTAssertTrue(prompt.contains("ran swift test"))
         XCTAssertFalse(prompt.contains("captured content"))
+    }
+
+    func testCaptureActionAppLineIsInsideUntrustedDataFence() {
+        let prompt = AgentPrompts.summarizeCaptureForDisplay(.init(
+            variant: .action, appLabel: "Cursor", sourceTitle: "Plan.swift",
+            url: "file:///Plan.swift", kind: .document,
+            capturedAtISO8601: "2026-09-03T08:05:00Z", trigger: .periodic,
+            onScreenMain: "Implement context embeddings.", renderedDelta: "",
+            typedText: "", channel: nil, isGroup: nil, hasMeaningfulContent: true
+        ))
+
+        assertLine("app: Cursor", isInsideUntrustedDataFenceIn: prompt)
+    }
+
+    func testCaptureConversationAppLineIsInsideUntrustedDataFence() {
+        let prompt = AgentPrompts.summarizeCaptureForDisplay(.init(
+            variant: .conversation, appLabel: "Slack", sourceTitle: "project-chat",
+            url: nil, kind: .conversation, capturedAtISO8601: "2026-09-03T08:05:00Z",
+            trigger: .conversationChanged, onScreenMain: "",
+            renderedDelta: "(From: You): I will review it.", typedText: "",
+            channel: "#project-chat", isGroup: true, hasMeaningfulContent: true
+        ))
+
+        assertLine("app: Slack", isInsideUntrustedDataFenceIn: prompt)
+    }
+
+    func testSessionAppLineIsInsideUntrustedDataFence() {
+        let prompt = AgentPrompts.summarizeForDisplay(
+            appLabel: "Warp",
+            timelineText: "09:02–09:14 Warp (terminal ~/scratch/demo-project): ran swift test ×3",
+            maxChars: 6_000
+        )
+
+        assertLine("App: Warp", isInsideUntrustedDataFenceIn: prompt)
+    }
+
+    private func assertLine(_ line: String, isInsideUntrustedDataFenceIn prompt: String, file: StaticString = #filePath, line testLine: UInt = #line) {
+        let appLineIndex = try! XCTUnwrap(
+            prompt.range(of: line)?.lowerBound,
+            "Expected app line to be present.",
+            file: file,
+            line: testLine
+        )
+        let beginFenceIndex = try! XCTUnwrap(
+            prompt.ranges(of: "===BEGIN_UNTRUSTED_DATA_").last?.lowerBound,
+            "Expected begin fence to be present.",
+            file: file,
+            line: testLine
+        )
+        let endFenceIndex = try! XCTUnwrap(
+            prompt.ranges(of: "===END_UNTRUSTED_DATA_").last?.lowerBound,
+            "Expected end fence to be present.",
+            file: file,
+            line: testLine
+        )
+
+        XCTAssertGreaterThan(appLineIndex, beginFenceIndex, file: file, line: testLine)
+        XCTAssertLessThan(appLineIndex, endFenceIndex, file: file, line: testLine)
     }
 }
