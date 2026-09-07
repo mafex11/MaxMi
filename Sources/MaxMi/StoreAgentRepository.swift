@@ -8,16 +8,24 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
 
     func claimNextPage() async -> AgentLeasedPage? {
         do {
-            guard let page = try store.claimNextAgentRun(maxSessions: 50, leaseMs: 120_000, nowMs: epochNowMs()) else {
+            guard let page = try store.claimNextAgentRun(maxVersions: 50, leaseMs: 120_000, nowMs: epochNowMs()) else {
                 return nil
             }
+            let timeline = try TimelineBuilder(repo: StoreTimelineRepository(store: store)).build(
+                fromMs: page.fromMs,
+                toMs: page.toMs
+            )
+            let text = TimelineBuilder.render(timeline, budgetChars: HourlyReviewBudget.timelineCap)
 
-            // Pair summaries + sourceIDs into [ReviewSession]
-            let sessions = zip(page.sourceIDs, page.summaries).map { id, summary in
-                ReviewSession(id: id, summary: summary)
-            }
-
-            return AgentLeasedPage(runID: page.runID, sessions: sessions, openItems: page.openItems)
+            return AgentLeasedPage(
+                runID: page.runID,
+                versions: page.versions,
+                timelineText: text,
+                openItems: page.openItems,
+                localTimeISO: localTimeISO(for: page.toMs),
+                fromMs: page.fromMs,
+                toMs: page.toMs
+            )
         } catch {
             return nil
         }
@@ -43,6 +51,13 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
         } catch {
             // Best effort
         }
+    }
+
+    private func localTimeISO(for ms: EpochMs) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .current
+        formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1_000))
     }
 
     // MARK: - DTO Validation & Mapping

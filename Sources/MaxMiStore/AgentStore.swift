@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import MaxMiActivity
 import MaxMiCore
 
 public struct ActionItem: Sendable {
@@ -34,15 +35,23 @@ public struct SessionCursor: Sendable, Equatable {
 
 public struct AgentPage: Sendable {
     public let runID: String
-    public let summaries: [String]
-    public let sourceIDs: [String]
-    public let openItems: [(id: String, title: String)]
+    public let versions: [ReviewVersion]
+    public let openItems: [ReviewOpenItem]
+    public let fromMs: EpochMs
+    public let toMs: EpochMs
 
-    public init(runID: String, summaries: [String], sourceIDs: [String], openItems: [(id: String, title: String)]) {
+    public init(
+        runID: String,
+        versions: [ReviewVersion],
+        openItems: [ReviewOpenItem],
+        fromMs: EpochMs,
+        toMs: EpochMs
+    ) {
         self.runID = runID
-        self.summaries = summaries
-        self.sourceIDs = sourceIDs
+        self.versions = versions
         self.openItems = openItems
+        self.fromMs = fromMs
+        self.toMs = toMs
     }
 }
 
@@ -62,8 +71,12 @@ public struct AgentRunResult: Sendable {
     }
 }
 
+private enum AgentReviewPromptVersion {
+    static let versions = "agent-review-v2-versions"
+}
+
 extension Store {
-    public func claimNextAgentRun(maxSessions: Int, leaseMs: EpochMs, nowMs: EpochMs) throws -> AgentPage? {
+    public func claimNextAgentRun(maxVersions: Int, leaseMs: EpochMs, nowMs: EpochMs) throws -> AgentPage? {
         try db.dbQueue.write { d in
             try d.execute(sql: """
                 UPDATE agent_runs SET status='failed'
@@ -84,19 +97,13 @@ extension Store {
             let curAt: EpochMs = lastCursor?["input_to_at"] ?? 0
             let curID: String = lastCursor?["input_to_session_id"] ?? ""
 
-            let sessionRows = try Row.fetchAll(d, sql: """
-                SELECT id, summary_ciphertext, updated_at FROM activity_sessions
-                WHERE summary_status='summarized'
-                  AND (updated_at > ? OR (updated_at = ? AND id > ?))
-                ORDER BY updated_at ASC, id ASC
-                LIMIT ?
-                """, arguments: [curAt, curAt, curID, maxSessions])
-
-            guard !sessionRows.isEmpty else { return nil }
-
-            let lastRow = sessionRows.last!
-            let lastAt: EpochMs = lastRow["updated_at"]
-            let lastID: String = lastRow["id"]
+            let versions = try agentReviewVersions(
+                d,
+                cursorAt: curAt,
+                cursorID: curID,
+                maxVersions: maxVersions
+            )
+            guard let first = versions.first, let last = versions.last else { return nil }
 
             let runID = Ident.uuidv7(nowMs: nowMs)
             let dayBucket = Store.dayBucket(forMs: nowMs, timeZone: .current)
@@ -104,32 +111,52 @@ extension Store {
 
             try d.execute(sql: """
                 INSERT INTO agent_runs (
-                    id, kind, status, input_to_at, input_to_session_id, lease_expires_at,
-                    started_at, day_bucket
-                ) VALUES (?,?,?,?,?,?,?,?)
-                """, arguments: [runID, "hourly", "running", lastAt, lastID, leaseExpires, nowMs, dayBucket])
-
-            let summaries = sessionRows.map { decryptOrMarker($0["summary_ciphertext"]) }
-            let sourceIDs = sessionRows.map { $0["id"] as String }
+                    id, kind, status, input_from, input_to, input_to_at, input_to_session_id,
+                    lease_expires_at, started_at, day_bucket
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, arguments: [
+                    runID, "hourly", "running", first.committedAt, last.committedAt,
+                    last.committedAt, last.versionID, leaseExpires, nowMs, dayBucket,
+                ])
 
             let openItemRows = try Row.fetchAll(d, sql: """
-                SELECT id, title_ciphertext FROM agent_action_items WHERE status='open'
+                SELECT id, title_ciphertext, details_ciphertext, detected_at
+                FROM agent_action_items
+                WHERE status='open'
                 """)
-            let openItems = openItemRows.map { (id: $0["id"] as String, title: decryptOrMarker($0["title_ciphertext"])) }
+            let openItems = openItemRows.map {
+                ReviewOpenItem(
+                    id: $0["id"],
+                    title: decryptOrMarker($0["title_ciphertext"]),
+                    details: ($0["details_ciphertext"] as String?).map(decryptOrMarker),
+                    sourceApp: nil,
+                    createdAt: $0["detected_at"]
+                )
+            }
 
-            return AgentPage(runID: runID, summaries: summaries, sourceIDs: sourceIDs, openItems: openItems)
+            return AgentPage(
+                runID: runID,
+                versions: versions,
+                openItems: openItems,
+                fromMs: first.committedAt,
+                toMs: last.committedAt
+            )
         }
     }
 
     public func completeAgentRun(runID: String, ops: [AgentOp], nowMs: EpochMs) throws -> AgentRunResult {
         try db.dbQueue.write { d in
             guard let runRow = try Row.fetchOne(d, sql: """
-                SELECT status, input_to_at, input_to_session_id FROM agent_runs WHERE id=?
+                SELECT status, input_from, input_to, input_to_at, input_to_session_id
+                FROM agent_runs
+                WHERE id=?
                 """, arguments: [runID]),
                   runRow["status"] as String == "running" else {
                 return AgentRunResult(newCount: 0, resolvedCount: 0, updatedCount: 0)
             }
 
+            let firstAt: EpochMs = runRow["input_from"] ?? 0
+            let inputTo: EpochMs = runRow["input_to"] ?? 0
             let lastAt: EpochMs = runRow["input_to_at"]!
             let lastID: String = runRow["input_to_session_id"]!
 
@@ -144,15 +171,16 @@ extension Store {
             let curAt: EpochMs = prevCursor?["input_to_at"] ?? 0
             let curID: String = prevCursor?["input_to_session_id"] ?? ""
 
-            let pageSourceIDs = try String.fetchAll(d, sql: """
-                SELECT id FROM activity_sessions
-                WHERE summary_status='summarized'
-                  AND (updated_at > ? OR (updated_at = ? AND id > ?))
-                  AND (updated_at < ? OR (updated_at = ? AND id <= ?))
-                ORDER BY updated_at ASC, id ASC
-                """, arguments: [curAt, curAt, curID, lastAt, lastAt, lastID])
-
-            let pageSourceSet = Set(pageSourceIDs)
+            let page = try agentReviewVersions(
+                d,
+                cursorAt: curAt,
+                cursorID: curID,
+                fromMs: firstAt,
+                toMs: inputTo,
+                throughAt: lastAt,
+                throughID: lastID
+            )
+            let pageSourceSet = Set(page.map(\.versionID))
             var newCount = 0
             var resolvedCount = 0
             var updatedCount = 0
@@ -270,12 +298,13 @@ extension Store {
 
             try d.execute(sql: """
                 UPDATE agent_runs
-                SET status='completed', ended_at=?,
+                SET status='completed', ended_at=?, prompt_version=?,
                     new_count=?, resolved_count=?, updated_count=?,
                     new_item_ids=?, resolved_item_ids=?, updated_item_ids=?
                 WHERE id=? AND status='running'
                 """, arguments: [
                     nowMs,
+                    AgentReviewPromptVersion.versions,
                     newCount, resolvedCount, updatedCount,
                     newIDsJSON.map { String(data: $0, encoding: .utf8)! },
                     resolvedIDsJSON.map { String(data: $0, encoding: .utf8)! },
@@ -285,6 +314,103 @@ extension Store {
 
             return AgentRunResult(newCount: newCount, resolvedCount: resolvedCount, updatedCount: updatedCount)
         }
+    }
+
+    private func agentReviewVersions(
+        _ database: Database,
+        cursorAt: EpochMs,
+        cursorID: String,
+        maxVersions: Int
+    ) throws -> [ReviewVersion] {
+        let rows = try Row.fetchAll(database, sql: """
+            SELECT v.id AS version_id, v.thread_id, v.content, v.word_count, v.committed_at, v.metadata,
+                   v.structured_ciphertext, t.source_app, t.source_title, t.source_key,
+                   (SELECT payload_ciphertext
+                    FROM capture_events e
+                    WHERE e.version_id = v.id AND e.kind = 'content_delta'
+                    ORDER BY e.at_ms DESC, e.id DESC LIMIT 1) AS delta_ciphertext
+            FROM versions v
+            JOIN threads t ON t.id = v.thread_id
+            WHERE v.committed_at > ?
+               OR (v.committed_at = ? AND v.id > ?)
+            ORDER BY v.committed_at ASC, v.id ASC
+            LIMIT ?
+            """, arguments: [cursorAt, cursorAt, cursorID, maxVersions])
+        return rows.map(agentReviewVersion)
+    }
+
+    private func agentReviewVersions(
+        _ database: Database,
+        cursorAt: EpochMs,
+        cursorID: String,
+        fromMs: EpochMs,
+        toMs: EpochMs,
+        throughAt: EpochMs,
+        throughID: String
+    ) throws -> [ReviewVersion] {
+        let rows = try Row.fetchAll(database, sql: """
+            SELECT v.id AS version_id, v.thread_id, v.content, v.word_count, v.committed_at, v.metadata,
+                   v.structured_ciphertext, t.source_app, t.source_title, t.source_key,
+                   (SELECT payload_ciphertext
+                    FROM capture_events e
+                    WHERE e.version_id = v.id AND e.kind = 'content_delta'
+                    ORDER BY e.at_ms DESC, e.id DESC LIMIT 1) AS delta_ciphertext
+            FROM versions v
+            JOIN threads t ON t.id = v.thread_id
+            WHERE v.committed_at >= ?
+              AND v.committed_at <= ?
+              AND (v.committed_at > ? OR (v.committed_at = ? AND v.id > ?))
+              AND (v.committed_at < ? OR (v.committed_at = ? AND v.id <= ?))
+            ORDER BY v.committed_at ASC, v.id ASC
+            """, arguments: [
+                fromMs, toMs, cursorAt, cursorAt, cursorID, throughAt, throughAt, throughID,
+            ])
+        return rows.map(agentReviewVersion)
+    }
+
+    private func agentReviewVersion(_ row: Row) -> ReviewVersion {
+        let metadata = (try? JSONDecoder().decode(
+            VersionCaptureMetadata.self,
+            from: Data((row["metadata"] as String? ?? "").utf8)
+        ))
+        let kind = metadata?.contentKind ?? .generic
+        let renderedContent = decryptOrMarker(row["content"])
+        let structured = structuredOrLegacy(
+            row["structured_ciphertext"] as String?,
+            renderedContent: renderedContent,
+            kind: kind
+        )
+        let delta = agentCaptureDelta(row["delta_ciphertext"] as String?)
+        let deltaSummary = delta.map {
+            CaptureDeltaRenderer.render($0, maxChars: HourlyReviewBudget.versionDeltaCap)
+        }
+        let deltaChars = delta.map {
+            CaptureDeltaRenderer.render($0, maxChars: Int.max).count
+        } ?? 0
+
+        return ReviewVersion(
+            versionID: row["version_id"],
+            threadID: row["thread_id"],
+            sourceApp: row["source_app"],
+            sourceTitle: row["source_title"],
+            sourceKey: row["source_key"],
+            kind: kind,
+            wordCount: row["word_count"],
+            committedAt: row["committed_at"],
+            compactContent: ContentRenderer.render(
+                structured,
+                style: .compact(maxChars: HourlyReviewBudget.versionCompactCap)
+            ),
+            deltaSummary: deltaSummary,
+            deltaChars: deltaChars
+        )
+    }
+
+    private func agentCaptureDelta(_ ciphertext: String?) -> CaptureDelta? {
+        guard let ciphertext, let plaintext = try? cipher.decrypt(ciphertext) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(CaptureDelta.self, from: Data(plaintext.utf8))
     }
 
     public func renewAgentRunLease(runID: String, leaseMs: EpochMs, nowMs: EpochMs) throws {
