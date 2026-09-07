@@ -23,7 +23,7 @@ enum ExtractPrompt {
         PREVIOUS COMPACT CONTEXT (already processed; never extract facts from it):
         \(safe(previousContent ?? "", 2_000))
         CURRENT DELTA (the only fact source):
-        \(safe(newContent, 12_000))
+        \(safe(newContent, ExtractInputBuilder.maxNewContentChars))
         """
         return """
         You extract memory facts from a snapshot of what a user is reading on screen.

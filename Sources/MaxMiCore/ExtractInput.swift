@@ -36,7 +36,7 @@ public struct ExtractInput: Sendable, Equatable {
 }
 
 public enum ExtractInputBuilder {
-    public static let maxNewContentChars = 20_000
+    public static let maxNewContentChars = 12_000
 
     public static func build(
         delta: CaptureDelta,

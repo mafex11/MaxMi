@@ -301,22 +301,37 @@ extension Store {
                     )
                 }
                 let delta = decodeCaptureDelta(row["delta_ciphertext"] as String?) ?? .empty
+                let sourceApp: String = row["source_app"]
+                let sourceKey: String = row["source_key"]
+                let sourceTitle: String? = row["source_title"]
+                let url = captureURL(of: current)
+                let capturedAt: EpochMs = row["committed_at"]
+                let input = ExtractInputBuilder.build(
+                    delta: delta,
+                    previousStructured: previous,
+                    metadata: ExtractMetadata(
+                        sourceApp: sourceApp,
+                        sourceKey: sourceKey,
+                        title: sourceTitle,
+                        url: url,
+                        kind: kind,
+                        capturedAt: capturedAt
+                    )
+                )
                 return PendingVersion(
                     id: row["id"],
                     threadID: row["thread_id"],
                     hourBucket: row["hour_bucket"],
                     content: renderedContent,
                     contentHash: row["content_hash"],
-                    sourceApp: row["source_app"],
-                    sourceKey: row["source_key"],
-                    sourceTitle: row["source_title"],
-                    url: captureURL(of: current),
+                    sourceApp: sourceApp,
+                    sourceKey: sourceKey,
+                    sourceTitle: sourceTitle,
+                    url: url,
                     contentKind: kind,
-                    capturedAt: row["committed_at"],
-                    renderedDelta: CaptureDeltaRenderer.render(delta, maxChars: .max),
-                    previousCompactContent: previous.map {
-                        ContentRenderer.render($0, style: .compact(maxChars: 2_000))
-                    },
+                    capturedAt: capturedAt,
+                    renderedDelta: input.newContent,
+                    previousCompactContent: input.previousContent,
                     previousFrozenContent: (row["previous_frozen_content"] as String?)
                         .map(decryptOrMarker)
                 )
