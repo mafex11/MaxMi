@@ -46,9 +46,16 @@ public final class GeminiClient: GenerationMemoryRelay {
         return text
     }
 
-    public func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String] {
-        let prompt = ExtractPrompt.build(newContent: newContent, previousContent: previousContent,
-                                         sourceApp: sourceApp, sourceKey: sourceKey)
+    public func extract(
+        newContent: String,
+        previousContent: String?,
+        metadata: ExtractMetadata
+    ) async throws -> [String] {
+        let prompt = ExtractPrompt.build(
+            newContent: newContent,
+            previousContent: previousContent,
+            metadata: metadata
+        )
         let text = try await generateContent(model: config.extractModel, prompt: prompt, temperature: 0.2, responseMimeType: "application/json")
         return try JSONArrayParser.parse(text)
     }

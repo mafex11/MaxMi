@@ -2,6 +2,17 @@ import Foundation
 import GRDB
 import MaxMiCore
 
+struct VersionCaptureMetadata: Codable {
+    let schemaVersion: Int
+    let contentKind: CaptureContentKind
+    let parserID: String
+    let parserVersion: Int
+    let accumulationPolicy: CaptureAccumulationPolicy
+    let offscreenPolicy: OffscreenCapturePolicy
+    let trigger: CaptureTrigger
+    let truncated: Bool
+}
+
 public struct CaptureInput: Sendable {
     public let sourceApp: String
     public let sourceKey: String
@@ -222,17 +233,7 @@ public final class Store {
     }
 
     private func captureMetadataJSON(_ envelope: CaptureEnvelope) throws -> String {
-        struct Metadata: Codable {
-            let schemaVersion: Int
-            let contentKind: CaptureContentKind
-            let parserID: String
-            let parserVersion: Int
-            let accumulationPolicy: CaptureAccumulationPolicy
-            let offscreenPolicy: OffscreenCapturePolicy
-            let trigger: CaptureTrigger
-            let truncated: Bool
-        }
-        let metadata = Metadata(
+        let metadata = VersionCaptureMetadata(
             schemaVersion: 1,
             contentKind: envelope.contentKind,
             parserID: envelope.parserID,
@@ -257,10 +258,17 @@ extension Store {
             let currentBucket = HourBucket.bucket(forMs: nowMs)
             let rows = try Row.fetchAll(d, sql: """
                 SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
-                       t.source_app, t.source_key,
+                       v.structured_ciphertext, v.metadata, v.committed_at,
+                       t.source_app, t.source_key, t.source_title,
                        (SELECT p.content FROM versions p
                          WHERE p.thread_id = v.thread_id AND p.hour_bucket < v.hour_bucket
-                         ORDER BY p.hour_bucket DESC LIMIT 1) AS previous_frozen_content
+                         ORDER BY p.hour_bucket DESC LIMIT 1) AS previous_frozen_content,
+                       (SELECT p.structured_ciphertext FROM versions p
+                         WHERE p.thread_id = v.thread_id AND p.hour_bucket < v.hour_bucket
+                         ORDER BY p.hour_bucket DESC LIMIT 1) AS previous_structured_ciphertext,
+                       (SELECT e.payload_ciphertext FROM capture_events e
+                         WHERE e.kind = 'content_delta' AND e.version_id = v.id
+                         ORDER BY e.at_ms DESC, e.id DESC LIMIT 1) AS delta_ciphertext
                 FROM versions v JOIN threads t ON t.id = v.thread_id
                 WHERE v.extract_status = 'pending'
                   AND (v.is_frozen = 1 OR v.hour_bucket < ? OR v.committed_at <= ?)
@@ -273,12 +281,59 @@ extension Store {
             return rows.filter { row in
                 let sourceApp: String = row["source_app"]
                 return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
-            }.map { r in
-                PendingVersion(id: r["id"], threadID: r["thread_id"], hourBucket: r["hour_bucket"],
-                               content: decryptOrMarker(r["content"]), contentHash: r["content_hash"],
-                               sourceApp: r["source_app"], sourceKey: r["source_key"],
-                               previousFrozenContent: (r["previous_frozen_content"] as String?).map(decryptOrMarker))
+            }.map { row in
+                let metadata = (try? JSONDecoder().decode(
+                    VersionCaptureMetadata.self,
+                    from: Data((row["metadata"] as String? ?? "").utf8)
+                ))
+                let kind = metadata?.contentKind ?? .generic
+                let renderedContent = decryptOrMarker(row["content"])
+                let current = structuredOrLegacy(
+                    row["structured_ciphertext"] as String?,
+                    renderedContent: renderedContent,
+                    kind: kind
+                )
+                let previous = (row["previous_structured_ciphertext"] as String?).map {
+                    structuredOrLegacy(
+                        $0,
+                        renderedContent: decryptOrMarker(row["previous_frozen_content"]),
+                        kind: kind
+                    )
+                }
+                let delta = decodeCaptureDelta(row["delta_ciphertext"] as String?) ?? .empty
+                return PendingVersion(
+                    id: row["id"],
+                    threadID: row["thread_id"],
+                    hourBucket: row["hour_bucket"],
+                    content: renderedContent,
+                    contentHash: row["content_hash"],
+                    sourceApp: row["source_app"],
+                    sourceKey: row["source_key"],
+                    sourceTitle: row["source_title"],
+                    url: captureURL(of: current),
+                    contentKind: kind,
+                    capturedAt: row["committed_at"],
+                    renderedDelta: CaptureDeltaRenderer.render(delta, maxChars: .max),
+                    previousCompactContent: previous.map {
+                        ContentRenderer.render($0, style: .compact(maxChars: 2_000))
+                    },
+                    previousFrozenContent: (row["previous_frozen_content"] as String?)
+                        .map(decryptOrMarker)
+                )
             }
+        }
+    }
+
+    private func decodeCaptureDelta(_ ciphertext: String?) -> CaptureDelta? {
+        guard let ciphertext, let plaintext = try? cipher.decrypt(ciphertext) else { return nil }
+        return try? JSONDecoder().decode(CaptureDelta.self, from: Data(plaintext.utf8))
+    }
+
+    private func captureURL(of content: CapturedContent) -> String? {
+        switch content {
+        case .document(let document): return document.url
+        case .generic(let page): return page.url
+        case .conversation, .tasks, .calendar, .terminal: return nil
         }
     }
 

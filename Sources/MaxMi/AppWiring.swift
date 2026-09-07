@@ -101,7 +101,10 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
         try store.pendingWork(nowMs: nowMs, idleThresholdMs: idleThresholdMs).map {
             PipelineVersion(id: $0.id, threadID: $0.threadID, content: $0.content,
                             contentHash: $0.contentHash, sourceApp: $0.sourceApp,
-                            sourceKey: $0.sourceKey, previousFrozenContent: $0.previousFrozenContent)
+                            sourceKey: $0.sourceKey, sourceTitle: $0.sourceTitle, url: $0.url,
+                            contentKind: $0.contentKind, capturedAt: $0.capturedAt,
+                            renderedDelta: $0.renderedDelta,
+                            previousCompactContent: $0.previousCompactContent)
         }
     }
     func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative] {

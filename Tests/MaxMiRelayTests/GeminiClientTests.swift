@@ -32,8 +32,18 @@ final class GeminiClientTests: XCTestCase {
             let resp = #"{"candidates":[{"content":{"parts":[{"text":"[\"Sudhanshu read the MaxMi spec.\"]"}]}}]}"#
             return (200, Data(resp.utf8))
         }
-        let facts = try await makeClient().extract(newContent: "spec text", previousContent: nil,
-                                                   sourceApp: "Web", sourceKey: "https://x.com")
+        let facts = try await makeClient().extract(
+            newContent: "spec text",
+            previousContent: nil,
+            metadata: ExtractMetadata(
+                sourceApp: "Web",
+                sourceKey: "https://x.com",
+                title: "Example",
+                url: "https://x.com",
+                kind: .webpage,
+                capturedAt: 1_800_000_000_000
+            )
+        )
         XCTAssertEqual(facts, ["Sudhanshu read the MaxMi spec."])
     }
     func testEmbedNormalizes() async throws {
