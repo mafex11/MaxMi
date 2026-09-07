@@ -52,6 +52,12 @@ public struct CheckinOpenItemRecord: Sendable, Equatable {
     }
 }
 
+private struct CheckinVersionSource {
+    let threadID: String
+    let sourceApp: String
+    let sourceKey: String
+}
+
 extension Store {
     public func checkin(dayBucket: Int64) throws -> StoredCheckin? {
         try db.dbQueue.read { d in
@@ -138,6 +144,7 @@ extension Store {
     public func openCheckinItems(limit: Int) throws -> [CheckinOpenItemRecord] {
         let boundedLimit = max(limit, 0)
         guard boundedLimit > 0 else { return [] }
+        let privacy = try sourceCloudEligibility()
 
         return try db.dbQueue.read { d in
             let rows = try Row.fetchAll(d, sql: """
@@ -145,52 +152,33 @@ extension Store {
                 FROM agent_action_items
                 WHERE status='open'
                 ORDER BY detected_at DESC, id ASC
-                LIMIT ?
-                """, arguments: [boundedLimit])
+                """)
 
-            let sourceIDs = Set(rows.flatMap { row -> [String] in
-                guard let json: String = row["source_refs"],
-                      let ids = try? JSONDecoder().decode([String].self, from: Data(json.utf8))
-                else {
-                    return []
-                }
-                return ids
+            let refsByItemID = Dictionary(uniqueKeysWithValues: rows.map {
+                ($0["id"] as String, sourceReferences(from: $0))
             })
-            let sourceApps: [String: String]
-            if sourceIDs.isEmpty {
-                sourceApps = [:]
-            } else {
-                let sourceRows = try Row.fetchAll(d, sql: """
-                    SELECT id, app_label
-                    FROM activity_sessions
-                    WHERE id IN (\(Self.placeholders(sourceIDs.count)))
-                    """, arguments: StatementArguments(sourceIDs.sorted()))
-                sourceApps = Dictionary(uniqueKeysWithValues: sourceRows.map {
-                    ($0["id"] as String, $0["app_label"] as String)
-                })
-            }
+            let sourceIDs = Set(refsByItemID.values.flatMap { $0 })
+            let sources = try checkinVersionSources(d, versionIDs: sourceIDs)
 
-            return rows.compactMap { row in
+            return rows.compactMap { row -> CheckinOpenItemRecord? in
+                let itemID: String = row["id"]
+                let refs = refsByItemID[itemID] ?? []
+                guard allowsCheckinActionItem(refs, sources: sources, privacy: privacy) else {
+                    return nil
+                }
                 let titleCiphertext: String = row["title_ciphertext"]
                 guard let title = try? cipher.decrypt(titleCiphertext) else { return nil }
                 let details = (row["details_ciphertext"] as String?).flatMap {
                     try? cipher.decrypt($0)
                 }
-                let refs: [String]
-                if let json: String = row["source_refs"],
-                   let decoded = try? JSONDecoder().decode([String].self, from: Data(json.utf8)) {
-                    refs = decoded
-                } else {
-                    refs = []
-                }
                 return CheckinOpenItemRecord(
-                    id: row["id"],
+                    id: itemID,
                     title: title,
                     details: details,
                     detectedAtMs: row["detected_at"],
-                    sourceApp: refs.compactMap { sourceApps[$0] }.first
+                    sourceApp: refs.compactMap { sources[$0]?.sourceApp }.first
                 )
-            }
+            }.prefix(boundedLimit).map { $0 }
         }
     }
 
@@ -200,23 +188,34 @@ extension Store {
         limit: Int
     ) throws -> (count: Int, titles: [String]) {
         let boundedLimit = max(limit, 0)
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
-            let count = try Int.fetchOne(d, sql: """
-                SELECT count(*)
-                FROM agent_action_items
-                WHERE status='resolved' AND resolved_at >= ? AND resolved_at <= ?
-                """, arguments: [fromMs, toMs]) ?? 0
-            guard boundedLimit > 0 else { return (count, []) }
-
-            let titles = try String.fetchAll(d, sql: """
-                SELECT title_ciphertext
+            let rows = try Row.fetchAll(d, sql: """
+                SELECT id, title_ciphertext, source_refs
                 FROM agent_action_items
                 WHERE status='resolved' AND resolved_at >= ? AND resolved_at <= ?
                 ORDER BY resolved_at DESC, id ASC
-                LIMIT ?
-                """, arguments: [fromMs, toMs, boundedLimit])
-                .compactMap { try? cipher.decrypt($0) }
-            return (count, titles)
+                """, arguments: [fromMs, toMs])
+            let refsByItemID = Dictionary(uniqueKeysWithValues: rows.map {
+                ($0["id"] as String, sourceReferences(from: $0))
+            })
+            let sourceIDs = Set(refsByItemID.values.flatMap { $0 })
+            let sources = try checkinVersionSources(d, versionIDs: sourceIDs)
+            let allowed = rows.filter { row in
+                let itemID: String = row["id"]
+                return allowsCheckinActionItem(
+                    refsByItemID[itemID] ?? [],
+                    sources: sources,
+                    privacy: privacy
+                )
+            }
+            guard boundedLimit > 0 else { return (allowed.count, []) }
+            return (
+                allowed.count,
+                allowed.prefix(boundedLimit).compactMap {
+                    try? cipher.decrypt($0["title_ciphertext"] as String)
+                }
+            )
         }
     }
 
@@ -227,15 +226,29 @@ extension Store {
     ) throws -> [CalendarEvent] {
         let boundedLimit = max(limit, 0)
         guard boundedLimit > 0 else { return [] }
+        let privacy = try sourceCloudEligibility()
 
         return try db.dbQueue.read { d in
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
             let rows = try Row.fetchAll(d, sql: """
-                SELECT content_ciphertext, structured_ciphertext
-                FROM latest_contexts
-                WHERE content_kind='calendar' AND captured_at >= ? AND captured_at <= ?
-                ORDER BY captured_at DESC, thread_id ASC
-                """, arguments: [fromMs, toMs])
+                SELECT c.thread_id, c.content_ciphertext, c.structured_ciphertext,
+                       t.source_app, t.source_key
+                FROM latest_contexts c JOIN threads t ON t.id=c.thread_id
+                WHERE (\(privacySQL.condition))
+                  AND c.content_kind='calendar' AND c.captured_at >= ? AND c.captured_at <= ?
+                ORDER BY c.captured_at DESC, c.thread_id ASC
+                """, arguments: StatementArguments(privacySQL.arguments + [fromMs, toMs]))
             let events = rows.flatMap { row -> [CalendarEvent] in
+                let sourceApp: String = row["source_app"]
+                let threadID: String = row["thread_id"]
+                let sourceKey: String = row["source_key"]
+                guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                    return []
+                }
                 let ciphertext: String = row["content_ciphertext"]
                 let rendered = (try? cipher.decrypt(ciphertext)) ?? ""
                 let content = structuredOrLegacy(
@@ -257,9 +270,10 @@ extension Store {
     ) throws -> [(appLabel: String, sourceTitle: String?)] {
         let boundedLimit = max(limit, 0)
         guard boundedLimit > 0 else { return [] }
+        let privacy = try sourceCloudEligibility()
 
         return try db.dbQueue.read { d in
-            try Row.fetchAll(d, sql: """
+            let rows = try Row.fetchAll(d, sql: """
                 WITH overlapping_visits AS (
                   SELECT
                     app_bundle,
@@ -280,6 +294,30 @@ extension Store {
                 SELECT
                   a.app_label,
                   (
+                    SELECT t.id
+                    FROM latest_contexts c
+                    JOIN threads t ON t.id=c.thread_id
+                    WHERE t.source_app=a.app_label
+                    ORDER BY c.captured_at DESC, c.thread_id ASC
+                    LIMIT 1
+                  ) AS thread_id,
+                  (
+                    SELECT t.source_app
+                    FROM latest_contexts c
+                    JOIN threads t ON t.id=c.thread_id
+                    WHERE t.source_app=a.app_label
+                    ORDER BY c.captured_at DESC, c.thread_id ASC
+                    LIMIT 1
+                  ) AS source_app,
+                  (
+                    SELECT t.source_key
+                    FROM latest_contexts c
+                    JOIN threads t ON t.id=c.thread_id
+                    WHERE t.source_app=a.app_label
+                    ORDER BY c.captured_at DESC, c.thread_id ASC
+                    LIMIT 1
+                  ) AS source_key,
+                  (
                     SELECT t.source_title
                     FROM latest_contexts c
                     JOIN threads t ON t.id=c.thread_id
@@ -289,9 +327,64 @@ extension Store {
                   ) AS source_title
                 FROM app_totals a
                 ORDER BY overlap_duration DESC, a.app_label ASC, a.app_bundle ASC
-                LIMIT ?
-                """, arguments: [fromMs, toMs, toMs, toMs, toMs, fromMs, boundedLimit])
-                .map { (appLabel: $0["app_label"], sourceTitle: $0["source_title"]) }
+                """, arguments: [fromMs, toMs, toMs, toMs, toMs, fromMs])
+            return rows.compactMap { row -> (appLabel: String, sourceTitle: String?)? in
+                let threadID: String? = row["thread_id"]
+                if let threadID {
+                    let sourceApp: String = row["source_app"]
+                    let sourceKey: String = row["source_key"]
+                    guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                        return nil
+                    }
+                }
+                return (appLabel: row["app_label"], sourceTitle: row["source_title"])
+            }.prefix(boundedLimit).map { $0 }
+        }
+    }
+
+    private func sourceReferences(from row: Row) -> [String] {
+        guard let json: String = row["source_refs"],
+              let ids = try? JSONDecoder().decode([String].self, from: Data(json.utf8))
+        else {
+            return []
+        }
+        return ids
+    }
+
+    private func checkinVersionSources(
+        _ database: Database,
+        versionIDs: Set<String>
+    ) throws -> [String: CheckinVersionSource] {
+        guard !versionIDs.isEmpty else { return [:] }
+        let rows = try Row.fetchAll(database, sql: """
+            SELECT v.id AS version_id, t.id AS thread_id, t.source_app, t.source_key
+            FROM versions v JOIN threads t ON t.id=v.thread_id
+            WHERE v.id IN (\(Self.placeholders(versionIDs.count)))
+            """, arguments: StatementArguments(versionIDs.sorted()))
+        return Dictionary(uniqueKeysWithValues: rows.map {
+            (
+                $0["version_id"] as String,
+                CheckinVersionSource(
+                    threadID: $0["thread_id"],
+                    sourceApp: $0["source_app"],
+                    sourceKey: $0["source_key"]
+                )
+            )
+        })
+    }
+
+    private func allowsCheckinActionItem(
+        _ refs: [String],
+        sources: [String: CheckinVersionSource],
+        privacy: SourceCloudEligibility
+    ) -> Bool {
+        refs.allSatisfy { versionID in
+            guard let source = sources[versionID] else { return false }
+            return privacy.allows(
+                sourceApp: source.sourceApp,
+                threadID: source.threadID,
+                url: source.sourceKey
+            )
         }
     }
 

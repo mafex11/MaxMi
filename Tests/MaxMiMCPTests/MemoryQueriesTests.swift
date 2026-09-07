@@ -349,6 +349,54 @@ final class MemoryQueriesTests: XCTestCase {
         XCTAssertFalse(result.text.contains("Web raw filter context."))
     }
 
+    func testMCPReadersExcludeLocalOnlyPausedAndBlockedSourcesAcrossFactsThreadsAndContexts() async throws {
+        try seed(
+            [("Ordinary MCP fact.", 14)],
+            url: "https://ordinary-mcp.example",
+            title: "Ordinary MCP",
+            sourceApp: "Web"
+        )
+        try seed(
+            [("Local MCP fact.", 14)],
+            url: "local:mcp",
+            title: "Local MCP",
+            sourceApp: "Local"
+        )
+        try seed(
+            [("Paused MCP fact.", 14)],
+            url: "https://paused-mcp.example",
+            title: "Paused MCP",
+            sourceApp: "Web",
+            at: t0 + 1
+        )
+        try seed(
+            [("Blocked MCP fact.", 14)],
+            url: "https://blocked-mcp.example",
+            title: "Blocked MCP",
+            sourceApp: "Web",
+            at: t0 + 2
+        )
+        try store.setCloudProcessing("Local", allowed: false, nowMs: t0 + 3)
+        try store.setThreadPaused("https://paused-mcp.example", paused: true, nowMs: t0 + 3)
+        _ = try store.setDomain("blocked-mcp.example", blocked: true, nowMs: t0 + 3)
+
+        let queries = queries(MockRelay(.success(unit(14))))
+        let search = await queries.searchMemory(query: "privacy", limit: 10)
+        let threads = queries.listActiveThreads(limit: 10)
+        let contexts = queries.getLatestContext(source: nil, limit: 10)
+
+        for result in [search, threads, contexts] {
+            XCTAssertTrue(result.text.contains("Ordinary MCP"))
+            XCTAssertFalse(result.text.contains("Local MCP"))
+            XCTAssertFalse(result.text.contains("Paused MCP"))
+            XCTAssertFalse(result.text.contains("Blocked MCP"))
+        }
+        XCTAssertTrue(search.text.contains("Ordinary MCP fact."))
+        XCTAssertFalse(search.text.contains("Local MCP fact."))
+        XCTAssertFalse(search.text.contains("Paused MCP fact."))
+        XCTAssertFalse(search.text.contains("Blocked MCP fact."))
+    }
+
     private func seedVersionOnlyContext(
         _ content: String,
         sourceApp: String = "Web",

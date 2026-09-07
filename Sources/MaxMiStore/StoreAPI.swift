@@ -253,9 +253,14 @@ extension Store {
     public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
         // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
         // can serve as baseline; its unextracted facts are suppressed from the newer diff).
-        let cloudEligibility = try sourceCloudEligibility()
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
             let currentBucket = HourBucket.bucket(forMs: nowMs)
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
             let rows = try Row.fetchAll(d, sql: """
                 SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
                        v.structured_ciphertext, v.metadata, v.committed_at,
@@ -270,17 +275,22 @@ extension Store {
                          WHERE e.kind = 'content_delta' AND e.version_id = v.id
                          ORDER BY e.at_ms DESC, e.id DESC LIMIT 1) AS delta_ciphertext
                 FROM versions v JOIN threads t ON t.id = v.thread_id
-                WHERE v.extract_status = 'pending'
+                WHERE (\(privacySQL.condition))
+                  AND v.extract_status = 'pending'
                   AND (v.is_frozen = 1 OR v.hour_bucket < ? OR v.committed_at <= ?)
                   AND NOT EXISTS (
                     SELECT 1 FROM retry_queue r
                     WHERE r.kind = 'extract' AND r.version_id = v.id AND r.next_attempt_at > ?
-                  )
+                )
                 ORDER BY v.committed_at
-                """, arguments: [currentBucket, nowMs - idleThresholdMs, nowMs])
+                """, arguments: StatementArguments(
+                    privacySQL.arguments + [currentBucket, nowMs - idleThresholdMs, nowMs]
+                ))
             return rows.filter { row in
                 let sourceApp: String = row["source_app"]
-                return cloudEligibility.allowsCloudProcessing(for: sourceApp)
+                let threadID: String = row["thread_id"]
+                let sourceKey: String = row["source_key"]
+                return privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey)
             }.map { row in
                 let metadata = (try? JSONDecoder().decode(
                     VersionCaptureMetadata.self,
@@ -341,7 +351,7 @@ extension Store {
     }
 
     public func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PendingVersion] {
-        let cloudEligibility = try sourceCloudEligibility()
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
             guard let markerText = try String.fetchOne(
                 d,
@@ -354,7 +364,7 @@ extension Store {
                 d,
                 committedSinceMs: marker,
                 nowMs: nowMs,
-                cloudEligibility: cloudEligibility
+                privacy: privacy
             )
         }
     }
@@ -372,14 +382,20 @@ extension Store {
         _ d: Database,
         committedSinceMs: EpochMs,
         nowMs: EpochMs,
-        cloudEligibility: SourceCloudEligibility
+        privacy: SourceCloudEligibility
     ) throws -> [PendingVersion] {
+        let privacySQL = privacy.sqlFilter(
+            sourceAppColumn: "t.source_app",
+            threadIDColumn: "t.id",
+            urlColumn: "t.source_key"
+        )
         let rows = try Row.fetchAll(d, sql: """
             SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
                    v.structured_ciphertext, v.metadata, v.committed_at,
                    t.source_app, t.source_key, t.source_title
             FROM versions v JOIN threads t ON t.id = v.thread_id
-            WHERE v.committed_at >= ?
+            WHERE (\(privacySQL.condition))
+              AND v.committed_at >= ?
               AND NOT EXISTS (
                 SELECT 1 FROM context_embeddings c WHERE c.version_id = v.id
               )
@@ -388,12 +404,14 @@ extension Store {
                 WHERE r.kind = 'embed_version'
                   AND r.version_id = v.id
                   AND r.next_attempt_at > ?
-              )
+            )
             ORDER BY v.committed_at
-            """, arguments: [committedSinceMs, nowMs])
+            """, arguments: StatementArguments(privacySQL.arguments + [committedSinceMs, nowMs]))
         return rows.filter { row in
             let sourceApp: String = row["source_app"]
-            return cloudEligibility.allowsCloudProcessing(for: sourceApp)
+            let threadID: String = row["thread_id"]
+            let sourceKey: String = row["source_key"]
+            return privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey)
         }.map { row in
             let metadata = (try? JSONDecoder().decode(
                 VersionCaptureMetadata.self,

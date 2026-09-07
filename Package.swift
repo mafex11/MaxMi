@@ -43,7 +43,7 @@ let package = Package(
             linkerSettings: [.linkedFramework("Security")]
         ),
         .target(name: "MaxMiStore", dependencies: [
-            "MaxMiCore", "MaxMiActivity", "CSQLiteVec",
+            "MaxMiCore", "MaxMiActivity", "MaxMiCapture", "CSQLiteVec",
             .product(name: "GRDB", package: "GRDB.swift"),
         ]),
         .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),

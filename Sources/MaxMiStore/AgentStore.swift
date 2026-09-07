@@ -77,7 +77,8 @@ private enum AgentReviewPromptVersion {
 
 extension Store {
     public func claimNextAgentRun(maxVersions: Int, leaseMs: EpochMs, nowMs: EpochMs) throws -> AgentPage? {
-        try db.dbQueue.write { d in
+        let privacy = try sourceCloudEligibility()
+        return try db.dbQueue.write { d in
             try d.execute(sql: """
                 UPDATE agent_runs SET status='failed'
                 WHERE status='running' AND lease_expires_at < ?
@@ -101,7 +102,8 @@ extension Store {
                 d,
                 cursorAt: curAt,
                 cursorID: curID,
-                maxVersions: maxVersions
+                maxVersions: maxVersions,
+                privacy: privacy
             )
             guard let first = versions.first, let last = versions.last else { return nil }
 
@@ -145,7 +147,8 @@ extension Store {
     }
 
     public func completeAgentRun(runID: String, ops: [AgentOp], nowMs: EpochMs) throws -> AgentRunResult {
-        try db.dbQueue.write { d in
+        let privacy = try sourceCloudEligibility()
+        return try db.dbQueue.write { d in
             guard let runRow = try Row.fetchOne(d, sql: """
                 SELECT status, input_from, input_to, input_to_at, input_to_session_id
                 FROM agent_runs
@@ -178,7 +181,8 @@ extension Store {
                 fromMs: firstAt,
                 toMs: inputTo,
                 throughAt: lastAt,
-                throughID: lastID
+                throughID: lastID,
+                privacy: privacy
             )
             let pageSourceSet = Set(page.map(\.versionID))
             var newCount = 0
@@ -320,8 +324,14 @@ extension Store {
         _ database: Database,
         cursorAt: EpochMs,
         cursorID: String,
-        maxVersions: Int
+        maxVersions: Int,
+        privacy: SourceCloudEligibility
     ) throws -> [ReviewVersion] {
+        let privacySQL = privacy.sqlFilter(
+            sourceAppColumn: "t.source_app",
+            threadIDColumn: "t.id",
+            urlColumn: "t.source_key"
+        )
         let rows = try Row.fetchAll(database, sql: """
             SELECT v.id AS version_id, v.thread_id, v.content, v.word_count, v.committed_at, v.metadata,
                    v.structured_ciphertext, t.source_app, t.source_title, t.source_key,
@@ -331,12 +341,24 @@ extension Store {
                     ORDER BY e.at_ms DESC, e.id DESC LIMIT 1) AS delta_ciphertext
             FROM versions v
             JOIN threads t ON t.id = v.thread_id
-            WHERE v.committed_at > ?
+            WHERE (\(privacySQL.condition))
+              AND (v.committed_at > ?
                OR (v.committed_at = ? AND v.id > ?)
+              )
             ORDER BY v.committed_at ASC, v.id ASC
             LIMIT ?
-            """, arguments: [cursorAt, cursorAt, cursorID, maxVersions])
-        return rows.map(agentReviewVersion)
+            """, arguments: StatementArguments(
+                privacySQL.arguments + [cursorAt, cursorAt, cursorID, maxVersions]
+            ))
+        return rows.compactMap { row in
+            let sourceApp: String = row["source_app"]
+            let threadID: String = row["thread_id"]
+            let sourceKey: String = row["source_key"]
+            guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                return nil
+            }
+            return agentReviewVersion(row)
+        }
     }
 
     private func agentReviewVersions(
@@ -346,8 +368,14 @@ extension Store {
         fromMs: EpochMs,
         toMs: EpochMs,
         throughAt: EpochMs,
-        throughID: String
+        throughID: String,
+        privacy: SourceCloudEligibility
     ) throws -> [ReviewVersion] {
+        let privacySQL = privacy.sqlFilter(
+            sourceAppColumn: "t.source_app",
+            threadIDColumn: "t.id",
+            urlColumn: "t.source_key"
+        )
         let rows = try Row.fetchAll(database, sql: """
             SELECT v.id AS version_id, v.thread_id, v.content, v.word_count, v.committed_at, v.metadata,
                    v.structured_ciphertext, t.source_app, t.source_title, t.source_key,
@@ -357,15 +385,26 @@ extension Store {
                     ORDER BY e.at_ms DESC, e.id DESC LIMIT 1) AS delta_ciphertext
             FROM versions v
             JOIN threads t ON t.id = v.thread_id
-            WHERE v.committed_at >= ?
+            WHERE (\(privacySQL.condition))
+              AND v.committed_at >= ?
               AND v.committed_at <= ?
               AND (v.committed_at > ? OR (v.committed_at = ? AND v.id > ?))
               AND (v.committed_at < ? OR (v.committed_at = ? AND v.id <= ?))
             ORDER BY v.committed_at ASC, v.id ASC
-            """, arguments: [
-                fromMs, toMs, cursorAt, cursorAt, cursorID, throughAt, throughAt, throughID,
-            ])
-        return rows.map(agentReviewVersion)
+            """, arguments: StatementArguments(
+                privacySQL.arguments + [
+                    fromMs, toMs, cursorAt, cursorAt, cursorID, throughAt, throughAt, throughID,
+                ]
+            ))
+        return rows.compactMap { row in
+            let sourceApp: String = row["source_app"]
+            let threadID: String = row["thread_id"]
+            let sourceKey: String = row["source_key"]
+            guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                return nil
+            }
+            return agentReviewVersion(row)
+        }
     }
 
     private func agentReviewVersion(_ row: Row) -> ReviewVersion {

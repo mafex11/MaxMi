@@ -285,7 +285,51 @@ final class QueryAPITests: XCTestCase {
             localOnlySourceApps: [],
             reviewGateEnabled: true
         )
-        XCTAssertFalse(gatedEligibility.allowsCloudProcessing(for: "Slack"))
+        XCTAssertFalse(gatedEligibility.allows(
+            sourceApp: "Slack",
+            threadID: "thread-slack",
+            url: "slack:fixture"
+        ))
+    }
+
+    func testExtractionAndContextEmbeddingExcludeLocalOnlyPausedAndBlockedSources() throws {
+        let ordinary = try seedContextVersion(
+            sourceApp: "Web",
+            sourceKey: "https://ordinary-pipeline.example",
+            content: "ordinary pipeline content",
+            committedAt: t0
+        )
+        _ = try seedContextVersion(
+            sourceApp: "Local",
+            sourceKey: "local:pipeline",
+            content: "local-only pipeline content",
+            committedAt: t0 + 1
+        )
+        _ = try seedContextVersion(
+            sourceApp: "Web",
+            sourceKey: "https://paused-pipeline.example",
+            content: "paused pipeline content",
+            committedAt: t0 + 2
+        )
+        _ = try seedContextVersion(
+            sourceApp: "Web",
+            sourceKey: "https://blocked-pipeline.example",
+            content: "blocked pipeline content",
+            committedAt: t0 + 3
+        )
+        try store.setCloudProcessing("Local", allowed: false, nowMs: t0 + 4)
+        try store.setThreadPaused("https://paused-pipeline.example", paused: true, nowMs: t0 + 4)
+        _ = try store.setDomain("blocked-pipeline.example", blocked: true, nowMs: t0 + 4)
+        try store.setContextEmbeddingSinceMs(t0 - 1)
+
+        let extraction = try store.pendingWork(
+            nowMs: t0 + 400_000,
+            idleThresholdMs: 300_000
+        )
+        let embeddings = try store.pendingContextEmbeddingWork(nowMs: t0 + 400_000)
+
+        XCTAssertEqual(extraction.map(\.id), [ordinary])
+        XCTAssertEqual(embeddings.map(\.id), [ordinary])
     }
 
     private func seedContextVersion(

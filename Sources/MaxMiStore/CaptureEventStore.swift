@@ -145,14 +145,41 @@ extension Store {
 
     /// Chronological, both bounds inclusive. This is the timeline's window read.
     public func captureEvents(fromMs: EpochMs, toMs: EpochMs) throws -> [CaptureEventRecord] {
-        try db.dbQueue.read { d in
-            try Row.fetchAll(d, sql: """
-                SELECT id, app_bundle, thread_id, version_id, at_ms, kind, trigger,
-                       payload_ciphertext
-                FROM capture_events
-                WHERE at_ms >= ? AND at_ms <= ?
-                ORDER BY at_ms ASC, id ASC
-                """, arguments: [fromMs, toMs]).compactMap { self.eventRecord(from: $0) }
+        let privacy = try sourceCloudEligibility()
+        return try db.dbQueue.read { d in
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
+            return try Row.fetchAll(d, sql: """
+                SELECT e.id, e.app_bundle, e.thread_id, e.version_id, e.at_ms, e.kind, e.trigger,
+                       e.payload_ciphertext, t.id AS policy_thread_id, t.source_app,
+                       t.source_key
+                FROM capture_events e
+                LEFT JOIN versions v ON v.id=e.version_id
+                LEFT JOIN threads t ON t.id=coalesce(e.thread_id, v.thread_id)
+                WHERE e.at_ms >= ? AND e.at_ms <= ?
+                  AND (
+                    (e.thread_id IS NULL AND e.version_id IS NULL)
+                    OR (t.id IS NOT NULL AND (\(privacySQL.condition)))
+                  )
+                ORDER BY e.at_ms ASC, e.id ASC
+                """, arguments: StatementArguments([fromMs, toMs] + privacySQL.arguments))
+                .compactMap { row -> CaptureEventRecord? in
+                    if let threadID: String = row["policy_thread_id"] {
+                        let sourceApp: String = row["source_app"]
+                        let sourceKey: String = row["source_key"]
+                        guard privacy.allows(
+                            sourceApp: sourceApp,
+                            threadID: threadID,
+                            url: sourceKey
+                        ) else {
+                            return nil
+                        }
+                    }
+                    return self.eventRecord(from: row)
+                }
         }
     }
 

@@ -174,6 +174,55 @@ final class CaptureSummaryStoreTests: XCTestCase {
         XCTAssertEqual(candidate.trigger, .periodic)
     }
 
+    func testSummaryInputExcludesLocalOnlyPausedAndBlockedSourcesEvenWithReviewGateDisabled() throws {
+        _ = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://ordinary-summary.example",
+                sourceTitle: "Ordinary",
+                content: "ordinary summary input"
+            ),
+            nowMs: t0
+        )
+        _ = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Local",
+                sourceKey: "local:summary",
+                sourceTitle: "Local",
+                content: "local-only summary input"
+            ),
+            nowMs: t0 + 1
+        )
+        _ = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://paused-summary.example",
+                sourceTitle: "Paused",
+                content: "paused summary input"
+            ),
+            nowMs: t0 + 2
+        )
+        _ = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://blocked-summary.example",
+                sourceTitle: "Blocked",
+                content: "blocked summary input"
+            ),
+            nowMs: t0 + 3
+        )
+        try store.setCloudProcessing("Local", allowed: false, nowMs: t0 + 4)
+        try store.setThreadPaused("https://paused-summary.example", paused: true, nowMs: t0 + 4)
+        _ = try store.setDomain("blocked-summary.example", blocked: true, nowMs: t0 + 4)
+
+        let pending = try store.captureContextsNeedingSummary(
+            nowMs: t0 + 20_000,
+            limit: 10
+        )
+
+        XCTAssertEqual(pending.map(\.sourceTitle), ["Ordinary"])
+    }
+
     private func seedLatestContext(
         sourceApp: String,
         contentKind: CaptureContentKind,

@@ -78,9 +78,15 @@ extension Store {
         let boundedOffset = max(offset, 0)
         let boundedLimit = min(max(limit, 1), 100)
         let fuzzySource = source?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
-            var conditions = ["c.captured_at <= ?"]
-            var arguments: [DatabaseValueConvertible?] = [filter.endAtMs]
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
+            var conditions = [privacySQL.condition, "c.captured_at <= ?"]
+            var arguments: [DatabaseValueConvertible?] = privacySQL.arguments + [filter.endAtMs]
             if let start = filter.startAtMs {
                 conditions.append("c.captured_at >= ?")
                 arguments.append(start)
@@ -117,7 +123,15 @@ extension Store {
                 ORDER BY c.captured_at DESC, c.thread_id ASC
                 LIMIT ? OFFSET ?
                 """, arguments: StatementArguments(arguments))
-            let mapped = rows.compactMap(record(from:))
+            let mapped = rows.compactMap { row -> LatestContextRecord? in
+                let sourceApp: String = row["source_app"]
+                let threadID: String = row["thread_id"]
+                let sourceKey: String = row["source_key"]
+                guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                    return nil
+                }
+                return record(from: row)
+            }
             return RetrievalPage(records: Array(mapped.prefix(boundedLimit)), hasMore: mapped.count > boundedLimit)
         }
     }
@@ -127,7 +141,13 @@ extension Store {
     public func latestContextRecords(threadIDs: [String]) throws -> [String: LatestContextRecord] {
         let ids = Array(Set(threadIDs)).sorted()
         guard !ids.isEmpty else { return [:] }
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
             let rows = try Row.fetchAll(d, sql: """
                 SELECT c.thread_id, t.source_app, t.source_key, t.source_title,
                        c.content_ciphertext, c.structured_ciphertext, c.content_kind,
@@ -138,8 +158,18 @@ extension Store {
                        c.summary_status
                 FROM latest_contexts c JOIN threads t ON t.id = c.thread_id
                 WHERE c.thread_id IN (\(Store.placeholders(ids.count)))
-                """, arguments: StatementArguments(ids))
-            return Dictionary(uniqueKeysWithValues: rows.compactMap(record(from:)).map { ($0.id, $0) })
+                  AND (\(privacySQL.condition))
+                """, arguments: StatementArguments(ids + privacySQL.arguments))
+            let records = rows.compactMap { row -> LatestContextRecord? in
+                let sourceApp: String = row["source_app"]
+                let threadID: String = row["thread_id"]
+                let sourceKey: String = row["source_key"]
+                guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                    return nil
+                }
+                return record(from: row)
+            }
+            return Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         }
     }
 

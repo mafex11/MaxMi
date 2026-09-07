@@ -204,6 +204,39 @@ final class AgentStoreTests: XCTestCase {
         ))
     }
 
+    func testClaimExcludesLocalOnlyPausedAndBlockedVersionsBeforePromptPageBuild() throws {
+        let ordinary = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://ordinary-agent.example",
+            content: "Ordinary agent content"
+        )
+        _ = try seedVersion(
+            sourceApp: "Local",
+            sourceKey: "local:agent",
+            content: "Keep local agent content"
+        )
+        _ = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://paused-agent.example",
+            content: "Paused agent content"
+        )
+        _ = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://blocked-agent.example",
+            content: "Blocked agent content"
+        )
+        try store.setCloudProcessing("Local", allowed: false, nowMs: t0 + 100)
+        try store.setThreadPaused("https://paused-agent.example", paused: true, nowMs: t0 + 100)
+        _ = try store.setDomain("blocked-agent.example", blocked: true, nowMs: t0 + 100)
+
+        let page = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50, leaseMs: 60_000, nowMs: t0 + 200
+        ))
+
+        XCTAssertEqual(page.versions.map(\.versionID), [ordinary])
+        XCTAssertEqual(page.versions.map(\.compactContent), ["Ordinary agent content"])
+    }
+
     private func seedVersions(_ count: Int) throws {
         for index in 0..<count {
             _ = try seedVersion(
@@ -213,12 +246,16 @@ final class AgentStoreTests: XCTestCase {
         }
     }
 
-    private func seedVersion(sourceKey: String, content: String) throws -> String {
+    private func seedVersion(
+        sourceApp: String = "Web",
+        sourceKey: String,
+        content: String
+    ) throws -> String {
         let nowMs = t0 + EpochMs(versionCounter * 10)
         versionCounter += 1
         guard case .committed(let versionID, _, _) = try store.commitCapture(
             CaptureInput(
-                sourceApp: "Web",
+                sourceApp: sourceApp,
                 sourceKey: sourceKey,
                 sourceTitle: "Plan",
                 content: content

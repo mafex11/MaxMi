@@ -35,32 +35,18 @@ public struct ThreadSummary: Sendable, Equatable {
     public let recentFacts: [String]
 }
 
-private struct ContextSearchPrivacy {
-    let blockedDomains: Set<String>
-    let pausedSourceKeys: Set<String>
-    let cloudEligibility: SourceCloudEligibility
-
-    func allows(sourceApp: String, sourceKey: String) -> Bool {
-        guard !pausedSourceKeys.contains(sourceKey),
-              cloudEligibility.allowsCloudProcessing(for: sourceApp) else {
-            return false
-        }
-        guard let host = URL(string: sourceKey)?.host?.lowercased(), !host.isEmpty else {
-            return true
-        }
-        return !blockedDomains.contains { domain in
-            let normalized = domain.lowercased()
-            return host == normalized || host.hasSuffix("." + normalized)
-        }
-    }
-}
-
 extension Store {
     /// KNN over derivative embeddings joined back to fact + thread. Distance ascending.
     public func factHits(near vector: [Float], limit: Int) throws -> [FactHit] {
         let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
-            try Row.fetchAll(d, sql: """
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
+            return try Row.fetchAll(d, sql: """
                 SELECT dv.id AS derivative_id, dv.version_id, dv.content, e.distance,
                        t.id AS thread_id, t.source_app, t.source_title, t.source_key,
                        dv.committed_at
@@ -68,9 +54,16 @@ extension Store {
                       WHERE embedding MATCH ? AND k = ?) e
                 JOIN derivatives dv ON dv.id = e.derivative_id
                 JOIN threads t ON t.id = dv.thread_id
+                WHERE \(privacySQL.condition)
                 ORDER BY e.distance
-                """, arguments: [blob, limit])
-                .map { row in
+                """, arguments: StatementArguments([blob, limit] + privacySQL.arguments))
+                .compactMap { row -> FactHit? in
+                    let sourceApp: String = row["source_app"]
+                    let threadID: String = row["thread_id"]
+                    let sourceKey: String = row["source_key"]
+                    guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                        return nil
+                    }
                     // vec0 table uses L2 distance (default when no distance_metric specified).
                     // All vectors are unit-normalized, so L2 = sqrt(2 − 2·cos_sim).
                     // Convert to cosine distance via: cosine_distance = L2² / 2
@@ -87,12 +80,26 @@ extension Store {
 
     /// Threads by recency; each carries its OWN 3 latest facts (per-thread, not global).
     public func recentThreads(limit: Int) throws -> [ThreadSummary] {
-        try db.dbQueue.read { d in
+        let privacy = try sourceCloudEligibility()
+        return try db.dbQueue.read { d in
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "source_app",
+                threadIDColumn: "id",
+                urlColumn: "source_key"
+            )
             let threads = try Row.fetchAll(d, sql: """
                 SELECT id, source_app, source_title, source_key, updated_at
-                FROM threads ORDER BY updated_at DESC LIMIT ?
-                """, arguments: [limit])
-            return try threads.map { t in
+                FROM threads
+                WHERE \(privacySQL.condition)
+                ORDER BY updated_at DESC LIMIT ?
+                """, arguments: StatementArguments(privacySQL.arguments + [limit]))
+            return try threads.compactMap { t -> ThreadSummary? in
+                let sourceApp: String = t["source_app"]
+                let threadID: String = t["id"]
+                let sourceKey: String = t["source_key"]
+                guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                    return nil
+                }
                 let facts = try String.fetchAll(d, sql: """
                     SELECT content FROM derivatives WHERE thread_id = ?
                     ORDER BY committed_at DESC LIMIT 3
@@ -119,12 +126,18 @@ extension Store {
         let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
         let boundedOffset = max(offset, 0)
         let boundedLimit = min(max(limit, 1), 100)
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
             let embeddingCount = try Int.fetchOne(d, sql: "SELECT count(*) FROM derivative_embeddings") ?? 0
             guard embeddingCount > 0 else { return RetrievalPage(records: [], hasMore: false) }
 
-            var conditions = ["dv.committed_at <= ?"]
-            var arguments: [DatabaseValueConvertible?] = [blob, embeddingCount, filter.endAtMs]
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
+            var conditions = [privacySQL.condition, "dv.committed_at <= ?"]
+            var arguments: [DatabaseValueConvertible?] = [blob, embeddingCount] + privacySQL.arguments + [filter.endAtMs]
             if let start = filter.startAtMs {
                 conditions.append("dv.committed_at >= ?")
                 arguments.append(start)
@@ -151,7 +164,13 @@ extension Store {
                 ORDER BY matches.distance ASC, dv.committed_at DESC, dv.id ASC
                 LIMIT ? OFFSET ?
                 """, arguments: StatementArguments(arguments))
-            let mapped = rows.map { row -> FactHit in
+            let mapped = rows.compactMap { row -> FactHit? in
+                let sourceApp: String = row["source_app"]
+                let threadID: String = row["thread_id"]
+                let sourceKey: String = row["source_key"]
+                guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                    return nil
+                }
                 let l2: Double = row["distance"]
                 return FactHit(
                     id: row["derivative_id"],
@@ -176,17 +195,18 @@ extension Store {
     ) throws -> [ContextHit] {
         let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
         let boundedLimit = min(max(limit, 1), 5)
-        let privacy = try ContextSearchPrivacy(
-            blockedDomains: blockedDomains(),
-            pausedSourceKeys: pausedThreads(),
-            cloudEligibility: sourceCloudEligibility()
-        )
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
             let embeddingCount = try Int.fetchOne(d, sql: "SELECT count(*) FROM context_embeddings") ?? 0
             guard embeddingCount > 0 else { return [] }
 
-            var conditions = ["v.committed_at <= ?"]
-            var arguments: [DatabaseValueConvertible?] = [blob, embeddingCount, filter.endAtMs]
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
+            var conditions = [privacySQL.condition, "v.committed_at <= ?"]
+            var arguments: [DatabaseValueConvertible?] = [blob, embeddingCount] + privacySQL.arguments + [filter.endAtMs]
             if let start = filter.startAtMs {
                 conditions.append("v.committed_at >= ?")
                 arguments.append(start)
@@ -215,8 +235,9 @@ extension Store {
                 """, arguments: StatementArguments(arguments))
             return rows.compactMap { row in
                 let sourceApp: String = row["source_app"]
+                let threadID: String = row["thread_id"]
                 let sourceKey: String = row["source_key"]
-                guard privacy.allows(sourceApp: sourceApp, sourceKey: sourceKey) else {
+                guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
                     return nil
                 }
                 let l2: Double = row["distance"]
@@ -251,9 +272,15 @@ extension Store {
     ) throws -> RetrievalPage<ThreadSummary> {
         let boundedOffset = max(offset, 0)
         let boundedLimit = min(max(limit, 1), 100)
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
-            var conditions = ["updated_at <= ?"]
-            var arguments: [DatabaseValueConvertible?] = [filter.endAtMs]
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "source_app",
+                threadIDColumn: "id",
+                urlColumn: "source_key"
+            )
+            var conditions = [privacySQL.condition, "updated_at <= ?"]
+            var arguments: [DatabaseValueConvertible?] = privacySQL.arguments + [filter.endAtMs]
             if let start = filter.startAtMs {
                 conditions.append("updated_at >= ?")
                 arguments.append(start)
@@ -271,7 +298,13 @@ extension Store {
                 ORDER BY updated_at DESC, id ASC
                 LIMIT ? OFFSET ?
                 """, arguments: StatementArguments(arguments))
-            let mapped = try rows.map { row -> ThreadSummary in
+            let mapped = try rows.compactMap { row -> ThreadSummary? in
+                let sourceApp: String = row["source_app"]
+                let threadID: String = row["id"]
+                let sourceKey: String = row["source_key"]
+                guard privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey) else {
+                    return nil
+                }
                 let facts = try String.fetchAll(d, sql: """
                     SELECT content FROM derivatives WHERE thread_id = ? AND committed_at <= ?
                     ORDER BY committed_at DESC, id ASC LIMIT 3

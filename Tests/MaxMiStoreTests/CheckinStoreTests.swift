@@ -223,28 +223,137 @@ final class CheckinStoreTests: XCTestCase {
         XCTAssertNil(try store.checkin(dayBucket: newDay))
     }
 
+    func testCheckinInputsExcludeLocalOnlyPausedAndBlockedSourcesBeforeReadingContent() throws {
+        let ordinary = try seedCalendarSource(
+            app: "Calendar",
+            key: "https://ordinary-checkin.example",
+            title: "Ordinary calendar",
+            eventTitle: "Ordinary event",
+            at: t0
+        )
+        let local = try seedCalendarSource(
+            app: "Local Calendar",
+            key: "local:checkin",
+            title: "Local calendar",
+            eventTitle: "Local event",
+            at: t0 + 1
+        )
+        let paused = try seedCalendarSource(
+            app: "Paused Calendar",
+            key: "https://paused-checkin.example",
+            title: "Paused calendar",
+            eventTitle: "Paused event",
+            at: t0 + 2
+        )
+        let blocked = try seedCalendarSource(
+            app: "Blocked Calendar",
+            key: "https://blocked-checkin.example",
+            title: "Blocked calendar",
+            eventTitle: "Blocked event",
+            at: t0 + 3
+        )
+        try store.setCloudProcessing("Local Calendar", allowed: false, nowMs: t0 + 4)
+        try store.setThreadPaused("https://paused-checkin.example", paused: true, nowMs: t0 + 4)
+        _ = try store.setDomain("blocked-checkin.example", blocked: true, nowMs: t0 + 4)
+        try insertOpenItems(for: [ordinary, local, paused, blocked])
+
+        for (index, source) in [ordinary, local, paused, blocked].enumerated() {
+            let startedAt = t0 + 100 + EpochMs(index * 10)
+            _ = try store.openVisit(
+                appBundle: "com.example.checkin.\(index)",
+                appLabel: source.app,
+                nowMs: startedAt
+            )
+            try store.closeOpenVisits(nowMs: startedAt + 5)
+            try store.recordCaptureEvent(
+                kind: .contentDelta,
+                appBundle: "com.example.checkin.\(index)",
+                threadID: source.threadID,
+                versionID: source.versionID,
+                trigger: .periodic,
+                payload: CaptureDelta(
+                    addedBlocks: [.init(type: .paragraph, text: source.eventTitle)]
+                ),
+                nowMs: startedAt + 1
+            )
+        }
+
+        let openItems = try store.openCheckinItems(limit: 10)
+        let calendar = try store.checkinCalendarCaptures(fromMs: t0, toMs: t0 + 10, limit: 10)
+        let topApps = try store.checkinTopApps(fromMs: t0, toMs: t0 + 200, limit: 10)
+        let timelineEvents = try StoreTimelineRepository(store: store)
+            .captureEvents(fromMs: t0, toMs: t0 + 200)
+
+        XCTAssertEqual(openItems.map(\.title), ["Ordinary open item"])
+        XCTAssertEqual(calendar.map(\.title), ["Ordinary event"])
+        XCTAssertEqual(topApps.map(\.appLabel), ["Calendar"])
+        XCTAssertEqual(timelineEvents.map(\.threadID), [ordinary.threadID])
+    }
+
+    func testCheckinResolvesOpenItemCreatedByVersionBasedAgentSourceReference() throws {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Editor",
+                sourceKey: "editor:post-task-four",
+                sourceTitle: "Post Task 4",
+                content: "Follow up on the version reference"
+            ),
+            nowMs: t0
+        ) else {
+            return XCTFail("Expected source version to commit.")
+        }
+        let page = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 10,
+            leaseMs: 60_000,
+            nowMs: t0 + 1
+        ))
+        XCTAssertEqual(page.versions.map(\.versionID), [versionID])
+        _ = try store.completeAgentRun(
+            runID: page.runID,
+            ops: [
+                .create(
+                    kind: "todo",
+                    title: "Follow up",
+                    details: nil,
+                    sourceRefs: [versionID]
+                ),
+            ],
+            nowMs: t0 + 2
+        )
+
+        let item = try XCTUnwrap(store.openCheckinItems(limit: 1).first)
+
+        XCTAssertEqual(item.title, "Follow up")
+        XCTAssertEqual(item.sourceApp, "Editor")
+    }
+
     private func seedActionItems() throws {
         let titleCipher = try AESGCMFieldCipher.testCipher.encrypt("Open task")
         let detailsCipher = try AESGCMFieldCipher.testCipher.encrypt("Follow up")
         let resolvedCipher = try AESGCMFieldCipher.testCipher.encrypt("Resolved task")
         let beforeResolvedCipher = try AESGCMFieldCipher.testCipher.encrypt("Before range")
         let afterResolvedCipher = try AESGCMFieldCipher.testCipher.encrypt("After range")
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Editor",
+                sourceKey: "editor:workspace",
+                sourceTitle: "Workspace",
+                content: "Open task source"
+            ),
+            nowMs: t0
+        ) else {
+            return XCTFail("Expected action-item source capture to commit.")
+        }
         try db.dbQueue.write { d in
-            try d.execute(sql: """
-                INSERT INTO activity_sessions (
-                    id, app_bundle, app_label, started_at, ended_at, last_activity_at,
-                    day_bucket, created_at, updated_at
-                ) VALUES ('session-1','com.example.editor','Editor',?,NULL,?,?,?,?)
-                """, arguments: [
-                    t0, t0, Store.dayBucket(forMs: t0, timeZone: .current), t0, t0,
-                ])
             try d.execute(sql: """
                 INSERT INTO agent_action_items (
                     id, kind, status, title_ciphertext, details_ciphertext, source_refs,
                     detected_at, updated_at, resolved_at
                 ) VALUES ('open-item','todo','open',?,?,?, ?,?,NULL)
                 """, arguments: [
-                    titleCipher, detailsCipher, "[\"session-1\"]", t0 + 10, t0 + 10,
+                    titleCipher, detailsCipher,
+                    String(decoding: try JSONEncoder().encode([versionID]), as: UTF8.self),
+                    t0 + 10, t0 + 10,
                 ])
             try d.execute(sql: """
                 INSERT INTO agent_action_items (
@@ -265,5 +374,88 @@ final class CheckinStoreTests: XCTestCase {
                 ) VALUES ('resolved-after','todo','resolved',?,NULL,NULL,?,?,?)
                 """, arguments: [afterResolvedCipher, t0 + 41, t0 + 41, t0 + 41])
         }
+    }
+
+    private func seedCalendarSource(
+        app: String,
+        key: String,
+        title: String,
+        eventTitle: String,
+        at: EpochMs
+    ) throws -> CheckinSourceFixture {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureEnvelope(
+                sourceApp: app,
+                sourceKey: key,
+                sourceTitle: title,
+                content: eventTitle,
+                contentKind: .calendar,
+                parserID: "TestCalendar",
+                parserVersion: 1,
+                accumulationPolicy: .replace,
+                offscreenPolicy: .visibleOnly(),
+                trigger: .periodic,
+                truncated: false,
+                structured: .calendar([
+                    CalendarEvent(
+                        title: eventTitle,
+                        dateString: "Today",
+                        start: nil,
+                        end: nil,
+                        organizer: nil,
+                        location: nil,
+                        hasConference: false,
+                        notes: nil
+                    ),
+                ])
+            ),
+            nowMs: at
+        ) else {
+            throw FixtureError.captureDidNotCommit
+        }
+        return CheckinSourceFixture(
+            app: app,
+            eventTitle: eventTitle,
+            versionID: versionID,
+            threadID: try store.threadID(forKey: key)
+        )
+    }
+
+    private func insertOpenItems(for sources: [CheckinSourceFixture]) throws {
+        try db.dbQueue.write { d in
+            for (index, source) in sources.enumerated() {
+                try d.execute(
+                    sql: """
+                    INSERT INTO agent_action_items (
+                        id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                        detected_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?)
+                    """,
+                    arguments: [
+                        "privacy-item-\(index)",
+                        "todo",
+                        "open",
+                        try AESGCMFieldCipher.testCipher.encrypt(
+                            "\(source.eventTitle.replacingOccurrences(of: "event", with: "open item"))"
+                        ),
+                        nil,
+                        String(decoding: try JSONEncoder().encode([source.versionID]), as: UTF8.self),
+                        t0 + EpochMs(index),
+                        t0 + EpochMs(index),
+                    ]
+                )
+            }
+        }
+    }
+
+    private struct CheckinSourceFixture {
+        let app: String
+        let eventTitle: String
+        let versionID: String
+        let threadID: String
+    }
+
+    private enum FixtureError: Error {
+        case captureDidNotCommit
     }
 }
