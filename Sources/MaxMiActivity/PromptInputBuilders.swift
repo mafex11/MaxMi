@@ -120,6 +120,6 @@ public enum CaptureSummaryInputBuilder {
 
 public enum SessionSummaryInputBuilder {
     public static func timelineText(_ timeline: ActivityTimeline) -> String {
-        TimelineBuilder.render(timeline, budgetChars: 6_000)
+        String(TimelineBuilder.render(timeline, budgetChars: 6_000).prefix(6_000))
     }
 }

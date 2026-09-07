@@ -120,12 +120,39 @@ final class CaptureDisplaySummarizerTests: XCTestCase {
             "I CANNOT summarize this.",
             "I'm unable to summarize this.",
             "I am unable to summarize this.",
+            "I am not able to summarize this.",
             "As an AI, I cannot summarize this.",
             "I'm sorry, but I cannot summarize this.",
             "I am sorry, but I cannot summarize this.",
         ]
         XCTAssertTrue(refused.allSatisfy(CaptureDisplaySummarizer.isRefused))
         XCTAssertFalse(CaptureDisplaySummarizer.isRefused("You reviewed the migration plan."))
+    }
+
+    func testEveryRefusalPhraseSavesViewingFallback() async {
+        let phrases = [
+            "I can't summarize this.",
+            "I cannot summarize this.",
+            "I'm unable to summarize this.",
+            "I am unable to summarize this.",
+            "I am not able to summarize this.",
+            "As an AI, I cannot summarize this.",
+            "I'm sorry, but I cannot summarize this.",
+            "I am sorry, but I cannot summarize this.",
+        ]
+        let expected = CaptureDisplaySummaryFormat.fallback(app: "Cursor", title: "Plan.swift")
+
+        for phrase in phrases {
+            let repo = CaptureSummaryRepoMock()
+            let relay = CaptureSummaryRelayMock()
+            await repo.setPending([meaningfulCaptureCandidate()])
+            await relay.setResult(.success(phrase))
+
+            await CaptureDisplaySummarizer(repo: repo, relay: relay).summarizeDue(nowMs: 1)
+
+            let saved = await repo.saved
+            XCTAssertEqual(saved.first?.1, expected, phrase)
+        }
     }
 
     private func meaningfulCaptureCandidate() -> CaptureSummaryCandidate {

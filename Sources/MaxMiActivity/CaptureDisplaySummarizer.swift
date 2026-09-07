@@ -145,6 +145,7 @@ public struct CaptureDisplaySummarizer: Sendable {
             "i cannot",
             "i'm unable",
             "i am unable",
+            "i am not able to summarize this.",
             "as an ai",
             "i'm sorry",
             "i am sorry",

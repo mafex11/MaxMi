@@ -510,6 +510,20 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertTrue(text.contains("Reader"), "an over-budget single entry is still reported")
     }
 
+    func testSessionSummaryTimelineTextCapsOversizedSingleEntry() {
+        let entry = TimelineEntry(
+            startMs: t0, endMs: t0 + 60_000, appLabel: "Reader", threadID: nil,
+            sourceTitle: nil, url: nil, kind: .generic, cwd: nil,
+            deltaSummary: String(repeating: "s", count: 7_000), newItemCount: 0,
+            typedCount: 0, typedSample: nil
+        )
+        let text = SessionSummaryInputBuilder.timelineText(
+            ActivityTimeline(fromMs: t0, toMs: t0 + 60_000, entries: [entry])
+        )
+
+        XCTAssertLessThanOrEqual(text.count, 6_000)
+    }
+
     func testEmptyTimelineRendersEmpty() {
         XCTAssertEqual(
             TimelineBuilder.render(ActivityTimeline(fromMs: t0, toMs: t0 + 1, entries: []),
