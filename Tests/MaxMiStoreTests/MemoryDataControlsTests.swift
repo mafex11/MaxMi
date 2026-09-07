@@ -53,6 +53,54 @@ final class MemoryDataControlsTests: XCTestCase {
         XCTAssertEqual(try store.blockedDomains(), ["example.com"])
     }
 
+    func testPruneDeletesContextEmbeddingsForPrunedVersions() throws {
+        guard case .committed(let oldVersionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "old-context", sourceTitle: "Old",
+                         content: "old context content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("old fixture must commit")
+        }
+        guard case .committed(let newVersionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "new-context", sourceTitle: "New",
+                         content: "new context content"),
+            nowMs: t0 + 100_000
+        ) else {
+            return XCTFail("new fixture must commit")
+        }
+        let vector = [Float](repeating: 0.25, count: 1_536)
+        try store.insertContextEmbedding(versionID: oldVersionID, vector: vector)
+        try store.insertContextEmbedding(versionID: newVersionID, vector: vector)
+
+        _ = try store.pruneMemory(olderThan: t0 + 50_000)
+
+        let remaining = try store.db.dbQueue.read { d in
+            try String.fetchAll(d, sql: "SELECT version_id FROM context_embeddings")
+        }
+        XCTAssertEqual(remaining, [newVersionID])
+    }
+
+    func testDeleteAllMemoryDeletesContextEmbeddings() throws {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "context", sourceTitle: "Context",
+                         content: "context content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("fixture must commit")
+        }
+        try store.insertContextEmbedding(
+            versionID: versionID,
+            vector: [Float](repeating: 0.25, count: 1_536)
+        )
+
+        _ = try store.deleteAllMemory()
+
+        let count = try store.db.dbQueue.read { d in
+            try Int.fetchOne(d, sql: "SELECT count(*) FROM context_embeddings")
+        }
+        XCTAssertEqual(count, 0)
+    }
+
     func testConsistentBackupCanBeOpened() throws {
         _ = try store.commitCapture(
             CaptureInput(sourceApp: "Web", sourceKey: "one", sourceTitle: "One", content: "content"),
@@ -94,7 +142,7 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: archivesURL
         )
-        XCTAssertEqual(result.migrationIdentifier, "v11")
+        XCTAssertEqual(result.migrationIdentifier, "v12")
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.preservedDatabaseURL.path))
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
@@ -169,14 +217,14 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: root.appendingPathComponent("Backups", isDirectory: true)
         )
-        XCTAssertEqual(result.migrationIdentifier, "v11")
+        XCTAssertEqual(result.migrationIdentifier, "v12")
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
         defer { try? restored.dbQueue.close() }
         try restored.dbQueue.read { database in
             XCTAssertEqual(
                 try String.fetchOne(database, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v11"
+                "v12"
             )
             let ciphertext = try String.fetchOne(database, sql: "SELECT content FROM versions")
             XCTAssertTrue(ciphertext?.hasPrefix("enc:v1:") == true)

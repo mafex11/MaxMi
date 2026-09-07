@@ -1,7 +1,9 @@
+import Foundation
 import GRDB
+import MaxMiCore
 
 enum Migrations {
-    static let currentIdentifier = "v11"
+    static let currentIdentifier = "v12"
 
     static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
@@ -336,6 +338,19 @@ enum Migrations {
             CREATE INDEX idx_capture_events_at     ON capture_events(at_ms DESC, id DESC);
             CREATE INDEX idx_capture_events_thread ON capture_events(thread_id, at_ms DESC);
             """)
+        }
+        m.registerMigration("v12") { db in
+            try db.execute(sql: """
+            CREATE VIRTUAL TABLE context_embeddings USING vec0(
+              version_id TEXT PRIMARY KEY,
+              embedding  FLOAT[1536]
+            );
+            """)
+            let migrationTimeMs = EpochMs(Date().timeIntervalSince1970 * 1_000)
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,?)",
+                arguments: ["context_embeddings_since_ms", String(migrationTimeMs), migrationTimeMs]
+            )
         }
         return m
     }

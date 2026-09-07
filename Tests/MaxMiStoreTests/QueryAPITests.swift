@@ -105,4 +105,79 @@ final class QueryAPITests: XCTestCase {
         // Verify ordering: smaller distance comes first
         XCTAssertLessThan(hits[0].distance, hits[1].distance, "results ordered by distance ascending")
     }
+
+    func testContextEmbeddingRoundTrip() throws {
+        try store.insertContextEmbedding(versionID: "context-a", vector: unit(0))
+        try store.insertContextEmbedding(versionID: "context-b", vector: unit(500))
+
+        let hits = try store.nearestContexts(to: unit(500), limit: 1)
+
+        XCTAssertEqual(hits.map(\.versionID), ["context-b"])
+    }
+
+    func testPendingContextEmbeddingWorkUsesLegacyCompactContentAndHonorsMarkerAndBackoff() throws {
+        let oldVersionID = try seedContextVersion(
+            sourceKey: "fixture:pre-marker",
+            content: "Pre-marker synthetic captured content.",
+            committedAt: 1
+        )
+        let legacyContent = "Post-marker synthetic legacy content that is long enough to embed."
+        let postVersionID = try seedContextVersion(
+            sourceKey: "fixture:post-marker",
+            content: legacyContent,
+            committedAt: 3
+        )
+        try store.setContextEmbeddingSinceMs(2)
+        try db.dbQueue.write { d in
+            try d.execute(
+                sql: "UPDATE versions SET structured_ciphertext=NULL WHERE id=?",
+                arguments: [postVersionID]
+            )
+        }
+
+        let initial = try store.pendingContextEmbeddingWork(nowMs: 3)
+        let pending = try XCTUnwrap(initial.first { $0.id == postVersionID })
+        let expected = ContentRenderer.render(
+            LegacyContentAdapter.adapt(renderedContent: legacyContent, kind: .generic),
+            style: .compact(maxChars: 6_000)
+        )
+        XCTAssertEqual(pending.compactContent, expected)
+        XCTAssertFalse(initial.map(\.id).contains(oldVersionID))
+
+        try store.enqueueRetry(
+            kind: "embed_version",
+            versionID: postVersionID,
+            derivativeID: nil,
+            error: "offline",
+            nowMs: 3
+        )
+        let gated = try store.pendingContextEmbeddingWork(nowMs: 30_002)
+        XCTAssertFalse(gated.map(\.id).contains(postVersionID))
+
+        let afterBackoff = try store.pendingContextEmbeddingWork(nowMs: 30_003)
+        XCTAssertTrue(afterBackoff.map(\.id).contains(postVersionID))
+    }
+
+    private func seedContextVersion(
+        sourceKey: String,
+        content: String,
+        committedAt: EpochMs
+    ) throws -> String {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "FixtureWeb",
+                sourceKey: sourceKey,
+                sourceTitle: "Fixture",
+                content: content
+            ),
+            nowMs: committedAt
+        ) else {
+            throw FixtureError.captureDidNotCommit
+        }
+        return versionID
+    }
+
+    private enum FixtureError: Error {
+        case captureDidNotCommit
+    }
 }

@@ -248,6 +248,8 @@ public final class Store {
 }
 
 extension Store {
+    private static let contextEmbeddingSinceKey = "context_embeddings_since_ms"
+
     public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
         // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
         // can serve as baseline; its unextracted facts are suppressed from the newer diff).
@@ -332,10 +334,91 @@ extension Store {
                     capturedAt: capturedAt,
                     renderedDelta: input.newContent,
                     previousCompactContent: input.previousContent,
+                    compactContent: ContentRenderer.render(current, style: .compact(maxChars: 6_000)),
                     previousFrozenContent: (row["previous_frozen_content"] as String?)
                         .map(decryptOrMarker)
                 )
             }
+        }
+    }
+
+    public func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PendingVersion] {
+        try db.dbQueue.read { d in
+            guard let markerText = try String.fetchOne(
+                d,
+                sql: "SELECT value FROM settings WHERE key=?",
+                arguments: [Self.contextEmbeddingSinceKey]
+            ), let marker = EpochMs(markerText) else {
+                return []
+            }
+            return try contextEmbeddingRows(d, committedSinceMs: marker, nowMs: nowMs)
+        }
+    }
+
+    func setContextEmbeddingSinceMs(_ value: EpochMs) throws {
+        try db.dbQueue.write { d in
+            try d.execute(
+                sql: "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,?)",
+                arguments: [Self.contextEmbeddingSinceKey, String(value), value]
+            )
+        }
+    }
+
+    private func contextEmbeddingRows(
+        _ d: Database,
+        committedSinceMs: EpochMs,
+        nowMs: EpochMs
+    ) throws -> [PendingVersion] {
+        let rows = try Row.fetchAll(d, sql: """
+            SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
+                   v.structured_ciphertext, v.metadata, v.committed_at,
+                   t.source_app, t.source_key, t.source_title
+            FROM versions v JOIN threads t ON t.id = v.thread_id
+            WHERE v.committed_at >= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM context_embeddings c WHERE c.version_id = v.id
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM retry_queue r
+                WHERE r.kind = 'embed_version'
+                  AND r.version_id = v.id
+                  AND r.next_attempt_at > ?
+              )
+            ORDER BY v.committed_at
+            """, arguments: [committedSinceMs, nowMs])
+        return rows.map { row in
+            let metadata = (try? JSONDecoder().decode(
+                VersionCaptureMetadata.self,
+                from: Data((row["metadata"] as String? ?? "").utf8)
+            ))
+            let kind = metadata?.contentKind ?? .generic
+            let renderedContent = decryptOrMarker(row["content"])
+            let content = structuredOrLegacy(
+                row["structured_ciphertext"] as String?,
+                renderedContent: renderedContent,
+                kind: kind
+            )
+            let sourceApp: String = row["source_app"]
+            let sourceKey: String = row["source_key"]
+            let sourceTitle: String? = row["source_title"]
+            let capturedAt: EpochMs = row["committed_at"]
+            return PendingVersion(
+                id: row["id"],
+                threadID: row["thread_id"],
+                hourBucket: row["hour_bucket"],
+                content: renderedContent,
+                contentHash: row["content_hash"],
+                sourceApp: sourceApp,
+                sourceKey: sourceKey,
+                sourceTitle: sourceTitle,
+                url: captureURL(of: content),
+                contentKind: kind,
+                capturedAt: capturedAt,
+                renderedDelta: "",
+                previousCompactContent: nil,
+                compactContent: ContentRenderer.render(content, style: .compact(maxChars: 6_000)),
+                previousFrozenContent: nil
+            )
         }
     }
 

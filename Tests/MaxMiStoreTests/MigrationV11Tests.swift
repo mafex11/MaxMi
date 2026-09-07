@@ -4,8 +4,8 @@ import GRDB
 import MaxMiCore
 
 final class MigrationV11Tests: XCTestCase {
-    func testCurrentIdentifierIsV11() {
-        XCTAssertEqual(Migrations.currentIdentifier, "v11")
+    func testV11MigrationIsRegistered() {
+        XCTAssertTrue(Set(Migrations.migrator.migrations).contains("v11"))
     }
 
     func testCaptureEventsTableShape() throws {
@@ -90,7 +90,7 @@ final class MigrationV11Tests: XCTestCase {
             XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM threads"), 1)
             XCTAssertEqual(
                 try String.fetchOne(d, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v11")
+                "v12")
         }
     }
 }

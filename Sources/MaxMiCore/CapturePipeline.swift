@@ -38,6 +38,9 @@ public actor CapturePipeline {
             return
         }
         for v in work { await process(v, now: now) }
+        if let contextWork = try? store.pendingContextEmbeddingWork(nowMs: now) {
+            for v in contextWork { await embedContext(v, now: now) }
+        }
     }
 
     private func process(_ v: PipelineVersion, now: EpochMs) async {
@@ -77,6 +80,7 @@ public actor CapturePipeline {
                 try store.insertEmbedding(derivativeID: d.id, vector: vec)
                 try store.markEmbedded(derivativeID: d.id)
             }
+            await embedContext(v, now: now)
             // Hash guard (§3a): false = content moved mid-flight; stays pending for next tick.
             _ = try store.markExtracted(versionID: v.id, contentHashRead: v.contentHash)
         } catch let e as RelayError {
@@ -101,6 +105,34 @@ public actor CapturePipeline {
             } catch {
                 SafeLogger.shared.log(.error, subsystem: .pipeline, event: .retryQueueWriteFailed, error: error)
             }
+        }
+    }
+
+    private func embedContext(_ version: PipelineVersion, now: EpochMs) async {
+        let compact = version.compactContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard compact.count >= 40 else { return }
+        let text = "\(version.sourceApp) · \(version.sourceTitle ?? "")\n\(compact)"
+        do {
+            try store.insertContextEmbedding(
+                versionID: version.id,
+                vector: try await relay.embed(text: text)
+            )
+        } catch let error as RelayError {
+            try? store.enqueueRetry(
+                kind: "embed_version",
+                versionID: version.id,
+                derivativeID: nil,
+                error: error.kind,
+                nowMs: now
+            )
+        } catch {
+            try? store.enqueueRetry(
+                kind: "embed_version",
+                versionID: version.id,
+                derivativeID: nil,
+                error: "unexpectedError",
+                nowMs: now
+            )
         }
     }
 
