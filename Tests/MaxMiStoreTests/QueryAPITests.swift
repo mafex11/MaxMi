@@ -158,14 +158,44 @@ final class QueryAPITests: XCTestCase {
         XCTAssertTrue(afterBackoff.map(\.id).contains(postVersionID))
     }
 
+    func testPendingContextEmbeddingWorkRequiresSourceCloudEligibility() throws {
+        let existingVersionID = try seedContextVersion(
+            sourceApp: "Web",
+            sourceKey: "web:existing",
+            content: "Existing source content that is long enough for a context embedding.",
+            committedAt: t0
+        )
+        try store.bootstrapCloudProcessingReview(nowMs: t0 + 1)
+        let reviewedVersionID = try seedContextVersion(
+            sourceApp: "Slack",
+            sourceKey: "slack:new",
+            content: "New source content that is long enough for a context embedding.",
+            committedAt: t0 + 2
+        )
+        try store.setContextEmbeddingSinceMs(t0 - 1)
+
+        let pendingReview = try store.pendingContextEmbeddingWork(nowMs: t0 + 3)
+        XCTAssertTrue(pendingReview.map(\.id).contains(existingVersionID))
+        XCTAssertFalse(pendingReview.map(\.id).contains(reviewedVersionID))
+
+        try store.setCloudProcessing("Slack", allowed: false, nowMs: t0 + 4)
+        let localOnly = try store.pendingContextEmbeddingWork(nowMs: t0 + 5)
+        XCTAssertFalse(localOnly.map(\.id).contains(reviewedVersionID))
+
+        try store.setCloudProcessing("Slack", allowed: true, nowMs: t0 + 6)
+        let approved = try store.pendingContextEmbeddingWork(nowMs: t0 + 7)
+        XCTAssertTrue(approved.map(\.id).contains(reviewedVersionID))
+    }
+
     private func seedContextVersion(
+        sourceApp: String = "FixtureWeb",
         sourceKey: String,
         content: String,
         committedAt: EpochMs
     ) throws -> String {
         guard case .committed(let versionID, _, _) = try store.commitCapture(
             CaptureInput(
-                sourceApp: "FixtureWeb",
+                sourceApp: sourceApp,
                 sourceKey: sourceKey,
                 sourceTitle: "Fixture",
                 content: content

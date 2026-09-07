@@ -253,9 +253,7 @@ extension Store {
     public func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PendingVersion] {
         // Note: failed-baseline edge is accepted M1 semantics (an extract_status='failed' earlier version
         // can serve as baseline; its unextracted facts are suppressed from the newer diff).
-        let reviewed = try cloudReviewedSourceApps()
-        let localOnly = try cloudLocalOnlySourceApps()
-        let reviewGateEnabled = try cloudReviewInitialized()
+        let cloudEligibility = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
             let currentBucket = HourBucket.bucket(forMs: nowMs)
             let rows = try Row.fetchAll(d, sql: """
@@ -282,7 +280,7 @@ extension Store {
                 """, arguments: [currentBucket, nowMs - idleThresholdMs, nowMs])
             return rows.filter { row in
                 let sourceApp: String = row["source_app"]
-                return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
+                return cloudEligibility.allowsCloudProcessing(for: sourceApp)
             }.map { row in
                 let metadata = (try? JSONDecoder().decode(
                     VersionCaptureMetadata.self,
@@ -343,7 +341,8 @@ extension Store {
     }
 
     public func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PendingVersion] {
-        try db.dbQueue.read { d in
+        let cloudEligibility = try sourceCloudEligibility()
+        return try db.dbQueue.read { d in
             guard let markerText = try String.fetchOne(
                 d,
                 sql: "SELECT value FROM settings WHERE key=?",
@@ -351,7 +350,12 @@ extension Store {
             ), let marker = EpochMs(markerText) else {
                 return []
             }
-            return try contextEmbeddingRows(d, committedSinceMs: marker, nowMs: nowMs)
+            return try contextEmbeddingRows(
+                d,
+                committedSinceMs: marker,
+                nowMs: nowMs,
+                cloudEligibility: cloudEligibility
+            )
         }
     }
 
@@ -367,7 +371,8 @@ extension Store {
     private func contextEmbeddingRows(
         _ d: Database,
         committedSinceMs: EpochMs,
-        nowMs: EpochMs
+        nowMs: EpochMs,
+        cloudEligibility: SourceCloudEligibility
     ) throws -> [PendingVersion] {
         let rows = try Row.fetchAll(d, sql: """
             SELECT v.id, v.thread_id, v.hour_bucket, v.content, v.content_hash,
@@ -386,7 +391,10 @@ extension Store {
               )
             ORDER BY v.committed_at
             """, arguments: [committedSinceMs, nowMs])
-        return rows.map { row in
+        return rows.filter { row in
+            let sourceApp: String = row["source_app"]
+            return cloudEligibility.allowsCloudProcessing(for: sourceApp)
+        }.map { row in
             let metadata = (try? JSONDecoder().decode(
                 VersionCaptureMetadata.self,
                 from: Data((row["metadata"] as String? ?? "").utf8)
