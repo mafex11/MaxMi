@@ -66,6 +66,53 @@ final class CaptureSummaryStoreTests: XCTestCase {
         XCTAssertEqual(try store.latestContexts(limit: 1).first?.summaryStatus, "completed")
     }
 
+    func testVersionMismatchQueuesConversationForAnyAppAndDocumentForAnyApp() throws {
+        try seedLatestContext(sourceApp: "Slack", contentKind: .conversation, promptVersion: "old")
+        try seedLatestContext(sourceApp: "Notes", contentKind: .document, promptVersion: "old")
+
+        let pending = try store.captureContextsNeedingSummary(nowMs: t0 + 20_000, settleMs: 0, limit: 10)
+
+        XCTAssertEqual(Set(pending.map(\.promptVersion)), Set([
+            CaptureDisplaySummaryFormat.recentConversation,
+            CaptureDisplaySummaryFormat.standard,
+        ]))
+    }
+
+    private func seedLatestContext(
+        sourceApp: String,
+        contentKind: CaptureContentKind,
+        promptVersion: String
+    ) throws {
+        _ = try store.commitCapture(
+            CaptureEnvelope(
+                sourceApp: sourceApp,
+                sourceKey: "\(sourceApp):\(contentKind.rawValue)",
+                sourceTitle: "Test context",
+                content: "summary input",
+                contentKind: contentKind,
+                parserID: "TestParser",
+                parserVersion: 1,
+                accumulationPolicy: .replace,
+                offscreenPolicy: .visibleOnly(),
+                trigger: .periodic,
+                truncated: false
+            ),
+            nowMs: t0
+        )
+        let candidate = try XCTUnwrap(
+            store.captureContextsNeedingSummary(nowMs: t0, settleMs: 0, limit: 10)
+                .first(where: { $0.appLabel == sourceApp })
+        )
+        XCTAssertTrue(try store.saveCaptureDisplaySummary(
+            threadID: candidate.threadID,
+            summary: "Existing summary",
+            expectedSourceHash: candidate.expectedSourceHash,
+            modelID: "test-model",
+            promptVersion: promptVersion,
+            nowMs: t0
+        ))
+    }
+
     private func envelope(_ content: String) -> CaptureEnvelope {
         CaptureEnvelope(
             sourceApp: "Cursor",

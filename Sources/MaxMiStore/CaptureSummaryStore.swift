@@ -32,8 +32,10 @@ extension Store {
                     c.summary_status='pending'
                     OR (c.summary_status='failed' AND coalesce(c.summary_next_attempt_at, 0) <= ?)
                     OR (
-                        t.source_app='WhatsApp'
-                        AND coalesce(c.summary_prompt_version, '') <> ?
+                        coalesce(c.summary_prompt_version, '') <> CASE
+                            WHEN c.content_kind = 'conversation' THEN ?
+                            ELSE ?
+                        END
                     )
                 )
                 ORDER BY c.captured_at DESC, c.thread_id
@@ -41,6 +43,7 @@ extension Store {
                     nowMs - settleMs,
                     nowMs,
                     CaptureDisplaySummaryFormat.recentConversation,
+                    CaptureDisplaySummaryFormat.standard,
                 ]).filter { row in
                     let sourceApp: String = row["source_app"]
                     return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
