@@ -35,20 +35,20 @@ final class TimelineBuilderTests: XCTestCase {
 
     private func deltaEvent(appBundle: String = "a", atMs: EpochMs, threadID: String?,
                             delta: CaptureDelta) -> TimelineRawEvent {
-        TimelineRawEvent(kind: .contentDelta, appBundle: appBundle, atMs: atMs,
-                         threadID: threadID, trigger: .periodic, delta: delta, typing: nil,
-                         toURL: nil)
+        TimelineRawEvent(kind: .contentDelta, atMs: atMs, threadID: threadID,
+                         trigger: .periodic, delta: delta, typing: nil, toURL: nil,
+                         appBundle: appBundle)
     }
 
     private func typingEvent(appBundle: String = "a", atMs: EpochMs, threadID: String?,
                              text: String) -> TimelineRawEvent {
         TimelineRawEvent(
-            kind: .typing, appBundle: appBundle, atMs: atMs, threadID: threadID,
-            trigger: .accessibilityChanged, delta: nil,
+            kind: .typing, atMs: atMs, threadID: threadID, trigger: .accessibilityChanged,
+            delta: nil,
             typing: TypingEvent(insertedText: text, fieldRole: "AXTextArea",
                                 fieldIdentifier: "composer", totalLength: text.count,
                                 replaced: false),
-            toURL: nil)
+            toURL: nil, appBundle: appBundle)
     }
 
     private func message(_ sender: String, _ text: String) -> Message {
@@ -103,6 +103,35 @@ final class TimelineBuilderTests: XCTestCase {
             ])
     }
 
+    func testActivityTimelineConstructionSortsEntriesBeforeRendering() {
+        let late = TimelineEntry(
+            startMs: t0 + 120_000, endMs: t0 + 180_000, appLabel: "Late", threadID: nil,
+            sourceTitle: nil, url: nil, kind: .generic, cwd: nil,
+            deltaSummary: nil, newItemCount: 0, typedCount: 0, typedSample: nil)
+        let sameStartLonger = TimelineEntry(
+            startMs: t0, endMs: t0 + 120_000, appLabel: "Longer", threadID: nil,
+            sourceTitle: nil, url: nil, kind: .generic, cwd: nil,
+            deltaSummary: nil, newItemCount: 0, typedCount: 0, typedSample: nil)
+        let early = TimelineEntry(
+            startMs: t0, endMs: t0 + 60_000, appLabel: "Early", threadID: nil,
+            sourceTitle: nil, url: nil, kind: .generic, cwd: nil,
+            deltaSummary: nil, newItemCount: 0, typedCount: 0, typedSample: nil)
+
+        let timeline = ActivityTimeline(
+            fromMs: t0, toMs: t0 + 600_000, entries: [late, sameStartLonger, early])
+
+        XCTAssertEqual(timeline.entries.map(\.appLabel), ["Early", "Longer", "Late"])
+        XCTAssertEqual(
+            TimelineBuilder.render(timeline, budgetChars: 4_000)
+                .split(separator: "\n")
+                .map(String.init),
+            [
+                "\(hhmm(t0))–\(hhmm(t0 + 60_000)) Early",
+                "\(hhmm(t0))–\(hhmm(t0 + 120_000)) Longer",
+                "\(hhmm(t0 + 120_000))–\(hhmm(t0 + 180_000)) Late",
+            ])
+    }
+
     func testEventsAttachToTheVisitContainingThem() throws {
         let repo = StubTimelineRepository(
             visits: [
@@ -128,6 +157,28 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(entries.map(\.kind), [.document, .conversation])
         XCTAssertEqual(entries.map(\.sourceTitle), ["A doc", "#invented"])
         XCTAssertEqual(entries.map(\.newItemCount), [1, 1])
+    }
+
+    func testPinnedRawEventInitializerWithoutAppBundleAttachesByTime() throws {
+        let event = TimelineRawEvent(
+            kind: .contentDelta, atMs: t0 + 50_000, threadID: "t1", trigger: .periodic,
+            delta: CaptureDelta(
+                addedBlocks: [Block(type: .paragraph, text: "attached")], addedChars: 8),
+            typing: nil, toURL: nil)
+        XCTAssertNil(event.appBundle)
+
+        let repo = StubTimelineRepository(
+            visits: [(bundleID: "a", appLabel: "Editor", startedAt: t0, endedAt: t0 + 100_000)],
+            events: [event],
+            metadata: [
+                "t1": TimelineThreadMeta(sourceApp: "Editor", sourceTitle: "Draft",
+                                         kind: .document, url: nil, cwd: nil),
+            ])
+
+        let entry = try XCTUnwrap(
+            TimelineBuilder(repo: repo).build(fromMs: t0, toMs: t0 + 600_000).entries.first)
+        XCTAssertEqual(entry.threadID, "t1")
+        XCTAssertEqual(entry.newItemCount, 1)
     }
 
     func testEventWithDifferentBundleInsideVisitIsNotAttached() throws {

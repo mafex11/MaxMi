@@ -47,7 +47,15 @@ public struct ActivityTimeline: Codable, Sendable, Equatable {
     public init(fromMs: EpochMs, toMs: EpochMs, entries: [TimelineEntry]) {
         self.fromMs = fromMs
         self.toMs = toMs
-        self.entries = entries
+        self.entries = entries.enumerated().sorted {
+            if $0.element.startMs != $1.element.startMs {
+                return $0.element.startMs < $1.element.startMs
+            }
+            if $0.element.endMs != $1.element.endMs {
+                return $0.element.endMs < $1.element.endMs
+            }
+            return $0.offset < $1.offset
+        }.map(\.element)
     }
 }
 
@@ -56,8 +64,8 @@ public struct ActivityTimeline: Codable, Sendable, Equatable {
 public struct TimelineRawEvent: Sendable, Equatable {
     public let kind: CaptureEventKind
     /// Bundle identifier of the app that emitted the event. An event belongs only to a visit with
-    /// this same bundle identifier.
-    public let appBundle: String
+    /// this same bundle identifier when one is available.
+    public let appBundle: String?
     public let atMs: EpochMs
     public let threadID: String?
     public let trigger: CaptureTrigger
@@ -68,8 +76,9 @@ public struct TimelineRawEvent: Sendable, Equatable {
     /// `kind == .navigation` only.
     public let toURL: String?
 
-    public init(kind: CaptureEventKind, appBundle: String, atMs: EpochMs, threadID: String?,
-                trigger: CaptureTrigger, delta: CaptureDelta?, typing: TypingEvent?, toURL: String?) {
+    public init(kind: CaptureEventKind, atMs: EpochMs, threadID: String?,
+                trigger: CaptureTrigger, delta: CaptureDelta?, typing: TypingEvent?, toURL: String?,
+                appBundle: String? = nil) {
         self.kind = kind
         self.appBundle = appBundle
         self.atMs = atMs
@@ -130,9 +139,20 @@ public struct TimelineBuilder: Sendable {
     /// before opening one. An event inside two overlapping visits would be attached to both,
     /// which is the honest answer for a state that cannot occur.
     public func build(fromMs: EpochMs, toMs: EpochMs) throws -> ActivityTimeline {
-        let visits = Self.stablySorted(try repo.appVisits(fromMs: fromMs, toMs: toMs)) {
-            $0.startedAt
-        }
+        let visits = (try repo.appVisits(fromMs: fromMs, toMs: toMs)).enumerated().sorted {
+            if $0.element.startedAt != $1.element.startedAt {
+                return $0.element.startedAt < $1.element.startedAt
+            }
+            let leftEndMs = $0.element.endedAt ?? toMs
+            let rightEndMs = $1.element.endedAt ?? toMs
+            if leftEndMs != rightEndMs {
+                return leftEndMs < rightEndMs
+            }
+            if $0.element.bundleID != $1.element.bundleID {
+                return $0.element.bundleID < $1.element.bundleID
+            }
+            return $0.offset < $1.offset
+        }.map(\.element)
         let events = Self.stablySorted(try repo.captureEvents(fromMs: fromMs, toMs: toMs)) {
             $0.atMs
         }
@@ -148,7 +168,7 @@ public struct TimelineBuilder: Sendable {
                 entry: Self.entry(
                     appLabel: visit.appLabel, startMs: visit.startedAt, endMs: endMs,
                     events: events.filter {
-                        $0.appBundle == visit.bundleID
+                        ($0.appBundle == nil || $0.appBundle == visit.bundleID)
                             && $0.atMs >= visit.startedAt
                             && $0.atMs <= endMs
                     },
@@ -282,12 +302,6 @@ public struct TimelineBuilder: Sendable {
     /// dropped: an over-budget single entry is still reported, the same soft-cap rule Phase A's
     /// budgeting applies to a page's first block.
     public static func render(_ timeline: ActivityTimeline, budgetChars: Int) -> String {
-        assert(
-            zip(timeline.entries, timeline.entries.dropFirst()).allSatisfy {
-                $0.startMs <= $1.startMs
-            },
-            "ActivityTimeline entries must be chronological."
-        )
         var lines = timeline.entries.map(line)
         guard !lines.isEmpty else { return "" }
         var omitted = false
