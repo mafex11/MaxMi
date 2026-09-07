@@ -27,6 +27,7 @@ public actor CheckinTrigger {
     private let isActivitySynthesisEnabled: @Sendable () -> Bool
     private let clock: @Sendable () -> EpochMs
     private let timeZone: TimeZone
+    private var inFlight = false
 
     public init(
         generator: any CheckinGenerating,
@@ -48,7 +49,9 @@ public actor CheckinTrigger {
     }
 
     public func tick(nowMs: EpochMs) async {
-        guard isActivitySynthesisEnabled() else { return }
+        guard isActivitySynthesisEnabled(), !inFlight else { return }
+        inFlight = true
+        defer { inFlight = false }
         let hasCheckinForToday = await generator.hasCheckinForToday(nowMs: nowMs)
         guard schedule(nowMs, timeZone, hasCheckinForToday) else { return }
         await generator.generateIfMissing(nowMs: nowMs)
@@ -59,7 +62,9 @@ public actor CheckinTrigger {
     }
 
     public func regenerateNow(nowMs: EpochMs) async {
-        guard isActivitySynthesisEnabled() else { return }
+        guard isActivitySynthesisEnabled(), !inFlight else { return }
+        inFlight = true
+        defer { inFlight = false }
         await generator.regenerate(nowMs: nowMs)
     }
 }

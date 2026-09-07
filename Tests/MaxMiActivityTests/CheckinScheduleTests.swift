@@ -89,6 +89,54 @@ private actor CheckinTriggerProbe: CheckinGenerating {
     }
 }
 
+private actor OverlappingCheckinGenerator: CheckinGenerating {
+    private var saved = false
+    private var generateCalls = 0
+    private var generationStartedContinuation: CheckedContinuation<Void, Never>?
+    private var generationReleaseContinuations: [CheckedContinuation<Void, Never>] = []
+    private var generationReleased = false
+
+    func hasCheckinForToday(nowMs: EpochMs) async -> Bool {
+        saved
+    }
+
+    func generateIfMissing(nowMs: EpochMs) async {
+        generateCalls += 1
+        generationStartedContinuation?.resume()
+        generationStartedContinuation = nil
+        if !generationReleased {
+            await withCheckedContinuation { continuation in
+                generationReleaseContinuations.append(continuation)
+            }
+        }
+        saved = true
+    }
+
+    func regenerate(nowMs: EpochMs) async {}
+
+    func waitForGenerationStart() async {
+        if generateCalls > 0 {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            generationStartedContinuation = continuation
+        }
+    }
+
+    func releaseGeneration() {
+        generationReleased = true
+        let continuations = generationReleaseContinuations
+        generationReleaseContinuations.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
+    func readGenerateCalls() -> Int {
+        generateCalls
+    }
+}
+
 final class CheckinScheduleTests: XCTestCase {
     func testAutomaticCheckinStartsAtEightLocalOnlyWhenRowMissing() throws {
         let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Kolkata"))
@@ -158,6 +206,35 @@ final class CheckinScheduleTests: XCTestCase {
 
         let automaticCalls = await state.readAutomaticCalls()
         XCTAssertEqual(automaticCalls, [atEight])
+    }
+
+    func testTriggerGuardsOverlappingTicksUntilGenerationCompletes() async throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Kolkata"))
+        let generator = OverlappingCheckinGenerator()
+        let trigger = CheckinTrigger(
+            generator: generator,
+            isActivitySynthesisEnabled: { true },
+            timeZone: zone
+        )
+        let atEight = try localTimeMs(
+            year: 2026, month: 9, day: 3, hour: 8, minute: 0, second: 0, timeZone: zone
+        )
+
+        async let firstTick: Void = trigger.tick(nowMs: atEight)
+        await generator.waitForGenerationStart()
+        async let secondTick: Void = trigger.tick(nowMs: atEight)
+        await Task.yield()
+        await Task.yield()
+        await generator.releaseGeneration()
+        await firstTick
+        await secondTick
+
+        let generateCalls = await generator.readGenerateCalls()
+        XCTAssertEqual(generateCalls, 1)
+
+        await trigger.tick(nowMs: atEight + 30_000)
+        let generateCallsAfterSavedTick = await generator.readGenerateCalls()
+        XCTAssertEqual(generateCallsAfterSavedTick, 1)
     }
 
     func testTriggerSkipsAutomaticAndManualGenerationWhenActivitySynthesisIsDisabled() async throws {
