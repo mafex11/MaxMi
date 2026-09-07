@@ -3,6 +3,10 @@ import MaxMiCore
 import MaxMiStore
 import MaxMiActivity
 
+private enum ActivitySummaryPromptVersion {
+    static let timeline = "v2-timeline"
+}
+
 struct StoreActivitySummaryRepository: ActivitySummaryRepository, @unchecked Sendable {
     let store: Store
     let modelID: String
@@ -10,14 +14,18 @@ struct StoreActivitySummaryRepository: ActivitySummaryRepository, @unchecked Sen
     func sessionsNeedingSummary(nowMs: EpochMs) async -> [PendingSession] {
         do {
             let sessions = try store.sessionsNeedingSummary(nowMs: nowMs, limit: 10)
+            let timelineRepository = StoreTimelineRepository(store: store)
             return try sessions.map { session in
-                let evidence = try store.sessionEvidence(session.id)
-                let sourceHash = try store.sessionSourceHash(session.id)
+                let toMs = session.endedAtMs ?? session.lastActivityAtMs
+                let timeline = try TimelineBuilder(repo: timelineRepository).build(
+                    fromMs: session.startedAtMs,
+                    toMs: toMs
+                )
                 return PendingSession(
                     id: session.id,
                     appLabel: session.appLabel,
-                    evidence: evidence,
-                    expectedSourceHash: sourceHash
+                    timelineText: SessionSummaryInputBuilder.timelineText(timeline),
+                    expectedSourceHash: try store.sessionSourceHash(session.id)
                 )
             }
         } catch {
@@ -26,17 +34,14 @@ struct StoreActivitySummaryRepository: ActivitySummaryRepository, @unchecked Sen
     }
 
     func saveSummary(sessionID: String, summary: String, expectedSourceHash: String, nowMs: EpochMs) async {
-        do {
-            _ = try store.setSessionSummary(
-                sessionID,
-                summary: summary,
-                expectedSourceHash: expectedSourceHash,
-                modelID: modelID,
-                promptVersion: "v1",
-                nowMs: nowMs
-            )
-        } catch {
-        }
+        _ = try? store.setSessionSummary(
+            sessionID,
+            summary: summary,
+            expectedSourceHash: expectedSourceHash,
+            modelID: modelID,
+            promptVersion: ActivitySummaryPromptVersion.timeline,
+            nowMs: nowMs
+        )
     }
 
     func markFailed(sessionID: String, error: String, nowMs: EpochMs) async {

@@ -4,12 +4,10 @@ import MaxMiCore
 public struct DisplaySummarizer: Sendable {
     private let repo: any ActivitySummaryRepository
     private let relay: any ActivityGenerationRelay
-    private let maxEvidenceChars: Int
 
-    public init(repo: any ActivitySummaryRepository, relay: any ActivityGenerationRelay, maxEvidenceChars: Int = 12_000) {
+    public init(repo: any ActivitySummaryRepository, relay: any ActivityGenerationRelay) {
         self.repo = repo
         self.relay = relay
-        self.maxEvidenceChars = maxEvidenceChars
     }
 
     public func summarizeDue(nowMs: EpochMs) async {
@@ -17,7 +15,10 @@ public struct DisplaySummarizer: Sendable {
 
         for session in pending {
             do {
-                let summary = try await relay.summarizeSession(appLabel: session.appLabel, evidence: session.evidence)
+                let summary = try await relay.summarizeSession(
+                    appLabel: session.appLabel,
+                    timelineText: session.timelineText
+                )
                 await repo.saveSummary(sessionID: session.id, summary: summary, expectedSourceHash: session.expectedSourceHash, nowMs: nowMs)
             } catch {
                 SafeLogger.shared.log(

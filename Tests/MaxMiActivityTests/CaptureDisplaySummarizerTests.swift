@@ -19,10 +19,10 @@ private actor CaptureSummaryRepoMock: CaptureDisplaySummaryRepository {
 
 private actor CaptureSummaryRelayMock: CaptureDisplayGenerationRelay {
     var result: Result<String, Error> = .success("You're working on capture summaries.")
-    var requests: [(String, String?, CaptureContentKind, String)] = []
+    var requests: [CaptureSummaryPromptInput] = []
     func setResult(_ value: Result<String, Error>) { result = value }
-    func summarizeCapture(appLabel: String, sourceTitle: String?, contentKind: CaptureContentKind, content: String) async throws -> String {
-        requests.append((appLabel, sourceTitle, contentKind, content))
+    func summarizeCapture(_ input: CaptureSummaryPromptInput) async throws -> String {
+        requests.append(input)
         return try result.get()
     }
 }
@@ -31,9 +31,7 @@ final class CaptureDisplaySummarizerTests: XCTestCase {
     func testGeneratesAndSavesCleanSummary() async {
         let repo = CaptureSummaryRepoMock()
         let relay = CaptureSummaryRelayMock()
-        await repo.setPending([CaptureSummaryCandidate(
-            threadID: "t1", appLabel: "Cursor", content: "code", expectedSourceHash: "h1"
-        )])
+        await repo.setPending([meaningfulCaptureCandidate()])
         await relay.setResult(.success("  \"You're fixing MaxMi's capture menu.\"  "))
 
         await CaptureDisplaySummarizer(repo: repo, relay: relay).summarizeDue(nowMs: 1_000)
@@ -49,7 +47,16 @@ final class CaptureDisplaySummarizerTests: XCTestCase {
         let repo = CaptureSummaryRepoMock()
         let relay = CaptureSummaryRelayMock()
         await repo.setPending([CaptureSummaryCandidate(
-            threadID: "t2", appLabel: "Zen", content: "article", expectedSourceHash: "h2"
+            threadID: "t2", appLabel: "Zen", sourceTitle: nil, url: nil,
+            contentKind: .generic, capturedAt: 1, trigger: .periodic,
+            structured: .generic(.init(
+                regions: [.init(kind: .main, blocks: [.init(type: .paragraph, text: "article")])],
+                focused: nil,
+                url: nil
+            )),
+            delta: .empty,
+            typedText: nil,
+            expectedSourceHash: "h2"
         )])
         await relay.setResult(.failure(NSError(domain: "test", code: 1)))
 
@@ -61,28 +68,109 @@ final class CaptureDisplaySummarizerTests: XCTestCase {
         XCTAssertTrue(saved.isEmpty)
     }
 
-    func testConversationSummaryUsesTrailingMessages() async {
+    func testEmptyStructuredInputSavesLocalViewingFallbackWithoutCallingRelay() async {
         let repo = CaptureSummaryRepoMock()
         let relay = CaptureSummaryRelayMock()
-        let old = String(repeating: "Old message that must not drive the summary.\n", count: 300)
-        let recent = "Ava: Can you ship the capture fix today?\nYou: Yes, I will test it now."
         await repo.setPending([CaptureSummaryCandidate(
-            threadID: "chat",
-            appLabel: "WhatsApp",
-            sourceTitle: "Ava",
-            contentKind: .conversation,
-            content: old + recent,
+            threadID: "t1", appLabel: "Finder", sourceTitle: "Downloads", url: nil,
+            contentKind: .generic, capturedAt: 1_800_000_000_000, trigger: .periodic,
+            structured: .generic(.init(regions: [], focused: nil, url: nil)),
+            delta: .empty, typedText: nil, expectedSourceHash: "h1",
+            promptVersion: CaptureDisplaySummaryFormat.standard
+        )])
+
+        await CaptureDisplaySummarizer(repo: repo, relay: relay).summarizeDue(nowMs: 1_800_000_010_000)
+
+        let requestCount = await relay.requests.count
+        let saved = await repo.saved
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertEqual(saved.first?.1, "Viewing Finder: Downloads")
+    }
+
+    func testConversationCandidatePassesOnlyAddedMessagesToRelay() async throws {
+        let request = try await summarizedConversationRequest()
+        XCTAssertEqual(request.variant, .conversation)
+        XCTAssertFalse(request.renderedDelta.contains("old transcript"))
+        XCTAssertTrue(request.renderedDelta.contains("new message"))
+    }
+
+    func testRefusedSummarySavesViewingFallbackWithoutRecordingFailure() async {
+        let repo = CaptureSummaryRepoMock()
+        let relay = CaptureSummaryRelayMock()
+        await repo.setPending([meaningfulCaptureCandidate()])
+        await relay.setResult(.success("I cannot summarize that content."))
+
+        await CaptureDisplaySummarizer(repo: repo, relay: relay).summarizeDue(nowMs: 1)
+
+        let requestCount = await relay.requests.count
+        let saved = await repo.saved
+        let failures = await repo.failed
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(saved.first?.1, "Viewing Cursor: Plan.swift")
+        XCTAssertTrue(failures.isEmpty)
+    }
+
+    func testRefusalPredicateCoversEveryLocalFallbackCase() {
+        let refused = [
+            "",
+            "12345 !!!",
+            String(repeating: "a", count: 281),
+            "first paragraph\n\nsecond paragraph",
+            "I can't summarize this.",
+            "I CANNOT summarize this.",
+            "I'm unable to summarize this.",
+            "I am unable to summarize this.",
+            "As an AI, I cannot summarize this.",
+            "I'm sorry, but I cannot summarize this.",
+            "I am sorry, but I cannot summarize this.",
+        ]
+        XCTAssertTrue(refused.allSatisfy(CaptureDisplaySummarizer.isRefused))
+        XCTAssertFalse(CaptureDisplaySummarizer.isRefused("You reviewed the migration plan."))
+    }
+
+    private func meaningfulCaptureCandidate() -> CaptureSummaryCandidate {
+        CaptureSummaryCandidate(
+            threadID: "t1", appLabel: "Cursor", sourceTitle: "Plan.swift", url: nil,
+            contentKind: .document, capturedAt: 1, trigger: .periodic,
+            structured: .document(.init(
+                title: "Plan.swift",
+                blocks: [.init(type: .paragraph, text: "Review the migration plan.")],
+                author: .unknown,
+                url: nil
+            )),
+            delta: .empty,
+            typedText: nil,
+            expectedSourceHash: "h1"
+        )
+    }
+
+    private func summarizedConversationRequest() async throws -> CaptureSummaryPromptInput {
+        let repo = CaptureSummaryRepoMock()
+        let relay = CaptureSummaryRelayMock()
+        let old = Message(
+            id: "old", sender: "Teammate", text: "old transcript",
+            timestamp: nil, timeString: nil, isUser: false, isDraft: false
+        )
+        let new = Message(
+            id: "new", sender: "Teammate", text: "new message",
+            timestamp: nil, timeString: nil, isUser: false, isDraft: false
+        )
+        await repo.setPending([CaptureSummaryCandidate(
+            threadID: "chat", appLabel: "Chat", sourceTitle: "Project",
+            url: nil, contentKind: .conversation, capturedAt: 1,
+            trigger: .conversationChanged,
+            structured: .conversation(.init(
+                channel: "Project", isGroup: true, messages: [old, new]
+            )),
+            delta: .init(addedMessages: [new]),
+            typedText: nil,
             expectedSourceHash: "h-chat",
             promptVersion: CaptureDisplaySummaryFormat.recentConversation
         )])
 
         await CaptureDisplaySummarizer(repo: repo, relay: relay).summarizeDue(nowMs: 1_000)
 
-        let request = await relay.requests.first
-        XCTAssertEqual(request?.0, "WhatsApp")
-        XCTAssertEqual(request?.1, "Ava")
-        XCTAssertEqual(request?.2, .conversation)
-        XCTAssertTrue(request?.3.contains("ship the capture fix") == true)
-        XCTAssertFalse(request?.3.contains("Old message") == true)
+        let requests = await relay.requests
+        return try XCTUnwrap(requests.first)
     }
 }

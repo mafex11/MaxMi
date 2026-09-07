@@ -239,10 +239,9 @@ final class AppWiring {
         let activityRepo = StoreActivitySummaryRepository(store: store, modelID: config.extractModel)
         let activityRelay = GeminiActivityRelay(
             geminiClient: relay,
-            maxEvidenceChars: 12_000,
             modelID: config.extractModel
         )
-        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay, maxEvidenceChars: 12_000)
+        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay)
         captureDisplaySummarizer = CaptureDisplaySummarizer(
             repo: StoreCaptureSummaryRepository(store: store, modelID: config.extractModel),
             relay: activityRelay

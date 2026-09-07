@@ -5,25 +5,40 @@ public struct CaptureSummaryCandidate: Sendable, Equatable {
     public let threadID: String
     public let appLabel: String
     public let sourceTitle: String?
+    public let url: String?
     public let contentKind: CaptureContentKind
-    public let content: String
+    public let capturedAt: EpochMs
+    public let trigger: CaptureTrigger
+    public let structured: CapturedContent
+    public let delta: CaptureDelta
+    public let typedText: String?
     public let expectedSourceHash: String
     public let promptVersion: String
 
     public init(
         threadID: String,
         appLabel: String,
-        sourceTitle: String? = nil,
-        contentKind: CaptureContentKind = .generic,
-        content: String,
+        sourceTitle: String?,
+        url: String?,
+        contentKind: CaptureContentKind,
+        capturedAt: EpochMs,
+        trigger: CaptureTrigger,
+        structured: CapturedContent,
+        delta: CaptureDelta,
+        typedText: String?,
         expectedSourceHash: String,
         promptVersion: String = CaptureDisplaySummaryFormat.standard
     ) {
         self.threadID = threadID
         self.appLabel = appLabel
         self.sourceTitle = sourceTitle
+        self.url = url
         self.contentKind = contentKind
-        self.content = content
+        self.capturedAt = capturedAt
+        self.trigger = trigger
+        self.structured = structured
+        self.delta = delta
+        self.typedText = typedText
         self.expectedSourceHash = expectedSourceHash
         self.promptVersion = promptVersion
     }
@@ -46,12 +61,7 @@ public protocol CaptureDisplaySummaryRepository: Sendable {
 }
 
 public protocol CaptureDisplayGenerationRelay: Sendable {
-    func summarizeCapture(
-        appLabel: String,
-        sourceTitle: String?,
-        contentKind: CaptureContentKind,
-        content: String
-    ) async throws -> String
+    func summarizeCapture(_ input: CaptureSummaryPromptInput) async throws -> String
 }
 
 public struct CaptureDisplaySummarizer: Sendable {
@@ -68,24 +78,33 @@ public struct CaptureDisplaySummarizer: Sendable {
 
     public func summarizeDue(nowMs: EpochMs) async {
         for capture in await repo.capturesNeedingSummary(nowMs: nowMs) {
-            guard capture.content != "[unreadable memory]" else {
-                await repo.markCaptureSummaryFailed(
-                    threadID: capture.threadID,
-                    expectedSourceHash: capture.expectedSourceHash,
-                    nowMs: nowMs
-                )
-                continue
-            }
             do {
-                let content = Self.summaryInput(for: capture)
-                let generated = try await relay.summarizeCapture(
+                let input = CaptureSummaryInputBuilder.build(
                     appLabel: capture.appLabel,
                     sourceTitle: capture.sourceTitle,
+                    url: capture.url,
                     contentKind: capture.contentKind,
-                    content: content
+                    capturedAt: capture.capturedAt,
+                    trigger: capture.trigger,
+                    structured: capture.structured,
+                    delta: capture.delta,
+                    typedText: capture.typedText
                 )
-                let summary = Self.clean(generated)
-                guard !summary.isEmpty else { throw EmptySummaryError() }
+                let fallback = CaptureDisplaySummaryFormat.fallback(
+                    app: capture.appLabel,
+                    title: capture.sourceTitle
+                )
+                let summary: String
+                if !input.hasMeaningfulContent {
+                    summary = fallback
+                } else {
+                    let generated = try await relay.summarizeCapture(input)
+                    let cleaned = Self.clean(generated)
+                    summary = Self.isRefused(cleaned)
+                        || CaptureDisplaySummaryFormat.isChromeOnly(cleaned)
+                        ? fallback
+                        : cleaned
+                }
                 await repo.saveCaptureSummary(
                     threadID: capture.threadID,
                     summary: summary,
@@ -115,29 +134,25 @@ public struct CaptureDisplaySummarizer: Sendable {
             result.removeFirst()
             result.removeLast()
         }
-        return String(result.prefix(280))
+        return result
     }
 
-    /// A conversation summary must describe the newest exchange, not the beginning
-    /// of an accumulated thread. Keep complete trailing message lines so the prompt
-    /// never begins in the middle of a message.
-    static func summaryInput(for capture: CaptureSummaryCandidate) -> String {
-        guard capture.contentKind == .conversation else { return capture.content }
-        return trailingLines(in: capture.content, maxCharacters: 8_000)
+    static func isRefused(_ summary: String) -> Bool {
+        let lower = summary.lowercased()
+        let letters = lower.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        let refusalPhrases = [
+            "i can't",
+            "i cannot",
+            "i'm unable",
+            "i am unable",
+            "as an ai",
+            "i'm sorry",
+            "i am sorry",
+        ]
+        return summary.isEmpty
+            || letters.isEmpty
+            || summary.count > 280
+            || lower.range(of: #"\n[ \t\r]*\n"#, options: .regularExpression) != nil
+            || refusalPhrases.contains { lower.contains($0) }
     }
-
-    private static func trailingLines(in content: String, maxCharacters: Int) -> String {
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
-        var retained: [Substring] = []
-        var count = 0
-        for line in lines.reversed() {
-            let added = line.count + 1
-            if count + added > maxCharacters, !retained.isEmpty { break }
-            retained.append(line)
-            count += added
-        }
-        return retained.reversed().joined(separator: "\n")
-    }
-
-    private struct EmptySummaryError: Error {}
 }

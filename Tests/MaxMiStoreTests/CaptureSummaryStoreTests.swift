@@ -78,6 +78,102 @@ final class CaptureSummaryStoreTests: XCTestCase {
         ]))
     }
 
+    func testPendingContextCarriesStructuredDeltaAndTypedText() throws {
+        let structured = CapturedContent.generic(.init(
+            regions: [.init(
+                kind: .main,
+                blocks: [.init(type: .paragraph, text: "Current document text.")]
+            )],
+            focused: nil,
+            url: nil
+        ))
+        let capture = CaptureEnvelope(
+            sourceApp: "TestApp",
+            sourceKey: "test:structured",
+            sourceTitle: "Test document",
+            content: "ignored",
+            contentKind: .generic,
+            parserID: "TestParser",
+            parserVersion: 1,
+            accumulationPolicy: .replace,
+            offscreenPolicy: .visibleOnly(),
+            trigger: .periodic,
+            truncated: false,
+            structured: structured
+        )
+        let result = try store.commitCapture(capture, nowMs: t0)
+        guard case let .committed(versionID, _, _) = result else {
+            return XCTFail("Expected a committed capture.")
+        }
+        let threadID = try XCTUnwrap(
+            store.threadID(sourceApp: "TestApp", sourceKey: "test:structured")
+        )
+        let earlierDelta = CaptureDelta(addedBlocks: [
+            .init(type: .paragraph, text: "Earlier text."),
+        ])
+        let delta = CaptureDelta(addedBlocks: [
+            .init(type: .paragraph, text: "Newly added text."),
+        ])
+        try store.recordCaptureEvent(
+            kind: .contentDelta,
+            appBundle: "test.bundle",
+            threadID: threadID,
+            versionID: versionID,
+            trigger: .periodic,
+            payload: earlierDelta,
+            nowMs: t0
+        )
+        try store.recordCaptureEvent(
+            kind: .contentDelta,
+            appBundle: "test.bundle",
+            threadID: threadID,
+            versionID: versionID,
+            trigger: .periodic,
+            payload: delta,
+            nowMs: t0 + 1
+        )
+        try store.recordCaptureEvent(
+            kind: .typing,
+            appBundle: "test.bundle",
+            threadID: threadID,
+            versionID: versionID,
+            trigger: .periodic,
+            payload: TypingEvent(
+                insertedText: "older draft",
+                fieldRole: "AXTextArea",
+                fieldIdentifier: nil,
+                totalLength: 11,
+                replaced: false
+            ),
+            nowMs: t0
+        )
+        try store.recordCaptureEvent(
+            kind: .typing,
+            appBundle: "test.bundle",
+            threadID: threadID,
+            versionID: versionID,
+            trigger: .periodic,
+            payload: TypingEvent(
+                insertedText: "draft reply",
+                fieldRole: "AXTextArea",
+                fieldIdentifier: nil,
+                totalLength: 11,
+                replaced: false
+            ),
+            nowMs: t0 + 1
+        )
+
+        let candidate = try XCTUnwrap(
+            store.captureContextsNeedingSummary(nowMs: t0 + 11_000).first
+        )
+
+        XCTAssertEqual(candidate.structured, structured)
+        XCTAssertEqual(candidate.delta, delta)
+        XCTAssertEqual(candidate.typedText, "draft reply")
+        XCTAssertEqual(candidate.capturedAt, t0)
+        XCTAssertEqual(candidate.trigger, .periodic)
+    }
+
     private func seedLatestContext(
         sourceApp: String,
         contentKind: CaptureContentKind,
