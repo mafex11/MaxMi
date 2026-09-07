@@ -62,16 +62,22 @@ public enum CaptureSummaryInputBuilder {
         trigger: CaptureTrigger,
         structured: CapturedContent,
         delta: CaptureDelta,
-        typedText: String?
+        typedText: String?,
+        timeZone: TimeZone = .current
     ) -> CaptureSummaryPromptInput {
         let formatter = ISO8601DateFormatter()
-        formatter.timeZone = .current
+        formatter.timeZone = timeZone
         let iso = formatter.string(
             from: Date(timeIntervalSince1970: Double(capturedAt) / 1_000)
         )
 
         if case .conversation(let conversation) = structured {
-            let messages = CaptureDeltaRenderer.render(delta, maxChars: 1_500)
+            let messages = String(
+                delta.addedMessages
+                    .map(ContentRenderer.renderMessage)
+                    .joined(separator: "\n")
+                    .prefix(1_500)
+            )
             return CaptureSummaryPromptInput(
                 variant: .conversation,
                 appLabel: appLabel,

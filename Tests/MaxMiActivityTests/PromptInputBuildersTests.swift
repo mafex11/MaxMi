@@ -22,7 +22,8 @@ final class PromptInputBuildersTests: XCTestCase {
             delta: CaptureDelta(addedBlocks: [
                 .init(type: .paragraph, text: String(repeating: "D", count: 1_700)),
             ]),
-            typedText: String(repeating: "T", count: 600)
+            typedText: String(repeating: "T", count: 600),
+            timeZone: TimeZone(identifier: "UTC")!
         )
 
         XCTAssertEqual(input.variant, .action)
@@ -31,7 +32,7 @@ final class PromptInputBuildersTests: XCTestCase {
         XCTAssertLessThanOrEqual(input.typedText.count, 500)
         XCTAssertEqual(input.url, "https://example.test/plan")
         XCTAssertTrue(input.hasMeaningfulContent)
-        XCTAssertFalse(input.capturedAtISO8601.isEmpty)
+        XCTAssertEqual(input.capturedAtISO8601, "2027-01-15T08:00:00Z")
     }
 
     func testConversationInputContainsOnlyAddedMessagesAndConversationMetadata() {
@@ -44,7 +45,8 @@ final class PromptInputBuildersTests: XCTestCase {
             contentKind: .conversation, capturedAt: 1_800_000_000_000,
             trigger: .conversationChanged,
             structured: .conversation(.init(channel: "#maxmi-dev", isGroup: true, messages: [old, new])),
-            delta: CaptureDelta(addedMessages: [new]), typedText: nil
+            delta: CaptureDelta(addedMessages: [new]), typedText: nil,
+            timeZone: TimeZone(identifier: "UTC")!
         )
 
         XCTAssertEqual(input.variant, .conversation)
@@ -53,5 +55,42 @@ final class PromptInputBuildersTests: XCTestCase {
         XCTAssertFalse(input.renderedDelta.contains("old transcript"))
         XCTAssertEqual(input.channel, "#maxmi-dev")
         XCTAssertEqual(input.isGroup, true)
+        XCTAssertEqual(input.capturedAtISO8601, "2027-01-15T08:00:00Z")
+    }
+
+    func testConversationInputIgnoresNonMessageDeltaParts() {
+        let conversation = CapturedContent.conversation(
+            .init(channel: "#maxmi-dev", isGroup: true, messages: [])
+        )
+        let emptyMessageInput = CaptureSummaryInputBuilder.build(
+            appLabel: "Slack", sourceTitle: "maxmi-dev", url: nil,
+            contentKind: .conversation, capturedAt: 1_800_000_000_000,
+            trigger: .conversationChanged,
+            structured: conversation,
+            delta: CaptureDelta(addedBlocks: [.init(type: .paragraph, text: "block-only delta")]),
+            typedText: nil,
+            timeZone: TimeZone(identifier: "UTC")!
+        )
+        let message = Message(
+            id: "new", sender: "You", text: "message-only delta", timestamp: nil,
+            timeString: "09:05", isUser: true, isDraft: false
+        )
+        let mixedInput = CaptureSummaryInputBuilder.build(
+            appLabel: "Slack", sourceTitle: "maxmi-dev", url: nil,
+            contentKind: .conversation, capturedAt: 1_800_000_000_000,
+            trigger: .conversationChanged,
+            structured: conversation,
+            delta: CaptureDelta(
+                addedBlocks: [.init(type: .paragraph, text: "block portion must not render")],
+                addedMessages: [message]
+            ),
+            typedText: nil,
+            timeZone: TimeZone(identifier: "UTC")!
+        )
+
+        XCTAssertTrue(emptyMessageInput.renderedDelta.isEmpty)
+        XCTAssertFalse(emptyMessageInput.hasMeaningfulContent)
+        XCTAssertTrue(mixedInput.renderedDelta.contains("message-only delta"))
+        XCTAssertFalse(mixedInput.renderedDelta.contains("block portion must not render"))
     }
 }
