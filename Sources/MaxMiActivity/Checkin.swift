@@ -122,6 +122,10 @@ public struct CheckinInputBuilder: Sendable {
         self.dayBucket = dayBucket
     }
 
+    public func dayBucket(nowMs: EpochMs) -> Int64 {
+        dayBucket(nowMs, timeZone)
+    }
+
     public func build(nowMs: EpochMs) async throws -> (dayBucket: Int64, input: DailyCheckinInput) {
         let effectiveNowMs = nowMs
         let now = Date(timeIntervalSince1970: Double(effectiveNowMs) / 1_000)
@@ -134,7 +138,7 @@ public struct CheckinInputBuilder: Sendable {
         let todayStartMs = EpochMs(todayStart.timeIntervalSince1970 * 1_000)
         let yesterdayFromMs = EpochMs(yesterdayStart.timeIntervalSince1970 * 1_000)
         let yesterdayToMs = todayStartMs - 1
-        let todayBucket = dayBucket(effectiveNowMs, timeZone)
+        let todayBucket = dayBucket(nowMs: effectiveNowMs)
         let timeline = try? TimelineBuilder(repo: repo).build(
             fromMs: yesterdayFromMs,
             toMs: yesterdayToMs
@@ -189,7 +193,7 @@ private enum CheckinGenerationError: Error {
     case refusalOrEmptyResponse
 }
 
-public actor DailyCheckinGenerator {
+public actor DailyCheckinGenerator: CheckinGenerating {
     public static let promptVersion = "checkin-v1"
 
     private let repo: any CheckinRepository
@@ -217,7 +221,12 @@ public actor DailyCheckinGenerator {
             logFailure(operation: "checkin_input_failed")
             return
         }
-        guard await repo.currentCheckin(dayBucket: built.dayBucket) == nil else { return }
+        let existing = await repo.currentCheckin(dayBucket: built.dayBucket)
+        guard CheckinSchedule.isAutomaticGenerationEligible(
+            nowMs: nowMs,
+            timeZone: timeZone,
+            hasCheckinForToday: existing != nil
+        ) else { return }
 
         let retryState = await repo.retryState(dayBucket: built.dayBucket)
         if let nextAttemptAtMs = retryState.nextAttemptAtMs, nextAttemptAtMs > nowMs {
@@ -225,6 +234,11 @@ public actor DailyCheckinGenerator {
         }
 
         await generate(built: built, nowMs: nowMs)
+    }
+
+    public func hasCheckinForToday(nowMs: EpochMs) async -> Bool {
+        let dayBucket = builder.dayBucket(nowMs: nowMs)
+        return await repo.currentCheckin(dayBucket: dayBucket) != nil
     }
 
     public func regenerate(nowMs: EpochMs) async {
