@@ -54,4 +54,37 @@ public enum EventPrivacyGate {
         }
         return allowed
     }
+
+    /// Resolves policy from a URL that a prior browser capture already established. `snapshot` is
+    /// an explicit regression seam: this privacy gate must never take an AX snapshot as a fallback.
+    public static func decision(
+        bundleID: String,
+        isAppEligible: Bool,
+        browserURLLookup: () -> String?,
+        snapshot: () -> Void,
+        blockedDomains: Set<String>
+    ) -> Decision {
+        decision(
+            bundleID: bundleID,
+            isAppEligible: isAppEligible,
+            browserURL: browserURLLookup(),
+            blockedDomains: blockedDomains
+        )
+    }
+
+    /// Resolves policy from the browser window's already-known URL. Missing context remains
+    /// fail-closed for typing and redacts focus titles.
+    public static func decision(
+        bundleID: String,
+        isAppEligible: Bool,
+        browserURLLookup: () -> String?,
+        blockedDomains: Set<String>
+    ) -> Decision {
+        decision(
+            bundleID: bundleID,
+            isAppEligible: isAppEligible,
+            browserURL: browserURLLookup(),
+            blockedDomains: blockedDomains
+        )
+    }
 }

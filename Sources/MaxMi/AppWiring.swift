@@ -73,6 +73,19 @@ fileprivate func maxMiProcessCount(matching pattern: String) -> Int {
     }
 }
 
+/// A URL is safe to reuse only for the same browser window. Windows without a stable CGWindowID
+/// deliberately have no key, so the privacy gate fails closed rather than guessing from a title.
+struct BrowserWindowKey: Hashable {
+    let bundleID: String
+    let windowID: UInt32
+
+    init?(app: AppInfo) {
+        guard let windowID = app.windowID else { return nil }
+        self.bundleID = app.bundleID
+        self.windowID = windowID
+    }
+}
+
 @MainActor
 fileprivate func openPrivacySettings(_ pane: String) {
     guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
@@ -132,6 +145,10 @@ final class AppWiring {
     /// only, bounded to `TypingObserver.maxTrackedFields` entries, cleared on shutdown.
     var typingThreadIDs: [TypingThreadKey: String] = [:]
     var typingThreadIDOrder: [TypingThreadKey] = []
+    /// Most recent successfully captured browser URL per stable window. This is the only browser
+    /// URL source used by focus/typing event policy; it avoids an AX tree walk on those paths.
+    var lastBrowserURLs: [BrowserWindowKey: String] = [:]
+    var lastBrowserURLOrder: [BrowserWindowKey] = []
     let menuBar: MenuBarController
     var pipelineTimer: Timer?
     var captureSummaryTimer: Timer?
@@ -1102,8 +1119,14 @@ final class AppWiring {
         // Open new visit ONLY if eligible
         let activityEligible = isActivityEligible(bundleID: app.bundleID)
         guard activityEligible else { return }
+        let privacyApp = AppInfo(
+            bundleID: app.bundleID,
+            name: app.name,
+            windowTitle: nil,
+            windowID: AXReader.focusedWindowID(pid: pid)
+        )
         let privacyDecision = eventPrivacyDecision(
-            app: app, pid: pid, isAppEligible: activityEligible)
+            app: privacyApp, isAppEligible: activityEligible)
 
         do {
             let visitID = try store.openVisit(appBundle: app.bundleID, appLabel: app.name, nowMs: nowMs)
@@ -1142,13 +1165,11 @@ final class AppWiring {
         }
     }
 
-    /// Resolve browser URL policy before writing a focus/typing event. `BrowserTabExtractor` is
-    /// deliberately used rather than a title heuristic: the AX web-area URL is the same source
-    /// the browser capture path trusts. A missing browser snapshot/URL is passed as nil so the
-    /// shared gate fails closed for typing and redacts a focus title.
+    /// Resolve browser URL policy from the most recent capture for this exact browser window.
+    /// The gate never walks an AX tree: a missing stable window id or remembered URL fails closed
+    /// for typing and redacts a focus title.
     private func eventPrivacyDecision(
         app: AppInfo,
-        pid: pid_t,
         isAppEligible: Bool
     ) -> EventPrivacyGate.Decision {
         guard isAppEligible else {
@@ -1158,7 +1179,7 @@ final class AppWiring {
                 browserURL: nil,
                 blockedDomains: [])
         }
-        guard let browser = ApplicationRegistry.browser(for: app.bundleID) else {
+        guard ApplicationRegistry.isBrowser(app.bundleID) else {
             return EventPrivacyGate.decision(
                 bundleID: app.bundleID,
                 isAppEligible: true,
@@ -1178,17 +1199,10 @@ final class AppWiring {
                 browserURL: nil,
                 blockedDomains: [])
         }
-        let browserURL = AXReader.snapshotFrontmostWindow(pid: pid).flatMap { snapshot in
-            BrowserTabExtractor.currentURL(
-                window: snapshot.window,
-                windowTitle: snapshot.title,
-                engine: browser.browserEngine
-            )
-        }
         return EventPrivacyGate.decision(
             bundleID: app.bundleID,
             isAppEligible: true,
-            browserURL: browserURL,
+            browserURLLookup: { self.lastBrowserURL(for: app) },
             blockedDomains: blockedDomains
         )
     }
@@ -1279,6 +1293,8 @@ final class AppWiring {
         typingObserver = nil
         typingThreadIDs.removeAll()
         typingThreadIDOrder.removeAll()
+        lastBrowserURLs.removeAll()
+        lastBrowserURLOrder.removeAll()
         meetingDetector?.stop()
         meetingDetector = nil
 
@@ -1697,6 +1713,9 @@ final class AppWiring {
                 truncated: wasTruncated
             )
             let result = try store.commitCapture(envelope, nowMs: nowMs)
+            if let browserURL {
+                rememberBrowserURL(browserURL, for: appInfo)
+            }
 
             // After normal memory capture commits, record activity evidence ONLY if generation matches AND committed (not deduplicated)
             let eligible = isActivityEligible(bundleID: appInfo.bundleID)
@@ -1982,11 +2001,16 @@ final class AppWiring {
     /// an assistive client asks. Never called directly from the notification —
     /// `handleValueChangeNotification` gates it first.
     private func pollFocusedFieldTyping(bundleID: String, pid: pid_t) {
+        let privacyApp = AppInfo(
+            bundleID: bundleID,
+            name: bundleID,
+            windowTitle: nil,
+            windowID: AXReader.focusedWindowID(pid: pid)
+        )
         guard !isShuttingDown, !isLifecycleSuspended,
               isActivityEligible(bundleID: bundleID),
               eventPrivacyDecision(
-                app: AppInfo(bundleID: bundleID, name: bundleID, windowTitle: nil),
-                pid: pid,
+                app: privacyApp,
                 isAppEligible: true
               ).writesTypingEvent,
               let node = AXReader.focusedElementSnapshot(pid: pid) else { return }
@@ -2000,7 +2024,7 @@ final class AppWiring {
             // notification a first sighting, and emit nothing for that app forever. Both calls
             // read `kAXTitleAttribute` of the same focused window, so the titles agree.
             windowTitle: AXReader.focusedWindowTitle(pid: pid),
-            windowID: AXReader.focusedWindowID(pid: pid)
+            windowID: privacyApp.windowID
         )
         recordTypingEvent(app: app, pid: pid, focused: FocusedElement(node: node),
                           trigger: .accessibilityChanged, threadID: nil, versionID: nil)
@@ -2020,7 +2044,7 @@ final class AppWiring {
         guard let typingObserver, !focused.isSecure, !isShuttingDown, !isLifecycleSuspended,
               isActivityEligible(bundleID: app.bundleID),
               eventPrivacyDecision(
-                app: app, pid: pid, isAppEligible: true).writesTypingEvent else { return }
+                app: app, isAppEligible: true).writesTypingEvent else { return }
         let fieldKey = FocusedFieldKey(app: app, focused: focused)
         let threadKey = TypingThreadKey(fieldKey: fieldKey)
         // The capture path knows the thread; the poll path does not, because no capture ran. Reuse
@@ -2041,7 +2065,6 @@ final class AppWiring {
                 observedEvent,
                 isActivityEligible: self.eventPrivacyDecision(
                     app: app,
-                    pid: pid,
                     isAppEligible: self.isActivityEligible(bundleID: app.bundleID)
                 ).writesTypingEvent,
                 isObserverActive: self.typingObserver != nil,
@@ -2073,6 +2096,22 @@ final class AppWiring {
         typingThreadIDs[key] = threadID
         while typingThreadIDOrder.count > TypingObserver.maxTrackedFields {
             typingThreadIDs[typingThreadIDOrder.removeFirst()] = nil
+        }
+    }
+
+    private func lastBrowserURL(for app: AppInfo) -> String? {
+        guard let key = BrowserWindowKey(app: app) else { return nil }
+        return lastBrowserURLs[key]
+    }
+
+    /// Most-recently-used last, with the same small in-memory bound as typing state.
+    private func rememberBrowserURL(_ url: String, for app: AppInfo) {
+        guard let key = BrowserWindowKey(app: app) else { return }
+        lastBrowserURLOrder.removeAll { $0 == key }
+        lastBrowserURLOrder.append(key)
+        lastBrowserURLs[key] = url
+        while lastBrowserURLOrder.count > TypingObserver.maxTrackedFields {
+            lastBrowserURLs[lastBrowserURLOrder.removeFirst()] = nil
         }
     }
 

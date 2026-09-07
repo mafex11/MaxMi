@@ -49,4 +49,58 @@ final class EventPrivacyGateTests: XCTestCase {
         XCTAssertTrue(decision.writesTypingEvent)
         XCTAssertTrue(decision.includesFocusWindowTitle)
     }
+
+    func testKnownAllowedURLUsesLookupWithoutSnapshotting() {
+        var snapshotCalls = 0
+        let decision = EventPrivacyGate.decision(
+            bundleID: browserBundleID,
+            isAppEligible: true,
+            browserURLLookup: { "https://swift.org/documentation" },
+            snapshot: { snapshotCalls += 1 },
+            blockedDomains: []
+        )
+
+        XCTAssertEqual(decision, EventPrivacyGate.Decision(
+            writesFocusEvent: true,
+            writesTypingEvent: true,
+            includesFocusWindowTitle: true
+        ))
+        XCTAssertEqual(snapshotCalls, 0)
+    }
+
+    func testKnownBlockedURLUsesLookupWithoutSnapshotting() {
+        var snapshotCalls = 0
+        let decision = EventPrivacyGate.decision(
+            bundleID: browserBundleID,
+            isAppEligible: true,
+            browserURLLookup: { "https://accounts.google.com/signin" },
+            snapshot: { snapshotCalls += 1 },
+            blockedDomains: []
+        )
+
+        XCTAssertEqual(decision, EventPrivacyGate.Decision(
+            writesFocusEvent: false,
+            writesTypingEvent: false,
+            includesFocusWindowTitle: false
+        ))
+        XCTAssertEqual(snapshotCalls, 0)
+    }
+
+    func testUnknownURLFailsClosedWithoutSnapshotting() {
+        var snapshotCalls = 0
+        let decision = EventPrivacyGate.decision(
+            bundleID: browserBundleID,
+            isAppEligible: true,
+            browserURLLookup: { nil },
+            snapshot: { snapshotCalls += 1 },
+            blockedDomains: []
+        )
+
+        XCTAssertEqual(decision, EventPrivacyGate.Decision(
+            writesFocusEvent: true,
+            writesTypingEvent: false,
+            includesFocusWindowTitle: false
+        ))
+        XCTAssertEqual(snapshotCalls, 0)
+    }
 }
