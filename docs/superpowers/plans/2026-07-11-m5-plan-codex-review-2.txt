@@ -658,7 +658,7 @@ public enum RightLanePlacement {
 
 **Files:** none. Do NOT run as a subagent.
 
-- [ ] **Step 1: Rebuild + relaunch** (grant persists; no tccutil reset): `./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"; sleep 2; open MaxMi.app`. Grant Microphone + Screen Recording when first prompted (on first Record).
+- [ ] **Step 1: Rebuild + relaunch** (grant persists; no tccutil reset): `./packaging/make-app.sh && pkill -9 -x MaxMi; sleep 2; open MaxMi.app`. Grant Microphone + Screen Recording when first prompted (on first Record).
 - [ ] **Step 2: Model readiness** — first enable: confirm the popup shows "Preparing transcription…" then arms Record once `ggml-base` is downloaded+verified.
 - [ ] **Step 3: Detection + popup** — join a Zoom (or Meet in Chrome) call → right-edge popup appears within a few seconds, buttons clickable, floats over fullscreen Zoom on the correct screen, doesn't steal focus.
 - [ ] **Step 4: Record path** — click Record, speak for 2+ min (ideally test a 30+ min call once), click Stop → verify:

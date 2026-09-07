@@ -353,7 +353,7 @@ public struct SessionRow: Identifiable, Sendable {           // precomputed for 
 
 **Files:** none. Do NOT run as a subagent.
 
-- [ ] **Step 1: Rebuild + relaunch** (grant persists): `./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"; sleep 2; open MaxMi.app`. Confirm the **dog icon** in the menu bar + Finder.
+- [ ] **Step 1: Rebuild + relaunch** (grant persists): `./packaging/make-app.sh && pkill -9 -x MaxMi; sleep 2; open MaxMi.app`. Confirm the **dog icon** in the menu bar + Finder.
 - [ ] **Step 2: Consent + privacy** — on first run the Activity Privacy sheet appears; enable synthesis; exclude one app and confirm no rows appear for it.
 - [ ] **Step 3: Generate activity** — use several apps (Cursor, Chrome, Slack) for a few minutes each with gaps between. A session summary needs the session to CLOSE (app switch or 5-min idle) THEN the 30s sweep + a Gemini round-trip — so **wait/poll** (up to ~2 min) before expecting summaries, don't check instantly.
 - [ ] **Step 4: Open the window** — left-click the dog → Activity window opens showing a timeline grouped by Today, rows like "Cursor · <summary> · Xm ago"; smooth scroll/animation; tap a row → evidence/"why am I seeing this"; right-click → menu. Poll until summarized:

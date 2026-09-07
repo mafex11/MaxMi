@@ -23,11 +23,10 @@ This produces `MaxMi.app` in the repo root. The app bundle is gitignored.
 
 2. Launch `MaxMi.app`. Grant Accessibility permission when prompted.
 
-3. **Important:** MaxMi is signed with an Apple Development identity. Signed builds retain their Accessibility grant across rebuilds. ONE final re-grant is needed when upgrading from an ad-hoc build:
-   ```bash
-   tccutil reset Accessibility dev.mafex.maxmi
-   ```
-   Then launch the app again and grant the permission.
+3. **Important:** MaxMi is signed with an Apple Development identity. Signed builds retain
+   their Accessibility grant across rebuilds. Do not run `tccutil reset` as part of a rebuild:
+   it revokes that grant. If MaxMi is not authorized, enable it manually in System Settings,
+   then relaunch the app.
 
 For distribution, do not commit a production provider key or assume an app-bundled key is secret:
 credentials in a macOS app can be extracted. Use a controlled backend relay with per-install

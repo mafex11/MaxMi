@@ -38,7 +38,7 @@ Every task's requirements implicitly include this section. Values are copied ver
 - **`MaxMiActivity` depends only on `MaxMiCore`** (`Package.swift`). It must not import GRDB, `MaxMiStore`, or `MaxMiCapture`. `TimelineBuilder` therefore reaches the database only through a `TimelineRepository` protocol whose concrete adapter lives in `Sources/MaxMi/StoreTimelineRepository.swift`, following `ActivitySummaryRepository`/`AgentRepository`.
 - **Fixtures are hand-scrubbed.** Never commit real page text, messages, file contents, URLs, names, emails, paths, or tokens (`Tests/MaxMiCaptureTests/Fixtures/README.md`). Every new fixture gets a row in that README's table.
 - **Commit messages are plain imperative** ("Add capture_events migration v11"). **No `Co-Authored-By` trailers, no AI attribution anywhere** — not in commit messages, code comments, or docs.
-- **Live verification ritual** (§9, unchanged): `./packaging/make-app.sh`, then `pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"`, then `open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
+- **Live verification ritual** (§9, unchanged): `./packaging/make-app.sh`, then `pkill -9 -x MaxMi`, then `open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
 
 ### Rulings that resolve spec text against the merged code
 
@@ -4844,7 +4844,7 @@ branch `main` and does not contain any of this work:
 cd /Users/mafex/code/personal/MaxMi/.worktrees/m8b-deltas-events-typing
 git rev-parse --abbrev-ref HEAD   # must print m8b-deltas-events-typing
 ./packaging/make-app.sh
-pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi" || true
+pkill -9 -x MaxMi || true
 sleep 2
 open MaxMi.app
 START_MS=$(( $(date +%s) * 1000 ))

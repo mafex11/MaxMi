@@ -48,7 +48,7 @@ Every task's requirements implicitly include this section. Values are copied ver
 - **No change to the MCP tool surface** (§4g). `search_memory`, `list_active_threads`, `get_latest_context` keep their shapes and keep reading `content`.
 - **Secure fields are never read** — the value is not fetched, not merely not stored (§8). No parser in this plan reads the `value` of a node whose `subrole == "AXSecureTextField"`.
 - **Commit messages are plain imperative** ("Add AXQuery path grammar"). **No `Co-Authored-By` trailers, no AI attribution anywhere** — not in commit messages, code comments, or docs.
-- **Live verification ritual** (§9, unchanged): `./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi" && sleep 2 && open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
+- **Live verification ritual** (§9, unchanged): `./packaging/make-app.sh && pkill -9 -x MaxMi && sleep 2 && open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
 
 ### What Phase D changes about Phase A's parsers
 
@@ -6714,7 +6714,7 @@ Expected: no warning lines (spec §11 item 10: "zero warnings").
 Run, exactly as written — **no `tccutil reset`**, because a signed build keeps its Accessibility grant across rebuilds and resetting it would silently break capture:
 
 ```bash
-./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi" && sleep 2 && open MaxMi.app
+./packaging/make-app.sh && pkill -9 -x MaxMi && sleep 2 && open MaxMi.app
 ```
 
 Note the wall-clock time of the `open`. Every verification below must be confirmed against a capture whose timestamp is **strictly after** that moment; an older row proves nothing.
