@@ -109,18 +109,15 @@ public enum CheckinInputBuildError: Error, Sendable {
 
 public struct CheckinInputBuilder: Sendable {
     private let repo: any CheckinRepository
-    private let clock: @Sendable () -> EpochMs
     private let timeZone: TimeZone
     private let dayBucket: @Sendable (EpochMs, TimeZone) -> Int64
 
     public init(
         repo: any CheckinRepository,
-        clock: @escaping @Sendable () -> EpochMs,
         timeZone: TimeZone,
         dayBucket: @escaping @Sendable (EpochMs, TimeZone) -> Int64
     ) {
         self.repo = repo
-        self.clock = clock
         self.timeZone = timeZone
         self.dayBucket = dayBucket
     }
@@ -213,19 +210,32 @@ public actor DailyCheckinGenerator {
     }
 
     public func generateIfMissing(nowMs: EpochMs) async {
-        let dayBucket = localDayBucket(nowMs: nowMs)
-        guard await repo.currentCheckin(dayBucket: dayBucket) == nil else { return }
+        let built: (dayBucket: Int64, input: DailyCheckinInput)
+        do {
+            built = try await builder.build(nowMs: nowMs)
+        } catch {
+            logFailure(operation: "checkin_input_failed")
+            return
+        }
+        guard await repo.currentCheckin(dayBucket: built.dayBucket) == nil else { return }
 
-        let retryState = await repo.retryState(dayBucket: dayBucket)
+        let retryState = await repo.retryState(dayBucket: built.dayBucket)
         if let nextAttemptAtMs = retryState.nextAttemptAtMs, nextAttemptAtMs > nowMs {
             return
         }
 
-        await generate(nowMs: nowMs)
+        await generate(built: built, nowMs: nowMs)
     }
 
     public func regenerate(nowMs: EpochMs) async {
-        await generate(nowMs: nowMs)
+        let built: (dayBucket: Int64, input: DailyCheckinInput)
+        do {
+            built = try await builder.build(nowMs: nowMs)
+        } catch {
+            logFailure(operation: "checkin_input_failed")
+            return
+        }
+        await generate(built: built, nowMs: nowMs)
     }
 
     public static func normalizedModelText(_ response: String, maxWords: Int = 90) -> String {
@@ -240,18 +250,10 @@ public actor DailyCheckinGenerator {
         return lines.joined(separator: "\n")
     }
 
-    private func generate(nowMs: EpochMs) async {
-        let built: (dayBucket: Int64, input: DailyCheckinInput)
-        do {
-            built = try await builder.build(nowMs: nowMs)
-        } catch is CheckinInputBuildError {
-            logFailure(operation: "checkin_input_failed")
-            return
-        } catch {
-            logFailure(operation: "checkin_input_failed")
-            return
-        }
-
+    private func generate(
+        built: (dayBucket: Int64, input: DailyCheckinInput),
+        nowMs: EpochMs
+    ) async {
         do {
             let response = try await relay.generateCheckin(built.input)
             guard !Self.isRefusalOrEmpty(response) else {
@@ -272,13 +274,6 @@ public actor DailyCheckinGenerator {
             logFailure(operation: "checkin_generation_failed")
             await repo.recordRetry(dayBucket: built.dayBucket, nowMs: nowMs)
         }
-    }
-
-    private func localDayBucket(nowMs: EpochMs) -> Int64 {
-        let date = Date(timeIntervalSince1970: Double(nowMs) / 1_000)
-        var calendar = Calendar.current
-        calendar.timeZone = timeZone
-        return EpochMs(calendar.startOfDay(for: date).timeIntervalSince1970 * 1_000)
     }
 
     private static func isRefusalOrEmpty(_ response: String) -> Bool {

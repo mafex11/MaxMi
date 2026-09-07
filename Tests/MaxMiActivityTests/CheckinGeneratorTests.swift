@@ -15,38 +15,51 @@ private struct RetryCall: Sendable {
 }
 
 private actor CheckinGeneratorRepoState {
-    private let existing: CheckinRecord?
+    private var checkins: [Int64: CheckinRecord]
     private var savedCheckins: [SavedCheckin] = []
     private var retryCallValues: [RetryCall] = []
-    private var retryAttempts = 0
-    private var retryDeadline: EpochMs?
+    private var retryStates: [Int64: (attempts: Int, nextAttemptAtMs: EpochMs?)] = [:]
+    private var retryStateReadBuckets: [Int64] = []
 
     init(existing: CheckinRecord?) {
-        self.existing = existing
+        if let existing {
+            checkins = [existing.dayBucket: existing]
+        } else {
+            checkins = [:]
+        }
     }
 
-    func currentCheckin() -> CheckinRecord? {
-        existing
+    func currentCheckin(dayBucket: Int64) -> CheckinRecord? {
+        checkins[dayBucket]
     }
 
     func save(_ value: SavedCheckin) {
         savedCheckins.append(value)
+        checkins[value.dayBucket] = CheckinRecord(
+            dayBucket: value.dayBucket,
+            generatedAtMs: value.nowMs,
+            summary: value.summary,
+            openItemIDs: value.input.openItems.map(\.id),
+            resolvedYesterdayCount: value.input.resolvedYesterdayCount,
+            dismissedAtMs: nil,
+            promptVersion: DailyCheckinGenerator.promptVersion
+        )
     }
 
-    func retryState() -> (attempts: Int, nextAttemptAtMs: EpochMs?) {
-        (retryAttempts, retryDeadline)
+    func retryState(dayBucket: Int64) -> (attempts: Int, nextAttemptAtMs: EpochMs?) {
+        retryStateReadBuckets.append(dayBucket)
+        return retryStates[dayBucket] ?? (0, nil)
     }
 
     func recordRetry(dayBucket: Int64, nowMs: EpochMs) {
-        let delay = min(EpochMs(30_000 * (1 << min(retryAttempts, 10))), 3_600_000)
-        retryAttempts += 1
-        retryDeadline = nowMs + delay
+        let state = retryStates[dayBucket] ?? (0, nil)
+        let delay = min(EpochMs(30_000 * (1 << min(state.attempts, 10))), 3_600_000)
+        retryStates[dayBucket] = (state.attempts + 1, nowMs + delay)
         retryCallValues.append(.init(dayBucket: dayBucket, nextAttemptAtMs: nowMs + delay))
     }
 
-    func clearRetry() {
-        retryAttempts = 0
-        retryDeadline = nil
+    func clearRetry(dayBucket: Int64) {
+        retryStates[dayBucket] = nil
     }
 
     func readSaved() -> [SavedCheckin] {
@@ -55,6 +68,10 @@ private actor CheckinGeneratorRepoState {
 
     func readRetryCalls() -> [RetryCall] {
         retryCallValues
+    }
+
+    func readRetryStateBuckets() -> [Int64] {
+        retryStateReadBuckets
     }
 }
 
@@ -77,8 +94,14 @@ private final class CheckinGeneratorRepoMock: CheckinRepository, @unchecked Send
         }
     }
 
+    var retryStateBuckets: [Int64] {
+        get async {
+            await state.readRetryStateBuckets()
+        }
+    }
+
     func currentCheckin(dayBucket: Int64) async -> CheckinRecord? {
-        await state.currentCheckin()
+        await state.currentCheckin(dayBucket: dayBucket)
     }
 
     func openItems(limit: Int) async -> [CheckinOpenItem] {
@@ -119,7 +142,7 @@ private final class CheckinGeneratorRepoMock: CheckinRepository, @unchecked Send
     }
 
     func retryState(dayBucket: Int64) async -> (attempts: Int, nextAttemptAtMs: EpochMs?) {
-        await state.retryState()
+        await state.retryState(dayBucket: dayBucket)
     }
 
     func recordRetry(dayBucket: Int64, nowMs: EpochMs) async {
@@ -127,7 +150,7 @@ private final class CheckinGeneratorRepoMock: CheckinRepository, @unchecked Send
     }
 
     func clearRetry(dayBucket: Int64) async {
-        await state.clearRetry()
+        await state.clearRetry(dayBucket: dayBucket)
     }
 
     func appVisits(fromMs: EpochMs, toMs: EpochMs)
@@ -162,7 +185,6 @@ private func builder(repo: any CheckinRepository) -> CheckinInputBuilder {
     let zone = TimeZone(identifier: "UTC")!
     return CheckinInputBuilder(
         repo: repo,
-        clock: { 1_800_000_000_000 },
         timeZone: zone,
         dayBucket: { ms, _ in ms / 86_400_000 }
     )
@@ -192,9 +214,25 @@ final class CheckinGeneratorTests: XCTestCase {
         let callCount = await relay.callCount
         let savedCount = await repo.saved.count
         let retryCalls = await repo.retryCalls
+        let retryStateBuckets = await repo.retryStateBuckets
         XCTAssertEqual(callCount, 1)
         XCTAssertEqual(savedCount, 0)
         XCTAssertEqual(retryCalls.map(\.nextAttemptAtMs), [1_800_000_030_000])
+        XCTAssertEqual(retryStateBuckets.last, retryCalls.last?.dayBucket)
+    }
+
+    func testSuccessfulGenerationIsNotRepeatedForSameDay() async {
+        let repo = CheckinGeneratorRepoMock()
+        let relay = CheckinRelayMock(result: .success("You should review the migration."))
+        let generator = DailyCheckinGenerator(repo: repo, relay: relay, builder: builder(repo: repo))
+
+        await generator.generateIfMissing(nowMs: 1_800_000_000_000)
+        await generator.generateIfMissing(nowMs: 1_800_000_001_000)
+
+        let callCount = await relay.callCount
+        let saved = await repo.saved
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(saved.count, 1)
     }
 
     func testManualRegenerateOverwritesTodaysRow() async {

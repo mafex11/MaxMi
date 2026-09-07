@@ -161,7 +161,7 @@ final class CheckinInputBuilderTests: XCTestCase {
             timeline: timeline(text: String(repeating: "T", count: 3_000))
         )
         let built = try await CheckinInputBuilder(
-            repo: repo, clock: { 1_800_000_000_000 }, timeZone: .current,
+            repo: repo, timeZone: .current,
             dayBucket: { ms, zone in Int64(ms / 86_400_000) + Int64(zone.secondsFromGMT() / 86_400) }
         ).build(nowMs: 1_800_000_000_000)
 
@@ -184,7 +184,7 @@ final class CheckinInputBuilderTests: XCTestCase {
         let repo = CheckinRepositoryStub(timeline: timeline(text: ""))
 
         _ = try await CheckinInputBuilder(
-            repo: repo, clock: { EpochMs(now.timeIntervalSince1970 * 1_000) }, timeZone: zone,
+            repo: repo, timeZone: zone,
             dayBucket: { ms, timeZone in Int64(ms / 86_400_000) + Int64(timeZone.secondsFromGMT() / 86_400) }
         ).build(nowMs: EpochMs(now.timeIntervalSince1970 * 1_000))
 
