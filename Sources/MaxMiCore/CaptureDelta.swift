@@ -185,3 +185,17 @@ public struct CaptureDelta: Codable, Sendable, Equatable {
         return true
     }
 }
+
+public enum CaptureDeltaRenderer {
+    public static func render(_ delta: CaptureDelta, maxChars: Int) -> String {
+        let text: String
+        if !delta.addedMessages.isEmpty {
+            text = delta.addedMessages.map(ContentRenderer.renderMessage).joined(separator: "\n")
+        } else if !delta.addedSegments.isEmpty {
+            text = delta.addedSegments.map(ContentRenderer.renderSegment).joined(separator: "\n\n")
+        } else {
+            text = ContentRenderer.renderBlocks(delta.addedBlocks)
+        }
+        return String(text.prefix(max(0, maxChars)))
+    }
+}

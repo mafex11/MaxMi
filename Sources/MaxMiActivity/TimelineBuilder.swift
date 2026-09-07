@@ -266,26 +266,13 @@ public struct TimelineBuilder: Sendable {
         delta.addedMessages.count + delta.addedBlocks.count + delta.addedSegments.count
     }
 
-    /// Rendered added content, flattened to one line and capped. Exactly one of the three arrays
-    /// is non-empty for any delta (spec 5a), so the order of these branches is not a priority
-    /// choice — it is just a switch.
+    /// Rendered added content, flattened to one line and capped.
     static func summary(of delta: CaptureDelta) -> String? {
-        let rendered: String
-        if !delta.addedMessages.isEmpty {
-            rendered = delta.addedMessages.map(ContentRenderer.renderMessage).joined(separator: " ")
-        } else if !delta.addedSegments.isEmpty {
-            rendered = delta.addedSegments.map(ContentRenderer.renderSegment).joined(separator: " ")
-        } else if !delta.addedBlocks.isEmpty {
-            rendered = ContentRenderer.renderBlocks(delta.addedBlocks)
-        } else {
-            // `.tasks`/`.calendar` deltas carry only character counts, so there is nothing to
-            // quote. `newItemCount` stays 0 and the entry still reports its visit.
-            return nil
-        }
-        let flattened = rendered.split(whereSeparator: \.isNewline).joined(separator: " ")
+        let flattened = CaptureDeltaRenderer.render(delta, maxChars: deltaSummaryCap)
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
             .trimmingCharacters(in: .whitespaces)
-        guard !flattened.isEmpty else { return nil }
-        return String(flattened.prefix(deltaSummaryCap))
+        return flattened.isEmpty ? nil : flattened
     }
 
     static func coalesce(_ built: [BuiltEntry]) -> [TimelineEntry] {
