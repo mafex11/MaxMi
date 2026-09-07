@@ -115,6 +115,111 @@ final class QueryAPITests: XCTestCase {
         XCTAssertEqual(hits.map(\.versionID), ["context-b"])
     }
 
+    func testContextHitsConvertL2ToCosineAndRenderCompactSnippetSource() throws {
+        let versionID = try seedStructuredVersion(
+            sourceApp: "Web",
+            sourceKey: "https://context.example",
+            title: "Context page",
+            content: "A phrase absent from derivatives but present in raw captured context."
+        )
+        try store.insertContextEmbedding(versionID: versionID, vector: unit(0))
+        let hits = try store.contextHits(
+            near: unit(0),
+            filter: RetrievalFilter(endAtMs: t0 + 1_000),
+            limit: 5
+        )
+        let first = try XCTUnwrap(hits.first)
+
+        XCTAssertEqual(first.distance, 0, accuracy: 0.001)
+        XCTAssertEqual(first.sourceTitle, "Context page")
+        XCTAssertTrue(first.compactContent.contains("phrase absent from derivatives"))
+    }
+
+    func testContextHitsHonorRetrievalFilter() throws {
+        let webVersionID = try seedStructuredVersion(
+            sourceApp: "Web",
+            sourceKey: "https://web-context.example",
+            title: "Web context",
+            content: "Web raw context.",
+            committedAt: t0
+        )
+        let slackVersionID = try seedStructuredVersion(
+            sourceApp: "Slack",
+            sourceKey: "slack:context",
+            title: "Slack context",
+            content: "Slack raw context.",
+            committedAt: t0 + 1
+        )
+        try store.insertContextEmbedding(versionID: webVersionID, vector: unit(1))
+        try store.insertContextEmbedding(versionID: slackVersionID, vector: unit(1))
+
+        let hits = try store.contextHits(
+            near: unit(1),
+            filter: RetrievalFilter(sourceApps: ["slack"], endAtMs: t0 + 1_000),
+            limit: 5
+        )
+
+        XCTAssertEqual(hits.map(\.versionID), [slackVersionID])
+    }
+
+    func testContextHitsExcludeUserBlockedDomain() throws {
+        let versionID = try seedStructuredVersion(
+            sourceApp: "Web",
+            sourceKey: "https://private-context.example",
+            title: "Private context",
+            content: "Raw context from a user-blocked domain."
+        )
+        try store.insertContextEmbedding(versionID: versionID, vector: unit(2))
+        _ = try store.setDomain("private-context.example", blocked: true, nowMs: t0 + 1)
+
+        let hits = try store.contextHits(
+            near: unit(2),
+            filter: RetrievalFilter(endAtMs: t0 + 1_000),
+            limit: 5
+        )
+
+        XCTAssertFalse(hits.map(\.versionID).contains(versionID))
+    }
+
+    func testContextHitsExcludePausedThread() throws {
+        let sourceKey = "slack:paused-context"
+        let versionID = try seedStructuredVersion(
+            sourceApp: "Slack",
+            sourceKey: sourceKey,
+            title: "Paused context",
+            content: "Raw context from a paused thread."
+        )
+        try store.insertContextEmbedding(versionID: versionID, vector: unit(3))
+        try store.setThreadPaused(sourceKey, paused: true, nowMs: t0 + 1)
+
+        let hits = try store.contextHits(
+            near: unit(3),
+            filter: RetrievalFilter(endAtMs: t0 + 1_000),
+            limit: 5
+        )
+
+        XCTAssertFalse(hits.map(\.versionID).contains(versionID))
+    }
+
+    func testContextHitsExcludeLocalOnlySource() throws {
+        let versionID = try seedStructuredVersion(
+            sourceApp: "Slack",
+            sourceKey: "slack:local-context",
+            title: "Local context",
+            content: "Raw context from a local-only source."
+        )
+        try store.insertContextEmbedding(versionID: versionID, vector: unit(4))
+        try store.setCloudProcessing("Slack", allowed: false, nowMs: t0 + 1)
+
+        let hits = try store.contextHits(
+            near: unit(4),
+            filter: RetrievalFilter(endAtMs: t0 + 1_000),
+            limit: 5
+        )
+
+        XCTAssertFalse(hits.map(\.versionID).contains(versionID))
+    }
+
     func testPendingContextEmbeddingWorkUsesLegacyCompactContentAndHonorsMarkerAndBackoff() throws {
         let oldVersionID = try seedContextVersion(
             sourceKey: "fixture:pre-marker",
@@ -197,6 +302,27 @@ final class QueryAPITests: XCTestCase {
                 content: content
             ),
             nowMs: committedAt
+        ) else {
+            throw FixtureError.captureDidNotCommit
+        }
+        return versionID
+    }
+
+    private func seedStructuredVersion(
+        sourceApp: String,
+        sourceKey: String,
+        title: String,
+        content: String,
+        committedAt: EpochMs? = nil
+    ) throws -> String {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: sourceApp,
+                sourceKey: sourceKey,
+                sourceTitle: title,
+                content: content
+            ),
+            nowMs: committedAt ?? t0
         ) else {
             throw FixtureError.captureDidNotCommit
         }
