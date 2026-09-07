@@ -33,6 +33,17 @@ public enum CloudProcessingState: String, Sendable, Equatable {
     case localOnly
 }
 
+struct SourceCloudEligibility {
+    let reviewedSourceApps: Set<String>
+    let localOnlySourceApps: Set<String>
+    let reviewGateEnabled: Bool
+
+    func allowsCloudProcessing(for sourceApp: String) -> Bool {
+        guard !localOnlySourceApps.contains(sourceApp) else { return false }
+        return !reviewGateEnabled || reviewedSourceApps.contains(sourceApp)
+    }
+}
+
 extension Store {
     /// One-time upgrade behavior: sources already present before the review gate shipped retain
     /// their old cloud-processing behavior. Source apps first seen afterwards require review.
@@ -77,6 +88,14 @@ extension Store {
     // for per-source approval (the approval UI is hidden). Was: settingValue == "true". The stored
     // `cloud_review_initialized` value is left intact so the gate can be re-enabled by restoring this.
     public func cloudReviewInitialized() throws -> Bool { false }
+
+    func sourceCloudEligibility() throws -> SourceCloudEligibility {
+        try SourceCloudEligibility(
+            reviewedSourceApps: cloudReviewedSourceApps(),
+            localOnlySourceApps: cloudLocalOnlySourceApps(),
+            reviewGateEnabled: cloudReviewInitialized()
+        )
+    }
 
     public func capturePauseState(nowMs: EpochMs) throws -> CapturePauseState {
         let raw = try settingValue("capture_pause")

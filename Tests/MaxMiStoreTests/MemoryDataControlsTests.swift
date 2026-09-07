@@ -53,6 +53,83 @@ final class MemoryDataControlsTests: XCTestCase {
         XCTAssertEqual(try store.blockedDomains(), ["example.com"])
     }
 
+    func testPruneDeletesContextEmbeddingsForPrunedVersions() throws {
+        guard case .committed(let oldVersionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "old-context", sourceTitle: "Old",
+                         content: "old context content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("old fixture must commit")
+        }
+        guard case .committed(let newVersionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "new-context", sourceTitle: "New",
+                         content: "new context content"),
+            nowMs: t0 + 100_000
+        ) else {
+            return XCTFail("new fixture must commit")
+        }
+        let vector = [Float](repeating: 0.25, count: 1_536)
+        try store.insertContextEmbedding(versionID: oldVersionID, vector: vector)
+        try store.insertContextEmbedding(versionID: newVersionID, vector: vector)
+
+        _ = try store.pruneMemory(olderThan: t0 + 50_000)
+
+        let remaining = try store.db.dbQueue.read { d in
+            try String.fetchAll(d, sql: "SELECT version_id FROM context_embeddings")
+        }
+        XCTAssertEqual(remaining, [newVersionID])
+    }
+
+    func testDeleteAllMemoryDeletesContextEmbeddings() throws {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "context", sourceTitle: "Context",
+                         content: "context content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("fixture must commit")
+        }
+        try store.insertContextEmbedding(
+            versionID: versionID,
+            vector: [Float](repeating: 0.25, count: 1_536)
+        )
+
+        _ = try store.deleteAllMemory()
+
+        let count = try store.db.dbQueue.read { d in
+            try Int.fetchOne(d, sql: "SELECT count(*) FROM context_embeddings")
+        }
+        XCTAssertEqual(count, 0)
+    }
+
+    func testDeleteAllMemoryRemovesCheckinsAndContextEmbeddings() throws {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "combined", sourceTitle: "Combined",
+                         content: "combined content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("fixture must commit")
+        }
+        try store.insertContextEmbedding(
+            versionID: versionID,
+            vector: [Float](repeating: 0.25, count: 1_536)
+        )
+        try store.saveCheckin(
+            dayBucket: 20_833,
+            generatedAtMs: t0,
+            summary: "Combined fixture",
+            openItemIDs: [],
+            resolvedYesterdayCount: 0,
+            promptVersion: "checkin-v1"
+        )
+
+        _ = try store.deleteAllMemory()
+
+        try store.db.dbQueue.read { d in
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM checkins"), 0)
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM context_embeddings"), 0)
+        }
+    }
+
     func testConsistentBackupCanBeOpened() throws {
         _ = try store.commitCapture(
             CaptureInput(sourceApp: "Web", sourceKey: "one", sourceTitle: "One", content: "content"),

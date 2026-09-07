@@ -42,6 +42,7 @@ public struct PipelineVersion: Sendable, Equatable {
     public let capturedAt: EpochMs
     public let renderedDelta: String
     public let previousCompactContent: String?
+    public let compactContent: String
 
     public init(
         id: String,
@@ -55,7 +56,8 @@ public struct PipelineVersion: Sendable, Equatable {
         contentKind: CaptureContentKind,
         capturedAt: EpochMs,
         renderedDelta: String,
-        previousCompactContent: String?
+        previousCompactContent: String?,
+        compactContent: String
     ) {
         self.id = id
         self.threadID = threadID
@@ -69,6 +71,7 @@ public struct PipelineVersion: Sendable, Equatable {
         self.capturedAt = capturedAt
         self.renderedDelta = renderedDelta
         self.previousCompactContent = previousCompactContent
+        self.compactContent = compactContent
     }
 }
 
@@ -82,12 +85,14 @@ public struct PipelineDerivative: Sendable, Equatable {
 
 public protocol MemoryStore: Sendable {
     func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PipelineVersion]
+    func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PipelineVersion]
     func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative]
     func pendingDerivatives(versionID: String) throws -> [PipelineDerivative]
     func markExtracted(versionID: String, contentHashRead: String) throws -> Bool
     func markExtractFailed(versionID: String) throws
     func markEmbedded(derivativeID: String) throws
     func insertEmbedding(derivativeID: String, vector: [Float]) throws
+    func insertContextEmbedding(versionID: String, vector: [Float]) throws
     func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws
     func dueRetries(nowMs: EpochMs) throws -> [(id: String, kind: String, versionID: String?, derivativeID: String?)]
     func clearRetry(id: String) throws

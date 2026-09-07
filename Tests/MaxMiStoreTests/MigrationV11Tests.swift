@@ -8,6 +8,10 @@ final class MigrationV11Tests: XCTestCase {
         XCTAssertEqual(Migrations.currentIdentifier, "v13")
     }
 
+    func testV11MigrationIsRegistered() {
+        XCTAssertTrue(Set(Migrations.migrator.migrations).contains("v11"))
+    }
+
     func testCaptureEventsTableShape() throws {
         let db = try MaxMiDatabase.inMemory()
         try db.dbQueue.read { d in

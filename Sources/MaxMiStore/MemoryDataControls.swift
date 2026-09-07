@@ -122,6 +122,13 @@ extension Store {
                 )
                 """)
             try database.execute(sql: """
+                DELETE FROM context_embeddings
+                WHERE version_id IN (SELECT id FROM maxmi_prune_versions)
+                   OR version_id IN (
+                       SELECT id FROM versions WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)
+                   )
+                """)
+            try database.execute(sql: """
                 DELETE FROM retry_queue
                 WHERE version_id IN (SELECT id FROM maxmi_prune_versions)
                    OR derivative_id IN (SELECT id FROM derivatives WHERE thread_id IN (SELECT id FROM maxmi_prune_threads))
@@ -173,6 +180,7 @@ extension Store {
                 events: try Int.fetchOne(database, sql: "SELECT count(*) FROM capture_events") ?? 0
             )
             try database.execute(sql: "DELETE FROM derivative_embeddings")
+            try database.execute(sql: "DELETE FROM context_embeddings")
             try database.execute(sql: "DELETE FROM retry_queue")
             try database.execute(sql: "DELETE FROM agent_action_item_events")
             try database.execute(sql: "DELETE FROM agent_action_items")

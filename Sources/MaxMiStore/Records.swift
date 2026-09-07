@@ -14,6 +14,7 @@ public struct PendingVersion: Sendable, Equatable {
     public let capturedAt: EpochMs
     public let renderedDelta: String
     public let previousCompactContent: String?
+    public let compactContent: String
     public let previousFrozenContent: String?   // latest frozen version of same thread, by hour_bucket
 }
 

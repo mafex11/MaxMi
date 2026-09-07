@@ -104,7 +104,19 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
                             sourceKey: $0.sourceKey, sourceTitle: $0.sourceTitle, url: $0.url,
                             contentKind: $0.contentKind, capturedAt: $0.capturedAt,
                             renderedDelta: $0.renderedDelta,
-                            previousCompactContent: $0.previousCompactContent)
+                            previousCompactContent: $0.previousCompactContent,
+                            compactContent: $0.compactContent)
+        }
+    }
+    func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PipelineVersion] {
+        try store.pendingContextEmbeddingWork(nowMs: nowMs).map {
+            PipelineVersion(id: $0.id, threadID: $0.threadID, content: $0.content,
+                            contentHash: $0.contentHash, sourceApp: $0.sourceApp,
+                            sourceKey: $0.sourceKey, sourceTitle: $0.sourceTitle, url: $0.url,
+                            contentKind: $0.contentKind, capturedAt: $0.capturedAt,
+                            renderedDelta: $0.renderedDelta,
+                            previousCompactContent: $0.previousCompactContent,
+                            compactContent: $0.compactContent)
         }
     }
     func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative] {
@@ -121,6 +133,9 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
     func markEmbedded(derivativeID: String) throws { try store.markEmbedded(derivativeID: derivativeID) }
     func insertEmbedding(derivativeID: String, vector: [Float]) throws {
         try store.insertEmbedding(derivativeID: derivativeID, vector: vector)
+    }
+    func insertContextEmbedding(versionID: String, vector: [Float]) throws {
+        try store.insertContextEmbedding(versionID: versionID, vector: vector)
     }
     func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws {
         try store.enqueueRetry(kind: kind, versionID: versionID, derivativeID: derivativeID, error: error, nowMs: nowMs)
@@ -436,8 +451,8 @@ final class AppWiring {
         // Capture values needed for settings load closure before self is fully initialized
         let aiServiceAvailable = config.aiServiceConfigured
         let encryptionOK = encryptionAvailable
-        nonisolated(unsafe) let mb = menuBar
-        nonisolated(unsafe) let privacyWindow = activityPrivacyWindow
+        let mb = menuBar
+        let privacyWindow = activityPrivacyWindow
 
         let settingsViewModel = SettingsViewModel(
             load: { @Sendable in

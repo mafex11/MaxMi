@@ -20,6 +20,7 @@ final class MockRelay: MemoryRelay, @unchecked Sendable {
 
 final class MemoryQueriesTests: XCTestCase {
     var store: Store!
+    var db: MaxMiDatabase!
     let t0 = EpochMs(495_442) * 3_600_000
 
     func unit(_ hot: Int) -> [Float] {
@@ -27,7 +28,8 @@ final class MemoryQueriesTests: XCTestCase {
     }
 
     override func setUpWithError() throws {
-        store = Store(db: try MaxMiDatabase.inMemory(), cipher: AESGCMFieldCipher.testCipher)
+        db = try MaxMiDatabase.inMemory()
+        store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
     }
 
     func seed(_ facts: [(String, Int)], url: String = "https://gintama.example", title: String = "Gin Tama",
@@ -110,6 +112,86 @@ final class MemoryQueriesTests: XCTestCase {
         let r = await q.searchMemory(query: "x", limit: nil)
         XCTAssertFalse(r.isError)
         XCTAssertTrue(r.text.contains("No memories matched"))
+    }
+
+    func testSearchAppendsMatchingContextForRawOnlyPhrase() async throws {
+        let versionID = try seedVersionOnlyContext(
+            "The raw phrase is nebula-anchor and no derivative contains it."
+        )
+        try store.insertContextEmbedding(versionID: versionID, vector: unit(7))
+
+        let result = await queries(MockRelay(.success(unit(7)))).searchMemory(
+            query: "nebula-anchor", limit: 10
+        )
+
+        XCTAssertTrue(result.text.contains("### Matching context"))
+        XCTAssertTrue(result.text.contains("nebula-anchor"))
+        XCTAssertTrue(result.text.contains("thread `"))
+        XCTAssertFalse(result.text.contains("enc:v1:"))
+        XCTAssertFalse(result.text.contains("\"schemaVersion\""))
+    }
+
+    func testSearchOmitsMatchingContextWhenNoContextHitPassesFloor() async {
+        let result = await queries(MockRelay(.success(unit(9)))).searchMemory(query: "none", limit: 10)
+        XCTAssertFalse(result.text.contains("### Matching context"))
+    }
+
+    func testSearchDoesNotDuplicateContextForVersionRepresentedByFact() async throws {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://deduplicated-context.example",
+                sourceTitle: "Deduplicated context",
+                content: "The shared raw context is aurora-anchor."
+            ),
+            nowMs: t0
+        ) else {
+            fatalError()
+        }
+        let threadID = try store.threadID(forKey: "https://deduplicated-context.example")
+        let derivative = try store.insertDerivatives(
+            versionID: versionID,
+            threadID: threadID,
+            facts: ["The shared fact is aurora-anchor."],
+            nowMs: t0 + 1
+        )
+        try store.insertEmbedding(derivativeID: derivative[0].id, vector: unit(8))
+        try store.insertContextEmbedding(versionID: versionID, vector: unit(8))
+
+        let result = await queries(MockRelay(.success(unit(8)))).searchMemory(
+            query: "aurora-anchor", limit: 10
+        )
+
+        XCTAssertTrue(result.text.contains("The shared fact is aurora-anchor."))
+        XCTAssertFalse(result.text.contains("### Matching context"))
+    }
+
+    func testSearchRetainsFactResponseWhenContextIndexIsUnavailable() async throws {
+        try seed([("Fact remains available.", 9)])
+        try await db.dbQueue.write { database in
+            try database.execute(sql: "DROP TABLE context_embeddings")
+        }
+
+        let result = await queries(MockRelay(.success(unit(9)))).searchMemory(
+            query: "available", limit: 10
+        )
+
+        XCTAssertFalse(result.isError)
+        XCTAssertTrue(result.text.contains("Fact remains available."))
+        XCTAssertFalse(result.text.contains("### Matching context"))
+    }
+
+    func testSearchTruncatesMatchingContextSnippet() async throws {
+        let rawPrefix = String(repeating: "x", count: 300)
+        let versionID = try seedVersionOnlyContext("\(rawPrefix)TRUNCATED-CONTEXT-TAIL")
+        try store.insertContextEmbedding(versionID: versionID, vector: unit(10))
+
+        let result = await queries(MockRelay(.success(unit(10)))).searchMemory(
+            query: "context", limit: 10
+        )
+
+        XCTAssertTrue(result.text.contains(rawPrefix))
+        XCTAssertFalse(result.text.contains("TRUNCATED-CONTEXT-TAIL"))
     }
 
     func testListActiveThreadsMarkdownAndOrder() async throws {
@@ -243,12 +325,48 @@ final class MemoryQueriesTests: XCTestCase {
     func testSearchHonorsSourceAppFilter() async throws {
         try seed([("Web memory.", 5)], url: "web:memory", title: "Web Memory", sourceApp: "Web")
         try seed([("Slack memory.", 5)], url: "slack:memory", title: "Slack Memory", sourceApp: "Slack")
+        let webContextVersionID = try seedVersionOnlyContext(
+            "Web raw filter context.",
+            sourceApp: "Web",
+            sourceKey: "web:raw-filter",
+            title: "Web raw filter"
+        )
+        let slackContextVersionID = try seedVersionOnlyContext(
+            "Slack raw filter context.",
+            sourceApp: "Slack",
+            sourceKey: "slack:raw-filter",
+            title: "Slack raw filter"
+        )
+        try store.insertContextEmbedding(versionID: webContextVersionID, vector: unit(5))
+        try store.insertContextEmbedding(versionID: slackContextVersionID, vector: unit(5))
         let result = await queries(MockRelay(.success(unit(5)))).searchMemory(
             query: "memory", limit: 10,
             options: RetrievalOptions(sourceApps: ["Slack"])
         )
         XCTAssertTrue(result.text.contains("Slack memory."))
         XCTAssertFalse(result.text.contains("Web memory."))
+        XCTAssertTrue(result.text.contains("Slack raw filter context."))
+        XCTAssertFalse(result.text.contains("Web raw filter context."))
+    }
+
+    private func seedVersionOnlyContext(
+        _ content: String,
+        sourceApp: String = "Web",
+        sourceKey: String = "https://raw-context.example",
+        title: String = "Raw context"
+    ) throws -> String {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: sourceApp,
+                sourceKey: sourceKey,
+                sourceTitle: title,
+                content: content
+            ),
+            nowMs: t0
+        ) else {
+            fatalError()
+        }
+        return versionID
     }
 
     private func nextCursor(in text: String) -> String? {

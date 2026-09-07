@@ -62,20 +62,46 @@ public final class MemoryQueries: @unchecked Sendable {
 
         do {
             let page = try store.factHits(near: vector, filter: resolved.filter, offset: resolved.offset, limit: k)
-            let hits = page.records.filter { $0.distance <= Self.similarityDistanceFloor }
-            guard !hits.isEmpty else {
+            let factHits = page.records.filter { $0.distance <= Self.similarityDistanceFloor }
+            let contextHits: [ContextHit]
+            do {
+                contextHits = try store.contextHits(
+                    near: vector,
+                    filter: resolved.filter,
+                    limit: 5
+                ).filter { $0.distance <= Self.similarityDistanceFloor }
+            } catch {
+                contextHits = []
+            }
+            let factVersionIDs = Set(factHits.map(\.versionID))
+            let matchingContexts = contextHits.filter {
+                !factVersionIDs.contains($0.versionID)
+            }
+            guard !factHits.isEmpty || !matchingContexts.isEmpty else {
                 var text = "No memories matched \"\(q)\" in this page and filter set. Nothing sufficiently similar was found."
                 if page.hasMore { text += cursorFooter(resolved.nextCursor(consumed: page.records.count)) }
                 return ToolResult(text: text + "\n\n" + metadata(resolved))
             }
             var md = "## Memory search: \"\(q)\"\n\n\(metadata(resolved))\n"
-            for hit in hits {
-                md += "\n- \(hit.content)\n"
-                md += "  — \(hit.sourceApp) · \(hit.sourceTitle ?? hit.sourceKey) · "
-                md += "\(hit.sourceKey) · \(absoluteAndRelative(hit.committedAt, resolved)) · thread `\(hit.threadID)`\n"
+            if factHits.isEmpty {
+                md += "\nNo memories matched \"\(q)\" in this page and filter set. Nothing sufficiently similar was found.\n"
+            } else {
+                for hit in factHits {
+                    md += "\n- \(hit.content)\n"
+                    md += "  — \(hit.sourceApp) · \(hit.sourceTitle ?? hit.sourceKey) · "
+                    md += "\(hit.sourceKey) · \(absoluteAndRelative(hit.committedAt, resolved)) · thread `\(hit.threadID)`\n"
+                }
             }
-            md += "\n_\(hits.count) results in this page_"
+            md += "\n_\(factHits.count) results in this page_"
             if page.hasMore { md += cursorFooter(resolved.nextCursor(consumed: page.records.count)) }
+            if !matchingContexts.isEmpty {
+                md += "\n\n### Matching context\n"
+                for hit in matchingContexts {
+                    md += "\n- \(hit.sourceApp) · \(hit.sourceTitle ?? hit.sourceKey) · "
+                    md += "\(absoluteAndRelative(hit.committedAt, resolved)) · thread `\(hit.threadID)`\n"
+                    md += "  \(String(hit.compactContent.prefix(300)))\n"
+                }
+            }
             return ToolResult(text: md)
         } catch {
             return ToolResult(text: "Memory database unavailable: \(error)", isError: true)
