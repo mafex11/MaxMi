@@ -7,7 +7,11 @@ final class MockRelay: MemoryRelay, @unchecked Sendable {
     var embedResult: Result<[Float], Error>
     var embedCalls = 0
     init(_ r: Result<[Float], Error>) { embedResult = r }
-    func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String] { [] }
+    func extract(
+        newContent: String,
+        previousContent: String?,
+        metadata: ExtractMetadata
+    ) async throws -> [String] { [] }
     func embed(text: String) async throws -> [Float] {
         embedCalls += 1
         return try embedResult.get()

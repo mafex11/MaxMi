@@ -53,9 +53,19 @@ public actor CapturePipeline {
         }
 
         do {
-            let facts = try await relay.extract(newContent: v.content,
-                                                previousContent: v.previousFrozenContent,
-                                                sourceApp: v.sourceApp, sourceKey: v.sourceKey)
+            let metadata = ExtractMetadata(
+                sourceApp: v.sourceApp,
+                sourceKey: v.sourceKey,
+                title: v.sourceTitle,
+                url: v.url,
+                kind: v.contentKind,
+                capturedAt: v.capturedAt
+            )
+            let facts = try await relay.extract(
+                newContent: v.renderedDelta,
+                previousContent: v.previousCompactContent,
+                metadata: metadata
+            )
             let fresh = try store.insertDerivatives(versionID: v.id, threadID: v.threadID,
                                                     facts: facts, nowMs: now)
             // fresh + anything a previous crashed/failed run left pending

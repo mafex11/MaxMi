@@ -8,6 +8,12 @@ public struct PendingVersion: Sendable, Equatable {
     public let contentHash: String
     public let sourceApp: String
     public let sourceKey: String
+    public let sourceTitle: String?
+    public let url: String?
+    public let contentKind: CaptureContentKind
+    public let capturedAt: EpochMs
+    public let renderedDelta: String
+    public let previousCompactContent: String?
     public let previousFrozenContent: String?   // latest frozen version of same thread, by hour_bucket
 }
 

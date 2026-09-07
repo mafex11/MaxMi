@@ -25,7 +25,10 @@ final class ExtractInputTests: XCTestCase {
     func testNewContentIsCappedAtMaxNewContentChars() {
         let input = ExtractInputBuilder.build(
             delta: CaptureDelta(addedBlocks: [
-                .init(type: .paragraph, text: String(repeating: "N", count: 20_001)),
+                .init(
+                    type: .paragraph,
+                    text: String(repeating: "N", count: ExtractInputBuilder.maxNewContentChars + 1)
+                ),
             ]),
             previousStructured: nil,
             metadata: ExtractMetadata(
@@ -34,7 +37,7 @@ final class ExtractInputTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(input.newContent.count, 20_000)
+        XCTAssertEqual(input.newContent.count, ExtractInputBuilder.maxNewContentChars)
     }
 
     func testPromptUntrustedTextStripsFenceMarkersAndCollapsesControls() {

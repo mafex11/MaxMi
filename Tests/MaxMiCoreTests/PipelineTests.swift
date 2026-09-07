@@ -36,10 +36,17 @@ final class MockStore: MemoryStore, @unchecked Sendable {
 final class MockRelay: MemoryRelay, @unchecked Sendable {
     var extractResult: Result<[String], Error> = .success([])
     var embedResult: Result<[Float], Error> = .success(Array(repeating: 0.1, count: 1536))
-    var extractCalls: [(new: String, prev: String?)] = []
+    var extractCalls: [(new: String, previous: String?)] = []
+    var extractMetadata: [ExtractMetadata] = []
     var embedCalls: [String] = []
-    func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String] {
-        extractCalls.append((newContent, previousContent)); return try extractResult.get()
+    func extract(
+        newContent: String,
+        previousContent: String?,
+        metadata: ExtractMetadata
+    ) async throws -> [String] {
+        extractCalls.append((newContent, previousContent))
+        extractMetadata.append(metadata)
+        return try extractResult.get()
     }
     func embed(text: String) async throws -> [Float] {
         embedCalls.append(text); return try embedResult.get()
@@ -47,9 +54,26 @@ final class MockRelay: MemoryRelay, @unchecked Sendable {
 }
 
 final class PipelineTests: XCTestCase {
-    func version(_ id: String = "v1", prev: String? = nil) -> PipelineVersion {
-        PipelineVersion(id: id, threadID: "t1", content: "page text", contentHash: "hash1",
-                        sourceApp: "Web", sourceKey: "https://e.com", previousFrozenContent: prev)
+    func version(
+        _ id: String = "v1",
+        content: String = "page text",
+        renderedDelta: String = "page delta",
+        previousCompactContent: String? = nil
+    ) -> PipelineVersion {
+        PipelineVersion(
+            id: id,
+            threadID: "t1",
+            content: content,
+            contentHash: "hash1",
+            sourceApp: "Web",
+            sourceKey: "https://e.com",
+            sourceTitle: "Example page",
+            url: "https://e.com",
+            contentKind: .document,
+            capturedAt: 1_800_000_000_000,
+            renderedDelta: renderedDelta,
+            previousCompactContent: previousCompactContent
+        )
     }
     func makeSUT() -> (CapturePipeline, MockStore, MockRelay) {
         let s = MockStore(); let r = MockRelay()
@@ -70,11 +94,11 @@ final class PipelineTests: XCTestCase {
         XCTAssertEqual(s.extractedOK.first?.1, "hash1", "completes with the hash it READ")
         XCTAssertTrue(s.retries.isEmpty)
     }
-    func testPreviousFrozenContentPassedAsBaseline() async {
+    func testPreviousCompactContentPassedAsContext() async {
         let (p, s, r) = makeSUT()
-        s.work = [version(prev: "old frozen text")]
+        s.work = [version(previousCompactContent: "old compact text")]
         await p.tick()
-        XCTAssertEqual(r.extractCalls.first?.prev, "old frozen text")
+        XCTAssertEqual(r.extractCalls.first?.previous, "old compact text")
     }
     func testNetworkErrorEnqueuesRetryNotFailed() async {
         let (p, s, r) = makeSUT()
@@ -132,14 +156,27 @@ final class PipelineTests: XCTestCase {
     }
     func testUnreadableMemoryMarkerSkipsProcessing() async {
         let (p, s, r) = makeSUT()
-        let corrupt = PipelineVersion(id: "v-bad", threadID: "t1",
-                                      content: "[unreadable memory]", contentHash: "hash1",
-                                      sourceApp: "Web", sourceKey: "https://e.com",
-                                      previousFrozenContent: nil)
+        let corrupt = version("v-bad", content: "[unreadable memory]")
         s.work = [corrupt]
         await p.tick()
         XCTAssertTrue(r.extractCalls.isEmpty, "should not send corruption marker to relay")
         XCTAssertEqual(s.failed, ["v-bad"], "should be marked as failed to prevent reprocessing")
         XCTAssertTrue(s.extractedOK.isEmpty, "should not be marked as extracted")
+    }
+
+    func testPipelineExtractsRenderedDeltaWithPreviousCompactContext() async {
+        let (pipeline, store, relay) = makeSUT()
+        store.work = [version(
+            renderedDelta: "Added database migration.",
+            previousCompactContent: "Earlier migration context."
+        )]
+
+        await pipeline.tick()
+
+        let calls = await relay.extractCalls
+        let metadata = await relay.extractMetadata
+        XCTAssertEqual(calls.first?.new, "Added database migration.")
+        XCTAssertEqual(calls.first?.previous, "Earlier migration context.")
+        XCTAssertEqual(metadata.first?.kind, .document)
     }
 }
