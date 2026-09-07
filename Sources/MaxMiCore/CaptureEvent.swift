@@ -28,11 +28,6 @@ public struct NavigationEventPayload: Codable, Sendable, Equatable {
     public let fromURL: String?
     public let toURL: String
 
-    private enum CodingKeys: String, CodingKey {
-        case fromURL = "oldURL"
-        case toURL = "newURL"
-    }
-
     public init(fromURL: String?, toURL: String) {
         self.fromURL = fromURL
         self.toURL = toURL

@@ -104,10 +104,10 @@ final class CaptureEventStoreTests: XCTestCase {
         XCTAssertEqual(try decode(NavigationEventPayload.self, from: records[3]).fromURL,
                        "https://example.com/a")
         let navigationJSON = try XCTUnwrap(records[3].payloadJSON)
-        XCTAssertTrue(navigationJSON.contains("\"oldURL\""))
-        XCTAssertTrue(navigationJSON.contains("\"newURL\""))
-        XCTAssertFalse(navigationJSON.contains("\"fromURL\""))
-        XCTAssertFalse(navigationJSON.contains("\"toURL\""))
+        XCTAssertTrue(navigationJSON.contains("\"fromURL\""))
+        XCTAssertTrue(navigationJSON.contains("\"toURL\""))
+        XCTAssertFalse(navigationJSON.contains("\"oldURL\""))
+        XCTAssertFalse(navigationJSON.contains("\"newURL\""))
     }
 
     func testHourBucketAndIdentifierAreDerivedFromTheTimestamp() throws {
