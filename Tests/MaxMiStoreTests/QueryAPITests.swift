@@ -159,32 +159,28 @@ final class QueryAPITests: XCTestCase {
     }
 
     func testPendingContextEmbeddingWorkRequiresSourceCloudEligibility() throws {
-        let existingVersionID = try seedContextVersion(
-            sourceApp: "Web",
-            sourceKey: "web:existing",
-            content: "Existing source content that is long enough for a context embedding.",
-            committedAt: t0
-        )
-        try store.bootstrapCloudProcessingReview(nowMs: t0 + 1)
-        let reviewedVersionID = try seedContextVersion(
+        let versionID = try seedContextVersion(
             sourceApp: "Slack",
-            sourceKey: "slack:new",
-            content: "New source content that is long enough for a context embedding.",
-            committedAt: t0 + 2
+            sourceKey: "slack:fixture",
+            content: "Synthetic source content that is long enough for a context embedding.",
+            committedAt: t0
         )
         try store.setContextEmbeddingSinceMs(t0 - 1)
 
-        let pendingReview = try store.pendingContextEmbeddingWork(nowMs: t0 + 3)
-        XCTAssertTrue(pendingReview.map(\.id).contains(existingVersionID))
-        XCTAssertFalse(pendingReview.map(\.id).contains(reviewedVersionID))
+        try store.setCloudProcessing("Slack", allowed: false, nowMs: t0 + 1)
+        let localOnly = try store.pendingContextEmbeddingWork(nowMs: t0 + 2)
+        XCTAssertFalse(localOnly.map(\.id).contains(versionID))
 
-        try store.setCloudProcessing("Slack", allowed: false, nowMs: t0 + 4)
-        let localOnly = try store.pendingContextEmbeddingWork(nowMs: t0 + 5)
-        XCTAssertFalse(localOnly.map(\.id).contains(reviewedVersionID))
+        try store.setCloudProcessing("Slack", allowed: true, nowMs: t0 + 3)
+        let approved = try store.pendingContextEmbeddingWork(nowMs: t0 + 4)
+        XCTAssertTrue(approved.map(\.id).contains(versionID))
 
-        try store.setCloudProcessing("Slack", allowed: true, nowMs: t0 + 6)
-        let approved = try store.pendingContextEmbeddingWork(nowMs: t0 + 7)
-        XCTAssertTrue(approved.map(\.id).contains(reviewedVersionID))
+        let gatedEligibility = SourceCloudEligibility(
+            reviewedSourceApps: ["Web"],
+            localOnlySourceApps: [],
+            reviewGateEnabled: true
+        )
+        XCTAssertFalse(gatedEligibility.allowsCloudProcessing(for: "Slack"))
     }
 
     private func seedContextVersion(
