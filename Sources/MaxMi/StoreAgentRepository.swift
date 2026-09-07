@@ -7,10 +7,27 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
     let store: Store
 
     func claimNextPage() async -> AgentLeasedPage? {
+        let page: AgentPage
         do {
-            guard let page = try store.claimNextAgentRun(maxVersions: 50, leaseMs: 120_000, nowMs: epochNowMs()) else {
+            guard let claimedPage = try store.claimNextAgentRun(
+                maxVersions: 50,
+                leaseMs: 120_000,
+                nowMs: epochNowMs()
+            ) else {
                 return nil
             }
+            page = claimedPage
+        } catch {
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .agent,
+                event: .agentRunFailed,
+                error: error
+            )
+            return nil
+        }
+
+        do {
             let timeline = try TimelineBuilder(repo: StoreTimelineRepository(store: store)).build(
                 fromMs: page.fromMs,
                 toMs: page.toMs
@@ -27,6 +44,13 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
                 toMs: page.toMs
             )
         } catch {
+            SafeLogger.shared.log(
+                .error,
+                subsystem: .agent,
+                event: .agentRunFailed,
+                error: error
+            )
+            await fail(runID: page.runID, error: error.localizedDescription)
             return nil
         }
     }

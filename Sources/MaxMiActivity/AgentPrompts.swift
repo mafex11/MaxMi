@@ -2,6 +2,10 @@ import Foundation
 import MaxMiCore
 
 public enum AgentPrompts {
+    private static let maxSourceAppChars = 120
+    private static let maxSourceTitleChars = 200
+    private static let maxSourceKeyChars = 200
+
     public static func untrustedPayloadCharacters(for input: AgentReviewInput) -> Int {
         let versionChars = input.versions.reduce(0) { total, version in
             total + "versionID: ".count + version.versionID.count
@@ -86,9 +90,9 @@ public enum AgentPrompts {
 
                 versionID: \(sanitize(version.versionID, cap: version.versionID.count))
                 threadID: \(sanitize(version.threadID, cap: version.threadID.count))
-                app: \(sanitize(version.sourceApp, cap: version.sourceApp.count))
-                title: \(sanitize(version.sourceTitle ?? "", cap: version.sourceTitle?.count ?? 0))
-                sourceKey: \(sanitize(version.sourceKey, cap: version.sourceKey.count))
+                app: \(sanitize(version.sourceApp, cap: maxSourceAppChars))
+                title: \(sanitize(version.sourceTitle ?? "", cap: maxSourceTitleChars))
+                sourceKey: \(sanitize(version.sourceKey, cap: maxSourceKeyChars))
                 compact: \(sanitize(version.compactContent, cap: HourlyReviewBudget.versionCompactCap))
                 delta: \(sanitize(version.deltaSummary ?? "", cap: HourlyReviewBudget.versionDeltaCap))
                 """

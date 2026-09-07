@@ -82,6 +82,40 @@ final class AgentPromptsTests: XCTestCase {
         assertLine("App: Warp", isInsideUntrustedDataFenceIn: prompt)
     }
 
+    func testHourlyReviewCapsSourceMetadataFields() {
+        let sourceApp = String(repeating: "a", count: 5_000)
+        let sourceTitle = String(repeating: "b", count: 5_000)
+        let sourceKey = String(repeating: "c", count: 5_000)
+        let input = AgentReviewInput(
+            runID: "run-1",
+            versions: [
+                ReviewVersion(
+                    versionID: "version-1",
+                    threadID: "thread-1",
+                    sourceApp: sourceApp,
+                    sourceTitle: sourceTitle,
+                    sourceKey: sourceKey,
+                    kind: .generic,
+                    wordCount: 0,
+                    committedAt: 0,
+                    compactContent: "",
+                    deltaSummary: nil,
+                    deltaChars: 0
+                )
+            ],
+            timelineText: "",
+            openItems: [],
+            localTimeISO: "2026-09-08T00:00:00Z",
+            timeRange: (0, 0)
+        )
+
+        let prompt = AgentPrompts.hourlyReview(input: input)
+
+        XCTAssertLessThanOrEqual(renderedValue(after: "app: ", in: prompt).count, 120)
+        XCTAssertLessThanOrEqual(renderedValue(after: "title: ", in: prompt).count, 200)
+        XCTAssertLessThanOrEqual(renderedValue(after: "sourceKey: ", in: prompt).count, 200)
+    }
+
     private func assertLine(_ line: String, isInsideUntrustedDataFenceIn prompt: String, file: StaticString = #filePath, line testLine: UInt = #line) {
         let appLineIndex = try! XCTUnwrap(
             prompt.range(of: line)?.lowerBound,
@@ -104,5 +138,12 @@ final class AgentPromptsTests: XCTestCase {
 
         XCTAssertGreaterThan(appLineIndex, beginFenceIndex, file: file, line: testLine)
         XCTAssertLessThan(appLineIndex, endFenceIndex, file: file, line: testLine)
+    }
+
+    private func renderedValue(after prefix: String, in prompt: String) -> String {
+        let line = try! XCTUnwrap(prompt.split(separator: "\n").first {
+            $0.hasPrefix(prefix)
+        })
+        return String(line.dropFirst(prefix.count))
     }
 }

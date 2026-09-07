@@ -42,6 +42,7 @@ actor MockAgentRepo: AgentRepository {
 actor MockAgentRelay: AgentGenerationRelay {
     private var shouldThrow = false
     private var returnedOps: [AgentOpDTO] = []
+    private var reviewCalls = 0
 
     func setShouldThrow(_ value: Bool) {
         shouldThrow = value
@@ -51,7 +52,12 @@ actor MockAgentRelay: AgentGenerationRelay {
         returnedOps = ops
     }
 
+    func getReviewCalls() -> Int {
+        reviewCalls
+    }
+
     func reviewActivity(_ input: AgentReviewInput) async throws -> [AgentOpDTO] {
+        reviewCalls += 1
         if shouldThrow {
             throw NSError(
                 domain: "test",
@@ -60,6 +66,34 @@ actor MockAgentRelay: AgentGenerationRelay {
             )
         }
         return returnedOps
+    }
+}
+
+actor FailingTimelineAgentRepository: AgentRepository {
+    private var didAttemptClaim = false
+    private var failCalls: [(runID: String, error: String)] = []
+
+    func claimNextPage() async -> AgentLeasedPage? {
+        guard !didAttemptClaim else { return nil }
+        didAttemptClaim = true
+        await fail(runID: "run-input-failure", error: "timeline build failed")
+        return nil
+    }
+
+    func complete(runID: String, ops: [AgentOpDTO]) async throws {
+        XCTFail("A failed input build must not complete a run.")
+    }
+
+    func fail(runID: String, error: String) async {
+        failCalls.append((runID, error))
+    }
+
+    func renew(runID: String) async {
+        XCTFail("A failed input build must not renew a run.")
+    }
+
+    func getFailCalls() -> [(runID: String, error: String)] {
+        failCalls
     }
 }
 
@@ -112,6 +146,19 @@ final class HourlyAgentTests: XCTestCase {
         let failCalls = await repo.getFailCalls()
         XCTAssertTrue(completeCalls.isEmpty)
         XCTAssertTrue(failCalls.isEmpty)
+    }
+
+    func testTimelineInputFailureFailsRunAndSkipsRelay() async {
+        let repo = FailingTimelineAgentRepository()
+        let relay = MockAgentRelay()
+
+        await HourlyAgent(repo: repo, relay: relay).runIfDue()
+
+        let failCalls = await repo.getFailCalls()
+        let reviewCalls = await relay.getReviewCalls()
+        XCTAssertEqual(failCalls.map(\.runID), ["run-input-failure"])
+        XCTAssertEqual(failCalls.first?.error, "timeline build failed")
+        XCTAssertEqual(reviewCalls, 0)
     }
 
     func testRelayThrowsCallsFailNotComplete() async {
