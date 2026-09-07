@@ -94,7 +94,7 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: archivesURL
         )
-        XCTAssertEqual(result.migrationIdentifier, "v11")
+        XCTAssertEqual(result.migrationIdentifier, "v13")
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.preservedDatabaseURL.path))
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
@@ -147,36 +147,36 @@ final class MemoryDataControlsTests: XCTestCase {
         XCTAssertEqual(keys, ["unchanged"])
     }
 
-    func testRestoreUpgradesNMinusOneBackupAndPreservesEncryptedRows() throws {
+    func testRestoreUpgradesV11BackupAndPreservesEncryptedRows() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let activeURL = root.appendingPathComponent("maxmi.db")
-        let v8URL = root.appendingPathComponent("maxmi-v8.db")
+        let v11URL = root.appendingPathComponent("maxmi-v11.db")
 
-        let v8 = try MaxMiDatabase(path: v8URL.path, migrate: false)
-        try Migrations.migrator.migrate(v8.dbQueue, upTo: "v8")
+        let v11 = try MaxMiDatabase(path: v11URL.path, migrate: false)
+        try Migrations.migrator.migrate(v11.dbQueue, upTo: "v11")
         // Seeded with the v8 column set on purpose: `Store.commitCapture` writes the CURRENT
         // schema (v10 `structured_ciphertext`), so it cannot be used to fill an old backup.
-        try seedV8Row(v8, content: "encrypted")
-        try v8.dbQueue.inDatabase { try $0.execute(sql: "PRAGMA journal_mode = DELETE") }
-        try v8.dbQueue.close()
+        try seedV8Row(v11, content: "encrypted")
+        try v11.dbQueue.inDatabase { try $0.execute(sql: "PRAGMA journal_mode = DELETE") }
+        try v11.dbQueue.close()
 
         let active = try MaxMiDatabase(path: activeURL.path)
         try active.dbQueue.close()
         let result = try DatabaseRecovery.restore(
-            backupURL: v8URL,
+            backupURL: v11URL,
             databaseURL: activeURL,
             archiveDirectory: root.appendingPathComponent("Backups", isDirectory: true)
         )
-        XCTAssertEqual(result.migrationIdentifier, "v11")
+        XCTAssertEqual(result.migrationIdentifier, "v13")
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
         defer { try? restored.dbQueue.close() }
         try restored.dbQueue.read { database in
             XCTAssertEqual(
                 try String.fetchOne(database, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v11"
+                "v13"
             )
             let ciphertext = try String.fetchOne(database, sql: "SELECT content FROM versions")
             XCTAssertTrue(ciphertext?.hasPrefix("enc:v1:") == true)

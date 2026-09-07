@@ -152,6 +152,10 @@ extension Store {
             try database.execute(sql: "DELETE FROM agent_runs WHERE coalesce(ended_at, started_at) < ?", arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM capture_health_events WHERE at_ms < ?", arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM message_fingerprints WHERE seen_at < ?", arguments: [cutoffMs])
+            try database.execute(
+                sql: "DELETE FROM checkins WHERE generated_at_ms < ?",
+                arguments: [cutoffMs]
+            )
 
             try database.execute(sql: "DROP TABLE maxmi_prune_versions")
             try database.execute(sql: "DROP TABLE maxmi_prune_threads")
@@ -184,6 +188,7 @@ extension Store {
             try database.execute(sql: "DELETE FROM threads")
             try database.execute(sql: "DELETE FROM capture_health_events")
             try database.execute(sql: "DELETE FROM capture_events")
+            try database.execute(sql: "DELETE FROM checkins")
             try database.execute(sql: "DELETE FROM settings WHERE key='paused_threads'")
             // The trim gate must not outlive the rows it was gating, or a fresh database waits an
             // hour before its first trim.

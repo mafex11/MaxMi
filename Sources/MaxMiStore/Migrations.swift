@@ -1,7 +1,7 @@
 import GRDB
 
 enum Migrations {
-    static let currentIdentifier = "v11"
+    static let currentIdentifier = "v13"
 
     static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
@@ -335,6 +335,20 @@ enum Migrations {
             );
             CREATE INDEX idx_capture_events_at     ON capture_events(at_ms DESC, id DESC);
             CREATE INDEX idx_capture_events_thread ON capture_events(thread_id, at_ms DESC);
+            """)
+        }
+        // v12 (context_embeddings) lands from another lane and must be registered before v13 at integration.
+        m.registerMigration("v13") { db in
+            try db.execute(sql: """
+            CREATE TABLE checkins (
+              day_bucket                INTEGER PRIMARY KEY,
+              generated_at_ms           INTEGER NOT NULL,
+              summary_ciphertext        TEXT NOT NULL,
+              open_item_ids             TEXT NOT NULL,
+              resolved_yesterday_count  INTEGER NOT NULL,
+              dismissed_at_ms           INTEGER NULL,
+              prompt_version            TEXT NOT NULL
+            );
             """)
         }
         return m
