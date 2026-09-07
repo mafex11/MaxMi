@@ -159,6 +159,61 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(entries.map(\.newItemCount), [1, 1])
     }
 
+    func testOneVisitWithTwoThreadsSplitsDeltasAndTitlesByThread() throws {
+        let repo = StubTimelineRepository(
+            visits: [
+                (bundleID: "a", appLabel: "Browser", startedAt: t0, endedAt: t0 + 100_000),
+            ],
+            events: [
+                deltaEvent(
+                    atMs: t0 + 20_000,
+                    threadID: "thread-a",
+                    delta: CaptureDelta(
+                        addedBlocks: [Block(type: .paragraph, text: "first tab delta")],
+                        addedChars: 15
+                    )
+                ),
+                deltaEvent(
+                    atMs: t0 + 70_000,
+                    threadID: "thread-b",
+                    delta: CaptureDelta(
+                        addedBlocks: [Block(type: .paragraph, text: "second tab delta")],
+                        addedChars: 16
+                    )
+                ),
+            ],
+            metadata: [
+                "thread-a": TimelineThreadMeta(
+                    sourceApp: "Browser",
+                    sourceTitle: "First tab",
+                    kind: .webpage,
+                    url: "https://example.com/first",
+                    cwd: nil
+                ),
+                "thread-b": TimelineThreadMeta(
+                    sourceApp: "Browser",
+                    sourceTitle: "Second tab",
+                    kind: .webpage,
+                    url: "https://example.com/second",
+                    cwd: nil
+                ),
+            ]
+        )
+
+        let entries = try TimelineBuilder(repo: repo).build(
+            fromMs: t0,
+            toMs: t0 + 600_000
+        ).entries
+
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries.map(\.threadID), ["thread-a", "thread-b"])
+        XCTAssertEqual(entries.map(\.sourceTitle), ["First tab", "Second tab"])
+        XCTAssertEqual(entries.map(\.deltaSummary), ["first tab delta", "second tab delta"])
+        XCTAssertEqual(entries.map(\.newItemCount), [1, 1])
+        XCTAssertEqual(entries.map(\.startMs), [t0, t0 + 70_000])
+        XCTAssertEqual(entries.map(\.endMs), [t0 + 70_000, t0 + 100_000])
+    }
+
     func testPinnedRawEventInitializerWithoutAppBundleAttachesByTime() throws {
         let event = TimelineRawEvent(
             kind: .contentDelta, atMs: t0 + 50_000, threadID: "t1", trigger: .periodic,

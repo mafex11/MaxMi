@@ -130,10 +130,12 @@ public struct TimelineBuilder: Sendable {
         self.repo = repo
     }
 
-    /// Every visit in the window becomes an entry — a focused app with no capture events is still
-    /// activity — and every event is attached only to the visit with the same bundle whose span
-    /// contains it. Adjacent entries of the same bundle and thread (or, when neither has a
-    /// thread, the same bundle) are coalesced.
+    /// Every visit in the window becomes one or more chronological entries — a focused app with
+    /// no capture events is still activity — and every event is attached only to the visit with
+    /// the same bundle whose span contains it. A visit is split whenever its event stream changes
+    /// thread, so deltas and titles cannot be attributed to a different tab/chat in the same app.
+    /// Adjacent entries of the same bundle and thread (or, when neither has a thread, the same
+    /// bundle) are coalesced.
     ///
     /// Visits never overlap in practice: `AppWiring.handleFocusChange` closes all open visits
     /// before opening one. An event inside two overlapping visits would be attached to both,
@@ -159,20 +161,43 @@ public struct TimelineBuilder: Sendable {
         let metadata = try repo.threadMetadata(
             threadIDs: Array(Set(events.compactMap(\.threadID))).sorted())
 
-        let raw = visits.map { visit -> BuiltEntry in
+        let raw = visits.flatMap { visit -> [BuiltEntry] in
             // An open visit runs to the end of the window, not to "now": a timeline must not
             // depend on when it was rendered.
             let endMs = visit.endedAt ?? toMs
-            return BuiltEntry(
-                bundleID: visit.bundleID,
-                entry: Self.entry(
-                    appLabel: visit.appLabel, startMs: visit.startedAt, endMs: endMs,
-                    events: events.filter {
-                        ($0.appBundle == nil || $0.appBundle == visit.bundleID)
-                            && $0.atMs >= visit.startedAt
-                            && $0.atMs <= endMs
-                    },
-                    metadata: metadata))
+            let visitEvents = events.filter {
+                ($0.appBundle == nil || $0.appBundle == visit.bundleID)
+                    && $0.atMs >= visit.startedAt
+                    && $0.atMs <= endMs
+            }
+            let segments = Self.threadSegments(visitEvents)
+            guard !segments.isEmpty else {
+                return [
+                    BuiltEntry(
+                        bundleID: visit.bundleID,
+                        entry: Self.entry(
+                            appLabel: visit.appLabel, startMs: visit.startedAt, endMs: endMs,
+                            events: [], metadata: metadata
+                        )
+                    ),
+                ]
+            }
+            return segments.enumerated().map { index, segment in
+                let startMs = index == 0 ? visit.startedAt : segment.events[0].atMs
+                let segmentEndMs = index + 1 < segments.count
+                    ? segments[index + 1].events[0].atMs
+                    : endMs
+                return BuiltEntry(
+                    bundleID: visit.bundleID,
+                    entry: Self.entry(
+                        appLabel: visit.appLabel,
+                        startMs: startMs,
+                        endMs: segmentEndMs,
+                        events: segment.events,
+                        metadata: metadata
+                    )
+                )
+            }
         }
         let entries = Self.stablySorted(Self.coalesce(raw)) { $0.startMs }
         return ActivityTimeline(fromMs: fromMs, toMs: toMs, entries: entries)
@@ -193,6 +218,25 @@ public struct TimelineBuilder: Sendable {
     struct BuiltEntry: Equatable {
         let bundleID: String
         let entry: TimelineEntry
+    }
+
+    /// Consecutive events with one thread identity form one segment. `nil` is a real identity:
+    /// focus-only activity stays threadless rather than inheriting a neighbouring tab's title.
+    struct ThreadSegment {
+        var threadID: String?
+        var events: [TimelineRawEvent]
+    }
+
+    static func threadSegments(_ events: [TimelineRawEvent]) -> [ThreadSegment] {
+        var segments: [ThreadSegment] = []
+        for event in events {
+            if let last = segments.last, last.threadID == event.threadID {
+                segments[segments.count - 1].events.append(event)
+            } else {
+                segments.append(ThreadSegment(threadID: event.threadID, events: [event]))
+            }
+        }
+        return segments
     }
 
     static func entry(appLabel: String, startMs: EpochMs, endMs: EpochMs,
