@@ -22,6 +22,24 @@ public struct ActivitySession: Sendable {
     }
 }
 
+public struct ActivityVisitRecord: Sendable, Equatable {
+    public let id: String
+    public let appBundle: String
+    public let appLabel: String
+    public let startedAtMs: EpochMs
+    /// nil for a visit that is still open.
+    public let endedAtMs: EpochMs?
+
+    public init(id: String, appBundle: String, appLabel: String, startedAtMs: EpochMs,
+                endedAtMs: EpochMs?) {
+        self.id = id
+        self.appBundle = appBundle
+        self.appLabel = appLabel
+        self.startedAtMs = startedAtMs
+        self.endedAtMs = endedAtMs
+    }
+}
+
 public enum ActivityConsent: String, Sendable {
     case unset, granted, declined
 }
@@ -44,6 +62,27 @@ extension Store {
     public func closeOpenVisits(nowMs: EpochMs) throws {
         try db.dbQueue.write { d in
             try d.execute(sql: "UPDATE activity_app_visits SET ended_at=? WHERE ended_at IS NULL", arguments: [nowMs])
+        }
+    }
+
+    /// Visits that OVERLAP the window, chronologically. An open visit is treated as running to
+    /// the end of the window, so a session in progress is not invisible.
+    public func appVisits(fromMs: EpochMs, toMs: EpochMs) throws -> [ActivityVisitRecord] {
+        try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: """
+                SELECT id, app_bundle, app_label, started_at, ended_at
+                FROM activity_app_visits
+                WHERE started_at <= ? AND coalesce(ended_at, ?) >= ?
+                ORDER BY started_at ASC, id ASC
+                """, arguments: [toMs, toMs, fromMs]).map { row in
+                    ActivityVisitRecord(
+                        id: row["id"],
+                        appBundle: row["app_bundle"],
+                        appLabel: row["app_label"],
+                        startedAtMs: row["started_at"],
+                        endedAtMs: row["ended_at"]
+                    )
+                }
         }
     }
 

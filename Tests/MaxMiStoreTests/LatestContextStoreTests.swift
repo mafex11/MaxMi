@@ -48,6 +48,44 @@ final class LatestContextStoreTests: XCTestCase {
         XCTAssertEqual(try store.latestContexts(limit: 1).first?.content, secret)
     }
 
+    func testLatestContextRecordsByThreadIDReturnsOnlyTheRequestedThreads() throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Notes", sourceKey: "note:one", sourceTitle: "One",
+                         content: "one"),
+            nowMs: t0)
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Notes", sourceKey: "note:two", sourceTitle: "Two",
+                         content: "two"),
+            nowMs: t0 + 1_000)
+        let one = try store.threadID(forKey: "note:one")
+        let two = try store.threadID(forKey: "note:two")
+
+        let records = try store.latestContextRecords(threadIDs: [one, "absent"])
+        XCTAssertEqual(Set(records.keys), [one])
+        XCTAssertEqual(records[one]?.sourceTitle, "One")
+
+        XCTAssertEqual(try store.latestContextRecords(threadIDs: [one, two]).count, 2)
+        XCTAssertTrue(try store.latestContextRecords(threadIDs: []).isEmpty)
+    }
+
+    func testLatestContextRecordsResolveTheStructuredShape() throws {
+        let page = GenericPage(
+            regions: [Region(kind: .main, blocks: [Block(type: .paragraph, text: "body")])],
+            focused: nil, url: "https://example.invalid/page")
+        _ = try store.commitCapture(
+            CaptureEnvelope(
+                sourceApp: "Web", sourceKey: "example.invalid/page", sourceTitle: "A page",
+                content: "", contentKind: .webpage, parserID: "test", parserVersion: 2,
+                accumulationPolicy: .replace, offscreenPolicy: .visibleOnly(),
+                trigger: .browserNavigation, truncated: false, structured: .generic(page)),
+            nowMs: t0)
+        let threadID = try store.threadID(forKey: "example.invalid/page")
+        let record = try XCTUnwrap(store.latestContextRecords(threadIDs: [threadID])[threadID])
+        guard case .generic(let stored) = record.structured else { return XCTFail("expected generic") }
+        XCTAssertEqual(stored.url, "https://example.invalid/page")
+        XCTAssertEqual(record.contentKind, .webpage)
+    }
+
     private func envelope(
         _ content: String,
         key: String = "chat:test",

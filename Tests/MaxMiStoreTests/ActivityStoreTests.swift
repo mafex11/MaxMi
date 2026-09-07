@@ -230,4 +230,29 @@ final class ActivityStoreTests: XCTestCase {
         XCTAssertEqual(apps[0].bundle, "com.aaa", "com.aaa comes before com.zzz alphabetically")
         XCTAssertEqual(apps[1].bundle, "com.zzz")
     }
+
+    func testAppVisitsInWindowIncludeOverlapsAndOpenVisits() throws {
+        _ = try store.openVisit(appBundle: "a", appLabel: "Before", nowMs: t0 - 100_000)
+        try store.closeOpenVisits(nowMs: t0 - 90_000)
+        let spanning = try store.openVisit(appBundle: "b", appLabel: "Spanning", nowMs: t0 - 10_000)
+        try store.closeOpenVisits(nowMs: t0 + 10_000)
+        let open = try store.openVisit(appBundle: "c", appLabel: "Open", nowMs: t0 + 20_000)
+
+        let visits = try store.appVisits(fromMs: t0, toMs: t0 + 60_000)
+        XCTAssertEqual(visits.map(\.appLabel), ["Spanning", "Open"])
+        XCTAssertEqual(visits.map(\.id), [spanning, open], "ids, not just labels")
+        XCTAssertNil(visits.last?.endedAtMs)
+        XCTAssertEqual(visits.first?.appBundle, "b")
+    }
+
+    func testAppVisitsExcludeVisitsThatEndedBeforeTheWindow() throws {
+        _ = try store.openVisit(appBundle: "a", appLabel: "Before", nowMs: t0 - 100_000)
+        try store.closeOpenVisits(nowMs: t0 - 90_000)
+        XCTAssertTrue(try store.appVisits(fromMs: t0, toMs: t0 + 60_000).isEmpty)
+    }
+
+    func testAppVisitsExcludeVisitsThatStartAfterTheWindow() throws {
+        _ = try store.openVisit(appBundle: "a", appLabel: "After", nowMs: t0 + 90_000)
+        XCTAssertTrue(try store.appVisits(fromMs: t0, toMs: t0 + 60_000).isEmpty)
+    }
 }

@@ -122,6 +122,27 @@ extension Store {
         }
     }
 
+    /// The stored contexts for a set of threads, keyed by thread id. Duplicates and unknown ids
+    /// are harmless; the returned dictionary simply has fewer keys than were asked for.
+    public func latestContextRecords(threadIDs: [String]) throws -> [String: LatestContextRecord] {
+        let ids = Array(Set(threadIDs)).sorted()
+        guard !ids.isEmpty else { return [:] }
+        return try db.dbQueue.read { d in
+            let rows = try Row.fetchAll(d, sql: """
+                SELECT c.thread_id, t.source_app, t.source_key, t.source_title,
+                       c.content_ciphertext, c.structured_ciphertext, c.content_kind,
+                       c.parser_id, c.parser_version,
+                       c.accumulation_policy, c.offscreen_mode, c.offscreen_max_steps,
+                       c.offscreen_max_chars, c.trigger, c.captured_at,
+                       c.character_count, c.truncated, c.display_summary_ciphertext,
+                       c.summary_status
+                FROM latest_contexts c JOIN threads t ON t.id = c.thread_id
+                WHERE c.thread_id IN (\(Store.placeholders(ids.count)))
+                """, arguments: StatementArguments(ids))
+            return Dictionary(uniqueKeysWithValues: rows.compactMap(record(from:)).map { ($0.id, $0) })
+        }
+    }
+
     private func record(from row: Row) -> LatestContextRecord? {
         guard
             let kind = CaptureContentKind(rawValue: row["content_kind"]),
@@ -134,9 +155,9 @@ extension Store {
             id: row["thread_id"],
             sourceApp: row["source_app"],
             sourceKey: row["source_key"],
-            sourceTitle: row["source_title"],
+            sourceTitle: row["source_title"] as String?,
             content: content,
-            structured: structuredOrLegacy(row["structured_ciphertext"],
+            structured: structuredOrLegacy(row["structured_ciphertext"] as String?,
                                            renderedContent: content, kind: kind),
             contentKind: kind,
             parserID: row["parser_id"],
