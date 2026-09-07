@@ -67,5 +67,6 @@ let package = Package(
         .testTarget(name: "MaxMiUITests", dependencies: ["MaxMiUI"]),
         .testTarget(name: "MaxMiMCPTests", dependencies: ["MaxMiMCP"]),
         .testTarget(name: "MaxMiMeetingsTests", dependencies: ["MaxMiMeetings"]),
+        .testTarget(name: "MaxMiTests", dependencies: ["MaxMi", "MaxMiStore"]),
     ]
 )

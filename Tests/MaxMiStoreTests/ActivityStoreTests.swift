@@ -255,4 +255,23 @@ final class ActivityStoreTests: XCTestCase {
         _ = try store.openVisit(appBundle: "a", appLabel: "After", nowMs: t0 + 90_000)
         XCTAssertTrue(try store.appVisits(fromMs: t0, toMs: t0 + 60_000).isEmpty)
     }
+
+    func testAppVisitsIncludeExactWindowBoundsAndExcludeAdjacentVisits() throws {
+        let endsAtStart = try store.openVisit(
+            appBundle: "a", appLabel: "Ends at start", nowMs: t0 - 20)
+        try store.closeOpenVisits(nowMs: t0)
+
+        _ = try store.openVisit(
+            appBundle: "b", appLabel: "Ends before start", nowMs: t0 - 10)
+        try store.closeOpenVisits(nowMs: t0 - 1)
+
+        let startsAtEnd = try store.openVisit(
+            appBundle: "c", appLabel: "Starts at end", nowMs: t0 + 60_000)
+        _ = try store.openVisit(
+            appBundle: "d", appLabel: "Starts after end", nowMs: t0 + 60_001)
+
+        let visits = try store.appVisits(fromMs: t0, toMs: t0 + 60_000)
+        XCTAssertEqual(visits.map(\.id), [endsAtStart, startsAtEnd])
+        XCTAssertEqual(visits.map(\.appLabel), ["Ends at start", "Starts at end"])
+    }
 }
