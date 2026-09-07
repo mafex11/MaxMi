@@ -3,7 +3,7 @@ import MaxMiCore
 import MaxMiRelay
 import MaxMiActivity
 
-struct GeminiActivityRelay: ActivityGenerationRelay, CaptureDisplayGenerationRelay {
+struct GeminiActivityRelay: ActivityGenerationRelay, CaptureDisplayGenerationRelay, CheckinGenerationRelay {
     let geminiClient: any GenerationMemoryRelay
     let modelID: String
 
@@ -23,5 +23,9 @@ struct GeminiActivityRelay: ActivityGenerationRelay, CaptureDisplayGenerationRel
             model: modelID,
             prompt: AgentPrompts.summarizeCaptureForDisplay(input)
         )
+    }
+
+    func generateCheckin(_ input: DailyCheckinInput) async throws -> String {
+        try await geminiClient.generateContent(model: modelID, prompt: AgentPrompts.dailyCheckin(input))
     }
 }
