@@ -5,43 +5,81 @@ public enum AgentPrompts {
     private static let maxSourceAppChars = 120
     private static let maxSourceTitleChars = 200
     private static let maxSourceKeyChars = 200
+    private static let maxVersionIDChars = 200
+    private static let maxThreadIDChars = 200
+    private static let maxItemIDChars = 200
+    static let budgetNonce = "00000000-0000-0000-0000-000000000000"
 
     public static func untrustedPayloadCharacters(for input: AgentReviewInput) -> Int {
-        let versionChars = input.versions.reduce(0) { total, version in
-            total + "versionID: ".count + version.versionID.count
-                + "threadID: ".count + version.threadID.count
-                + "app: ".count + version.sourceApp.count
-                + "title: ".count + (version.sourceTitle?.count ?? 0)
-                + "sourceKey: ".count + version.sourceKey.count
-                + "compact: ".count + version.compactContent.count
-                + "delta: ".count + min(
-                    version.deltaSummary?.count ?? 0,
-                    HourlyReviewBudget.versionDeltaCap
-                )
+        renderedUntrustedPayload(for: input, nonce: budgetNonce).count
+    }
+
+    static func renderedUntrustedPayload(for input: AgentReviewInput, nonce: String) -> String {
+        func sanitize(_ value: String, cap: Int) -> String {
+            PromptUntrustedText.sanitize(value, nonce: nonce, maxChars: cap)
         }
-        let itemChars = input.openItems.reduce(0) { total, item in
-            total + "ID: ".count + item.id.count
-                + min(item.title.count, HourlyReviewBudget.itemTitleCap)
-                + min(item.details?.count ?? 0, HourlyReviewBudget.itemDetailsCap)
+
+        var payload = "Open action items (valid resolve/update target IDs — the ONLY ids you may resolve):"
+
+        if input.openItems.isEmpty {
+            payload += "\n(none)\n"
+        } else {
+            for item in input.openItems.prefix(HourlyReviewBudget.openItemCap) {
+                payload += "\n- ID: \(sanitize(item.id, cap: maxItemIDChars)) | "
+                    + sanitize(item.title, cap: HourlyReviewBudget.itemTitleCap)
+                if let details = item.details {
+                    payload += "\n  \(sanitize(details, cap: HourlyReviewBudget.itemDetailsCap))"
+                }
+            }
+            payload += "\n"
         }
-        return versionChars + itemChars + "Timeline: ".count + input.timelineText.count
+
+        payload += "\nVersions in this window:\n"
+        if input.versions.isEmpty {
+            payload += "\n(none)\n"
+        } else {
+            for version in input.versions {
+                payload += """
+
+                versionID: \(sanitize(version.versionID, cap: maxVersionIDChars))
+                threadID: \(sanitize(version.threadID, cap: maxThreadIDChars))
+                app: \(sanitize(version.sourceApp, cap: maxSourceAppChars))
+                title: \(sanitize(version.sourceTitle ?? "", cap: maxSourceTitleChars))
+                sourceKey: \(sanitize(version.sourceKey, cap: maxSourceKeyChars))
+                compact: \(sanitize(version.compactContent, cap: HourlyReviewBudget.versionCompactCap))
+                delta: \(sanitize(version.deltaSummary ?? "", cap: HourlyReviewBudget.versionDeltaCap))
+                """
+            }
+        }
+
+        payload += "\n\nTimeline: \(sanitize(input.timelineText, cap: input.timelineText.count))"
+        return payload
     }
 
     public static func hourlyReview(input: AgentReviewInput) -> String {
         let nonce = UUID().uuidString
         let beginFence = "===BEGIN_UNTRUSTED_DATA_\(nonce)==="
         let endFence = "===END_UNTRUSTED_DATA_\(nonce)==="
-        func sanitize(_ value: String, cap: Int) -> String {
-            PromptUntrustedText.sanitize(value, nonce: nonce, maxChars: cap)
-        }
+        let bounded = HourlyAgent.boundedInput(
+            runID: input.runID,
+            versions: input.versions,
+            timelineText: input.timelineText,
+            openItems: input.openItems,
+            localTimeISO: input.localTimeISO,
+            fromMs: input.timeRange.fromMs,
+            toMs: input.timeRange.toMs,
+            maxChars: HourlyReviewBudget.maximum,
+            nonce: nonce
+        )
+        let payload = renderedUntrustedPayload(for: bounded, nonce: nonce)
 
-        var prompt = """
+        return """
         You are reviewing a user's recent activity to manage their action items.
 
         Run context:
-        - runID: \(input.runID)
-        - local time: \(input.localTimeISO)
-        - time range: [\(input.timeRange.fromMs), \(input.timeRange.toMs)]
+        - runID: \(bounded.runID)
+        - local time: \(bounded.localTimeISO)
+        - time range: [\(bounded.timeRange.fromMs), \(bounded.timeRange.toMs)]
 
         Your task:
         1. Review the raw versions, timeline, and open action items for actionable tasks, decisions, or follow-ups
@@ -65,44 +103,11 @@ public enum AgentPrompts {
 
         \(beginFence)
 
-        Open action items (valid resolve/update target IDs — the ONLY ids you may resolve):
+        \(payload)
+        \(endFence)
+
+        Return ONLY a valid JSON array of operations, no explanations.
         """
-
-        if input.openItems.isEmpty {
-            prompt += "\n(none)\n"
-        } else {
-            for item in input.openItems {
-                prompt += "\n- ID: \(sanitize(item.id, cap: item.id.count)) | "
-                    + sanitize(item.title, cap: HourlyReviewBudget.itemTitleCap)
-                if let details = item.details {
-                    prompt += "\n  \(sanitize(details, cap: HourlyReviewBudget.itemDetailsCap))"
-                }
-            }
-            prompt += "\n"
-        }
-
-        prompt += "\nVersions in this window:\n"
-        if input.versions.isEmpty {
-            prompt += "\n(none)\n"
-        } else {
-            for version in input.versions {
-                prompt += """
-
-                versionID: \(sanitize(version.versionID, cap: version.versionID.count))
-                threadID: \(sanitize(version.threadID, cap: version.threadID.count))
-                app: \(sanitize(version.sourceApp, cap: maxSourceAppChars))
-                title: \(sanitize(version.sourceTitle ?? "", cap: maxSourceTitleChars))
-                sourceKey: \(sanitize(version.sourceKey, cap: maxSourceKeyChars))
-                compact: \(sanitize(version.compactContent, cap: HourlyReviewBudget.versionCompactCap))
-                delta: \(sanitize(version.deltaSummary ?? "", cap: HourlyReviewBudget.versionDeltaCap))
-                """
-            }
-        }
-
-        prompt += "\n\nTimeline: \(sanitize(input.timelineText, cap: input.timelineText.count))"
-        prompt += "\n\(endFence)\n\nReturn ONLY a valid JSON array of operations, no explanations."
-
-        return prompt
     }
 
     public static func summarizeCaptureForDisplay(_ input: CaptureSummaryPromptInput) -> String {

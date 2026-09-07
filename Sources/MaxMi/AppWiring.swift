@@ -271,6 +271,12 @@ final class AppWiring {
         )
 
         let checkinTimeZone = TimeZone.current
+        let checkinDayBucket: @Sendable (EpochMs, TimeZone) -> Int64 = { nowMs, timeZone in
+            var calendar = Calendar.current
+            calendar.timeZone = timeZone
+            let date = Date(timeIntervalSince1970: Double(nowMs) / 1_000)
+            return EpochMs(calendar.startOfDay(for: date).timeIntervalSince1970 * 1_000)
+        }
         let checkinRepository = StoreCheckinRepository(
             store: store,
             clock: epochNowMs,
@@ -279,12 +285,7 @@ final class AppWiring {
         let checkinBuilder = CheckinInputBuilder(
             repo: checkinRepository,
             timeZone: checkinTimeZone,
-            dayBucket: { nowMs, timeZone in
-                var calendar = Calendar.current
-                calendar.timeZone = timeZone
-                let date = Date(timeIntervalSince1970: Double(nowMs) / 1_000)
-                return EpochMs(calendar.startOfDay(for: date).timeIntervalSince1970 * 1_000)
-            }
+            dayBucket: checkinDayBucket
         )
         dailyCheckinGenerator = DailyCheckinGenerator(
             repo: checkinRepository,
@@ -912,11 +913,9 @@ final class AppWiring {
         // Purpose-built tray home: live state, recent summaries, and private lexical search.
         nonisolated(unsafe) let trayCheckinStore = store
         let trayCheckinRepository = checkinRepository
-        let trayCheckinGenerator = dailyCheckinGenerator
+        let trayCheckinTrigger = checkinTrigger
         checkinViewModel = CheckinViewModel(
-            load: { @Sendable in
-                let nowMs = epochNowMs()
-                let dayBucket = Store.dayBucket(forMs: nowMs, timeZone: .current)
+            load: { @Sendable dayBucket in
                 return await Task.detached(priority: .userInitiated) {
                     guard let checkin = await trayCheckinRepository.currentCheckin(
                         dayBucket: dayBucket
@@ -942,18 +941,17 @@ final class AppWiring {
                     )
                 }.value
             },
-            dismiss: { @Sendable in
+            dismiss: { @Sendable dayBucket, nowMs in
                 try await Task.detached(priority: .userInitiated) {
-                    let nowMs = epochNowMs()
-                    let dayBucket = Store.dayBucket(forMs: nowMs, timeZone: .current)
                     try trayCheckinStore.dismissCheckin(dayBucket: dayBucket, nowMs: nowMs)
                 }.value
             },
             regenerate: { @Sendable in
-                await trayCheckinGenerator.regenerate(nowMs: epochNowMs())
+                await trayCheckinTrigger.regenerateNow(nowMs: epochNowMs())
             },
             now: { epochNowMs() },
-            timeZone: .current
+            timeZone: checkinTimeZone,
+            dayBucket: checkinDayBucket
         )
         trayHomeViewModel = TrayHomeViewModel(
             loadStatus: { @MainActor [weak self] in

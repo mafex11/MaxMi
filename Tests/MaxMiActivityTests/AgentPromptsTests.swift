@@ -116,6 +116,44 @@ final class AgentPromptsTests: XCTestCase {
         XCTAssertLessThanOrEqual(renderedValue(after: "sourceKey: ", in: prompt).count, 200)
     }
 
+    func testHourlyReviewFencedPayloadNeverExceedsFortyThousandCharacters() {
+        let versions = (0..<50).map { index in
+            ReviewVersion(
+                versionID: "version-\(index)",
+                threadID: "thread-\(index)",
+                sourceApp: "Web",
+                sourceTitle: "Large source \(index)",
+                sourceKey: "https://payload-\(index).example",
+                kind: .webpage,
+                wordCount: 1_000,
+                committedAt: EpochMs(index),
+                compactContent: String(
+                    repeating: String(UnicodeScalar(65 + (index % 26))!),
+                    count: 2_000
+                ),
+                deltaSummary: String(repeating: "d", count: 400),
+                deltaChars: index
+            )
+        }
+        let prompt = AgentPrompts.hourlyReview(input: AgentReviewInput(
+            runID: "large-prompt",
+            versions: versions,
+            timelineText: String(repeating: "t", count: HourlyReviewBudget.timelineCap),
+            openItems: [],
+            localTimeISO: "2026-09-07T00:00:00Z",
+            timeRange: (0, 50)
+        ))
+
+        let lines = prompt.split(separator: "\n", omittingEmptySubsequences: false)
+        let begin = try! XCTUnwrap(lines.firstIndex { $0.hasPrefix("===BEGIN_UNTRUSTED_DATA_") })
+        let end = try! XCTUnwrap(lines[(begin + 1)...].firstIndex {
+            $0.hasPrefix("===END_UNTRUSTED_DATA_")
+        })
+        let payload = lines[(begin + 1)..<end].joined(separator: "\n")
+
+        XCTAssertLessThanOrEqual(payload.count, HourlyReviewBudget.maximum)
+    }
+
     private func assertLine(_ line: String, isInsideUntrustedDataFenceIn prompt: String, file: StaticString = #filePath, line testLine: UInt = #line) {
         let appLineIndex = try! XCTUnwrap(
             prompt.range(of: line)?.lowerBound,

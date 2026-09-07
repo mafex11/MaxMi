@@ -69,6 +69,60 @@ actor MockAgentRelay: AgentGenerationRelay {
     }
 }
 
+actor RenewalSleepProbe {
+    private var started = false
+    private var cancelled = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var cancellationContinuation: CheckedContinuation<Void, Never>?
+
+    func sleep(_ nanoseconds: UInt64) async throws {
+        _ = nanoseconds
+        started = true
+        startContinuation?.resume()
+        startContinuation = nil
+        do {
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        } catch {
+            recordCancellation()
+            throw error
+        }
+    }
+
+    func waitForStart() async {
+        if started { return }
+        await withCheckedContinuation { startContinuation = $0 }
+    }
+
+    func waitForCancellation() async {
+        if cancelled { return }
+        await withCheckedContinuation { cancellationContinuation = $0 }
+    }
+
+    private func recordCancellation() {
+        cancelled = true
+        cancellationContinuation?.resume()
+        cancellationContinuation = nil
+    }
+}
+
+actor RenewalAwareFailingRelay: AgentGenerationRelay {
+    private let probe: RenewalSleepProbe
+
+    init(probe: RenewalSleepProbe) {
+        self.probe = probe
+    }
+
+    func reviewActivity(_ input: AgentReviewInput) async throws -> [AgentOpDTO] {
+        _ = input
+        await probe.waitForStart()
+        throw NSError(
+            domain: "HourlyAgentTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "relay failure"]
+        )
+    }
+}
+
 actor FailingTimelineAgentRepository: AgentRepository {
     private var didAttemptClaim = false
     private var failCalls: [(runID: String, error: String)] = []
@@ -175,6 +229,22 @@ final class HourlyAgentTests: XCTestCase {
         XCTAssertEqual(failCalls.count, 1)
         XCTAssertEqual(failCalls.first?.runID, "run2")
         XCTAssertTrue(failCalls.first?.error.contains("relay error") ?? false)
+    }
+
+    func testRelayFailureCancelsRenewalTask() async {
+        let repo = MockAgentRepo()
+        let probe = RenewalSleepProbe()
+        await repo.setPages([leasedPage(runID: "run-renewal", versions: [reviewVersion(versionID: "v1")])])
+
+        await HourlyAgent(
+            repo: repo,
+            relay: RenewalAwareFailingRelay(probe: probe),
+            renewalSleep: { nanoseconds in try await probe.sleep(nanoseconds) }
+        ).runIfDue()
+
+        await probe.waitForCancellation()
+        let failCalls = await repo.getFailCalls()
+        XCTAssertEqual(failCalls.map(\.runID), ["run-renewal"])
     }
 
     func testLoopProcessesMultiplePagesUntilNil() async {

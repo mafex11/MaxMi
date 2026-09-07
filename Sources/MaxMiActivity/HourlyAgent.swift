@@ -125,6 +125,7 @@ public enum HourlyReviewBudget {
     public static let timelineFloor = 4_000
     public static let itemTitleCap = 200
     public static let itemDetailsCap = 500
+    public static let openItemCap = 15
 }
 
 public struct AgentOpDTO: Sendable, Codable {
@@ -162,11 +163,20 @@ public struct HourlyAgent: Sendable {
     private let repo: any AgentRepository
     private let relay: any AgentGenerationRelay
     private let maxPagesPerTick: Int
+    private let renewalSleep: @Sendable (UInt64) async throws -> Void
 
-    public init(repo: any AgentRepository, relay: any AgentGenerationRelay, maxPagesPerTick: Int = 4) {
+    public init(
+        repo: any AgentRepository,
+        relay: any AgentGenerationRelay,
+        maxPagesPerTick: Int = 4,
+        renewalSleep: @escaping @Sendable (UInt64) async throws -> Void = { nanoseconds in
+            try await Task.sleep(nanoseconds: nanoseconds)
+        }
+    ) {
         self.repo = repo
         self.relay = relay
         self.maxPagesPerTick = maxPagesPerTick
+        self.renewalSleep = renewalSleep
     }
 
     public static func boundedInput(
@@ -179,12 +189,37 @@ public struct HourlyAgent: Sendable {
         toMs: EpochMs,
         maxChars: Int = HourlyReviewBudget.maximum
     ) -> AgentReviewInput {
+        boundedInput(
+            runID: runID,
+            versions: versions,
+            timelineText: timelineText,
+            openItems: openItems,
+            localTimeISO: localTimeISO,
+            fromMs: fromMs,
+            toMs: toMs,
+            maxChars: maxChars,
+            nonce: AgentPrompts.budgetNonce
+        )
+    }
+
+    static func boundedInput(
+        runID: String,
+        versions: [ReviewVersion],
+        timelineText: String,
+        openItems: [ReviewOpenItem],
+        localTimeISO: String,
+        fromMs: EpochMs,
+        toMs: EpochMs,
+        maxChars: Int,
+        nonce: String
+    ) -> AgentReviewInput {
         var retained = versions.map {
             $0.replacingCompactContent(
                 String($0.compactContent.prefix(HourlyReviewBudget.versionCompactCap))
             )
         }
         var timeline = String(timelineText.prefix(HourlyReviewBudget.timelineCap))
+        let retainedOpenItems = Array(openItems.prefix(HourlyReviewBudget.openItemCap))
 
         func smallestDeltaOffset() -> Int? {
             retained.enumerated().min {
@@ -209,30 +244,34 @@ public struct HourlyAgent: Sendable {
                 runID: runID,
                 versions: retained,
                 timelineText: timeline,
-                openItems: openItems,
+                openItems: retainedOpenItems,
                 localTimeISO: localTimeISO,
                 timeRange: (fromMs, toMs)
             )
         }
 
-        while AgentPrompts.untrustedPayloadCharacters(for: candidate()) > maxChars,
-              let index = smallestShrinkableDeltaOffset() {
+        while let index = smallestShrinkableDeltaOffset() {
+            let overflow = AgentPrompts.renderedUntrustedPayload(for: candidate(), nonce: nonce).count - maxChars
+            guard overflow > 0 else { break }
             let old = retained[index].compactContent
-            let reducedCount = max(HourlyReviewBudget.versionCompactFloor, old.count - 1)
+            let reducible = old.count - HourlyReviewBudget.versionCompactFloor
+            let reducedCount = old.count - min(max(overflow, 1), reducible)
             retained[index] = retained[index].replacingCompactContent(
                 String(old.prefix(reducedCount))
             )
         }
 
-        while AgentPrompts.untrustedPayloadCharacters(for: candidate()) > maxChars,
+        while AgentPrompts.renderedUntrustedPayload(for: candidate(), nonce: nonce).count > maxChars,
               retained.count > 1,
               let index = smallestDeltaOffset() {
             retained.remove(at: index)
         }
 
-        while AgentPrompts.untrustedPayloadCharacters(for: candidate()) > maxChars,
-              timeline.count > (retained.isEmpty ? 0 : HourlyReviewBudget.timelineFloor) {
-            timeline.removeLast()
+        while timeline.count > HourlyReviewBudget.timelineFloor {
+            let overflow = AgentPrompts.renderedUntrustedPayload(for: candidate(), nonce: nonce).count - maxChars
+            guard overflow > 0 else { break }
+            let reducible = timeline.count - HourlyReviewBudget.timelineFloor
+            timeline = String(timeline.dropLast(min(max(overflow, 1), reducible)))
         }
 
         return candidate()
@@ -259,14 +298,18 @@ public struct HourlyAgent: Sendable {
             do {
                 let renewalTask = Task {
                     while !Task.isCancelled {
-                        try await Task.sleep(nanoseconds: 40_000_000_000)
+                        do {
+                            try await renewalSleep(40_000_000_000)
+                        } catch {
+                            return
+                        }
                         guard !Task.isCancelled else { break }
                         await repo.renew(runID: page.runID)
                     }
                 }
+                defer { renewalTask.cancel() }
 
                 let ops = try await relay.reviewActivity(input)
-                renewalTask.cancel()
                 try await repo.complete(runID: page.runID, ops: ops)
             } catch {
                 SafeLogger.shared.log(

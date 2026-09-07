@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import MaxMiUI
+import MaxMiCore
 
 private actor CheckinActionState {
     private var loadCount = 0
@@ -49,33 +50,35 @@ final class CheckinViewModelTests: XCTestCase {
             dismissedAtMs: nil, isEmptySummary: false
         )
         let vm = CheckinViewModel(
-            load: { ready }, dismiss: {}, regenerate: {},
-            now: { 200 }, timeZone: .current
+            load: { _ in ready }, dismiss: { _, _ in }, regenerate: {},
+            now: { 200 }, timeZone: .current, dayBucket: { _, _ in 1 }
         )
 
         await vm.refresh()
         XCTAssertEqual(vm.state, .ready(summary: "You reviewed the migration.", generatedAtMs: 100))
 
         let dismissed = CheckinViewModel(
-            load: {
+            load: { _ in
                 CheckinDTO(
                     dayBucket: 1, generatedAtMs: 100, summary: "Hidden",
                     dismissedAtMs: 101, isEmptySummary: false
                 )
             },
-            dismiss: {}, regenerate: {}, now: { 200 }, timeZone: .current
+            dismiss: { _, _ in }, regenerate: {}, now: { 200 }, timeZone: .current,
+            dayBucket: { _, _ in 1 }
         )
         await dismissed.refresh()
         XCTAssertEqual(dismissed.state, .dismissed)
 
         let empty = CheckinViewModel(
-            load: {
+            load: { _ in
                 CheckinDTO(
                     dayBucket: 1, generatedAtMs: 100, summary: "Nothing meaningful yesterday.",
                     dismissedAtMs: nil, isEmptySummary: true
                 )
             },
-            dismiss: {}, regenerate: {}, now: { 200 }, timeZone: .current
+            dismiss: { _, _ in }, regenerate: {}, now: { 200 }, timeZone: .current,
+            dayBucket: { _, _ in 1 }
         )
         await empty.refresh()
         XCTAssertEqual(
@@ -87,10 +90,10 @@ final class CheckinViewModelTests: XCTestCase {
     func testDismissAndRegenerateRefreshOnlyAfterSuccessfulActions() async {
         let state = CheckinActionState()
         let vm = CheckinViewModel(
-            load: { await state.load() },
-            dismiss: { await state.dismiss() },
+            load: { _ in await state.load() },
+            dismiss: { _, _ in await state.dismiss() },
             regenerate: { try await state.regenerate() },
-            now: { 200 }, timeZone: .current
+            now: { 200 }, timeZone: .current, dayBucket: { _, _ in 1 }
         )
 
         await vm.dismissToday()
@@ -108,5 +111,57 @@ final class CheckinViewModelTests: XCTestCase {
         await vm.regenerateToday()
         let loadCountAfterFailure = await state.readLoadCount()
         XCTAssertEqual(loadCountAfterFailure, 2)
+    }
+
+    func testLoadAndDismissUseTheInjectedDayBucket() async {
+        let state = CheckinBucketState()
+        let nowMs: EpochMs = 123_456
+        let expectedBucket: Int64 = 987_654
+        let vm = CheckinViewModel(
+            load: { bucket in
+                await state.recordLoad(bucket)
+                return nil
+            },
+            dismiss: { bucket, now in
+                await state.recordDismiss(bucket: bucket, now: now)
+            },
+            regenerate: {},
+            now: { nowMs },
+            timeZone: TimeZone(identifier: "Asia/Kolkata")!,
+            dayBucket: { _, _ in
+                return expectedBucket
+            }
+        )
+
+        await vm.refresh()
+        await vm.dismissToday()
+
+        let loaded = await state.loadBuckets()
+        let dismisses = await state.dismisses()
+        XCTAssertEqual(loaded, [expectedBucket, expectedBucket])
+        XCTAssertEqual(dismisses.count, 1)
+        XCTAssertEqual(dismisses.first?.0, expectedBucket)
+        XCTAssertEqual(dismisses.first?.1, nowMs)
+    }
+}
+
+private actor CheckinBucketState {
+    private var loaded: [Int64] = []
+    private var dismissed: [(Int64, EpochMs)] = []
+
+    func recordLoad(_ bucket: Int64) {
+        loaded.append(bucket)
+    }
+
+    func recordDismiss(bucket: Int64, now: EpochMs) {
+        dismissed.append((bucket, now))
+    }
+
+    func loadBuckets() -> [Int64] {
+        loaded
+    }
+
+    func dismisses() -> [(Int64, EpochMs)] {
+        dismissed
     }
 }
