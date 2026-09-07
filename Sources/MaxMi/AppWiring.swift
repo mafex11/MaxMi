@@ -1096,10 +1096,14 @@ final class AppWiring {
                 outcome: .skipped(.excludedApp),
                 startedAtMs: nowMs
             )
+            return
         }
 
         // Open new visit ONLY if eligible
-        guard isActivityEligible(bundleID: app.bundleID) else { return }
+        let activityEligible = isActivityEligible(bundleID: app.bundleID)
+        guard activityEligible else { return }
+        let privacyDecision = eventPrivacyDecision(
+            app: app, pid: pid, isAppEligible: activityEligible)
 
         do {
             let visitID = try store.openVisit(appBundle: app.bundleID, appLabel: app.name, nowMs: nowMs)
@@ -1114,6 +1118,7 @@ final class AppWiring {
         // which is exactly why capture_events.thread_id is nullable (spec 12 Q4). Recorded after
         // the visit so a failed event write never costs the visit. The window title is content,
         // so the payload is encrypted like every other one.
+        guard privacyDecision.writesFocusEvent else { return }
         do {
             try store.recordCaptureEvent(
                 kind: .focus,
@@ -1124,7 +1129,9 @@ final class AppWiring {
                 payload: FocusEventPayload(
                     bundleID: app.bundleID,
                     appLabel: app.name,
-                    windowTitle: AXReader.focusedWindowTitle(pid: pid)
+                    windowTitle: privacyDecision.includesFocusWindowTitle
+                        ? AXReader.focusedWindowTitle(pid: pid)
+                        : nil
                 ),
                 nowMs: nowMs
             )
@@ -1133,6 +1140,57 @@ final class AppWiring {
                 .error, subsystem: .capture, event: .captureEventWriteFailed, error: error
             )
         }
+    }
+
+    /// Resolve browser URL policy before writing a focus/typing event. `BrowserTabExtractor` is
+    /// deliberately used rather than a title heuristic: the AX web-area URL is the same source
+    /// the browser capture path trusts. A missing browser snapshot/URL is passed as nil so the
+    /// shared gate fails closed for typing and redacts a focus title.
+    private func eventPrivacyDecision(
+        app: AppInfo,
+        pid: pid_t,
+        isAppEligible: Bool
+    ) -> EventPrivacyGate.Decision {
+        guard isAppEligible else {
+            return EventPrivacyGate.decision(
+                bundleID: app.bundleID,
+                isAppEligible: false,
+                browserURL: nil,
+                blockedDomains: [])
+        }
+        guard let browser = ApplicationRegistry.browser(for: app.bundleID) else {
+            return EventPrivacyGate.decision(
+                bundleID: app.bundleID,
+                isAppEligible: true,
+                browserURL: nil,
+                blockedDomains: [])
+        }
+        let blockedDomains: Set<String>
+        do {
+            blockedDomains = try store.blockedDomains()
+        } catch {
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .capturePolicyReadFailed, error: error
+            )
+            return EventPrivacyGate.decision(
+                bundleID: app.bundleID,
+                isAppEligible: false,
+                browserURL: nil,
+                blockedDomains: [])
+        }
+        let browserURL = AXReader.snapshotFrontmostWindow(pid: pid).flatMap { snapshot in
+            BrowserTabExtractor.currentURL(
+                window: snapshot.window,
+                windowTitle: snapshot.title,
+                engine: browser.browserEngine
+            )
+        }
+        return EventPrivacyGate.decision(
+            bundleID: app.bundleID,
+            isAppEligible: true,
+            browserURL: browserURL,
+            blockedDomains: blockedDomains
+        )
     }
 
     private func isActivityEligible(bundleID: String) -> Bool {
@@ -1693,7 +1751,7 @@ final class AppWiring {
                     return AXReader.focusedElementSnapshot(pid: pid).map(FocusedElement.init(node:))
                 }()
                 if let focusedForTyping {
-                    recordTypingEvent(app: appInfo, focused: focusedForTyping, trigger: trigger,
+                    recordTypingEvent(app: appInfo, pid: pid, focused: focusedForTyping, trigger: trigger,
                                       threadID: eventThreadID, versionID: versionID)
                 }
             }
@@ -1926,6 +1984,11 @@ final class AppWiring {
     private func pollFocusedFieldTyping(bundleID: String, pid: pid_t) {
         guard !isShuttingDown, !isLifecycleSuspended,
               isActivityEligible(bundleID: bundleID),
+              eventPrivacyDecision(
+                app: AppInfo(bundleID: bundleID, name: bundleID, windowTitle: nil),
+                pid: pid,
+                isAppEligible: true
+              ).writesTypingEvent,
               let node = AXReader.focusedElementSnapshot(pid: pid) else { return }
         let app = AppInfo(
             bundleID: bundleID,
@@ -1939,7 +2002,7 @@ final class AppWiring {
             windowTitle: AXReader.focusedWindowTitle(pid: pid),
             windowID: AXReader.focusedWindowID(pid: pid)
         )
-        recordTypingEvent(app: app, focused: FocusedElement(node: node),
+        recordTypingEvent(app: app, pid: pid, focused: FocusedElement(node: node),
                           trigger: .accessibilityChanged, threadID: nil, versionID: nil)
     }
 
@@ -1948,13 +2011,16 @@ final class AppWiring {
     /// attribution and the DB write.
     private func recordTypingEvent(
         app: AppInfo,
+        pid: pid_t,
         focused: FocusedElement,
         trigger: CaptureTrigger,
         threadID: String?,
         versionID: String?
     ) {
         guard let typingObserver, !focused.isSecure, !isShuttingDown, !isLifecycleSuspended,
-              isActivityEligible(bundleID: app.bundleID) else { return }
+              isActivityEligible(bundleID: app.bundleID),
+              eventPrivacyDecision(
+                app: app, pid: pid, isAppEligible: true).writesTypingEvent else { return }
         let fieldKey = FocusedFieldKey(app: app, focused: focused)
         let threadKey = TypingThreadKey(fieldKey: fieldKey)
         // The capture path knows the thread; the poll path does not, because no capture ran. Reuse
@@ -1973,7 +2039,11 @@ final class AppWiring {
                   let self else { return }
             guard let event = TypingEventPersistenceDecision.eventToPersist(
                 observedEvent,
-                isActivityEligible: self.isActivityEligible(bundleID: app.bundleID),
+                isActivityEligible: self.eventPrivacyDecision(
+                    app: app,
+                    pid: pid,
+                    isAppEligible: self.isActivityEligible(bundleID: app.bundleID)
+                ).writesTypingEvent,
                 isObserverActive: self.typingObserver != nil,
                 isCaptureLifecycleActive: !self.isShuttingDown && !self.isLifecycleSuspended
             ) else {

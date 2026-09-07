@@ -98,6 +98,24 @@ public enum BrowserTabExtractor {
         )
     }
 
+    /// Resolves only the current browser URL using the exact same web-area/address-bar selection
+    /// as `extract`, without reading page text. Focus and typing event privacy checks use this
+    /// before recording a title or taking a focused-field snapshot.
+    public static func currentURL(
+        window: AXNode,
+        windowTitle: String?,
+        engine: BrowserEngine? = nil
+    ) -> String? {
+        guard bestAddressField(in: window)?.focused != true else { return nil }
+        let webAreas = nodes(in: window) { $0.role == "AXWebArea" }
+        if let candidate = bestWebURL(from: webAreas, windowTitle: windowTitle, engine: engine) {
+            return candidate.url
+        }
+        guard let address = bestAddressField(in: window),
+              let raw = address.value else { return nil }
+        return normalizedURL(raw)
+    }
+
     static func visualOrderText(
         in root: AXNode,
         excludingToolbars: Bool = false
