@@ -112,6 +112,8 @@ final class CheckinStoreTests: XCTestCase {
         )
         XCTAssertEqual(resolved.count, 1)
         XCTAssertEqual(resolved.titles, ["Resolved task"])
+        XCTAssertFalse(resolved.titles.contains("Before range"))
+        XCTAssertFalse(resolved.titles.contains("After range"))
 
         _ = try store.commitCapture(
             CaptureEnvelope(
@@ -128,11 +130,47 @@ final class CheckinStoreTests: XCTestCase {
             ),
             nowMs: t0 + 50
         )
+        _ = try store.commitCapture(
+            CaptureEnvelope(
+                sourceApp: "Calendar", sourceKey: "calendar:before", sourceTitle: "Before",
+                content: "Before range", contentKind: .calendar, parserID: "TestCalendar",
+                parserVersion: 1, accumulationPolicy: .replace, offscreenPolicy: .visibleOnly(),
+                trigger: .periodic, truncated: false,
+                structured: .calendar([
+                    CalendarEvent(
+                        title: "Before range", dateString: "Today 09:00", start: nil, end: nil,
+                        organizer: nil, location: nil, hasConference: false, notes: nil
+                    ),
+                ])
+            ),
+            nowMs: t0 + 39
+        )
+        _ = try store.commitCapture(
+            CaptureEnvelope(
+                sourceApp: "Calendar", sourceKey: "calendar:after", sourceTitle: "After",
+                content: "After range", contentKind: .calendar, parserID: "TestCalendar",
+                parserVersion: 1, accumulationPolicy: .replace, offscreenPolicy: .visibleOnly(),
+                trigger: .periodic, truncated: false,
+                structured: .calendar([
+                    CalendarEvent(
+                        title: "After range", dateString: "Today 11:00", start: nil, end: nil,
+                        organizer: nil, location: nil, hasConference: false, notes: nil
+                    ),
+                ])
+            ),
+            nowMs: t0 + 61
+        )
         let calendar = try store.checkinCalendarCaptures(
             fromMs: t0 + 40, toMs: t0 + 60, limit: 10
         )
         XCTAssertEqual(calendar.map(\.title), ["Plan review"])
+        XCTAssertFalse(calendar.map(\.title).contains("Before range"))
+        XCTAssertFalse(calendar.map(\.title).contains("After range"))
 
+        _ = try store.openVisit(
+            appBundle: "com.example.before", appLabel: "Before", nowMs: t0 - 100
+        )
+        try store.closeOpenVisits(nowMs: t0 - 1)
         _ = try store.openVisit(
             appBundle: "com.example.editor", appLabel: "Editor", nowMs: t0 + 100
         )
@@ -141,6 +179,10 @@ final class CheckinStoreTests: XCTestCase {
             appBundle: "com.example.chat", appLabel: "Chat", nowMs: t0 + 600
         )
         try store.closeOpenVisits(nowMs: t0 + 700)
+        _ = try store.openVisit(
+            appBundle: "com.example.after", appLabel: "After", nowMs: t0 + 801
+        )
+        try store.closeOpenVisits(nowMs: t0 + 900)
         _ = try store.commitCapture(
             CaptureInput(
                 sourceApp: "Editor", sourceKey: "editor:workspace",
@@ -151,6 +193,8 @@ final class CheckinStoreTests: XCTestCase {
 
         let apps = try store.checkinTopApps(fromMs: t0, toMs: t0 + 800, limit: 10)
         XCTAssertEqual(apps.map(\.appLabel), ["Editor", "Chat"])
+        XCTAssertFalse(apps.map(\.appLabel).contains("Before"))
+        XCTAssertFalse(apps.map(\.appLabel).contains("After"))
         XCTAssertEqual(apps.first?.sourceTitle, "Workspace")
     }
 
@@ -183,6 +227,8 @@ final class CheckinStoreTests: XCTestCase {
         let titleCipher = try AESGCMFieldCipher.testCipher.encrypt("Open task")
         let detailsCipher = try AESGCMFieldCipher.testCipher.encrypt("Follow up")
         let resolvedCipher = try AESGCMFieldCipher.testCipher.encrypt("Resolved task")
+        let beforeResolvedCipher = try AESGCMFieldCipher.testCipher.encrypt("Before range")
+        let afterResolvedCipher = try AESGCMFieldCipher.testCipher.encrypt("After range")
         try db.dbQueue.write { d in
             try d.execute(sql: """
                 INSERT INTO activity_sessions (
@@ -206,6 +252,18 @@ final class CheckinStoreTests: XCTestCase {
                     detected_at, updated_at, resolved_at
                 ) VALUES ('resolved-item','todo','resolved',?,NULL,NULL,?,?,?)
                 """, arguments: [resolvedCipher, t0 + 20, t0 + 30, t0 + 30])
+            try d.execute(sql: """
+                INSERT INTO agent_action_items (
+                    id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                    detected_at, updated_at, resolved_at
+                ) VALUES ('resolved-before','todo','resolved',?,NULL,NULL,?,?,?)
+                """, arguments: [beforeResolvedCipher, t0 + 10, t0 + 19, t0 + 19])
+            try d.execute(sql: """
+                INSERT INTO agent_action_items (
+                    id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                    detected_at, updated_at, resolved_at
+                ) VALUES ('resolved-after','todo','resolved',?,NULL,NULL,?,?,?)
+                """, arguments: [afterResolvedCipher, t0 + 41, t0 + 41, t0 + 41])
         }
     }
 }
