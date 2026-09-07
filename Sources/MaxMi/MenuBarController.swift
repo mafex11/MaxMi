@@ -33,6 +33,7 @@ final class MenuBarController {
         onOpenActivity: @escaping () -> Void,
         onOpenCaptureHealth: @escaping () -> Void,
         onStartVoiceNote: @escaping () -> Void,
+        onCheckInNow: @escaping () -> Void,
         onOpenPrivacy: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void
     ) {
@@ -60,6 +61,10 @@ final class MenuBarController {
         let voiceNoteItem = NSMenuItem(title: "Start Voice Note", action: nil, keyEquivalent: "v")
         voiceNoteItem.setAction { onStartVoiceNote() }
         menu.addItem(voiceNoteItem)
+
+        let checkinItem = NSMenuItem(title: "Check in now", action: nil, keyEquivalent: "")
+        checkinItem.setAction { onCheckInNow() }
+        menu.addItem(checkinItem)
 
         let privacyItem = NSMenuItem(title: "Activity Privacy…", action: nil, keyEquivalent: "")
         privacyItem.setAction { onOpenPrivacy() }

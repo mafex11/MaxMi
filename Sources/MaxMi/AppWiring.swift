@@ -195,6 +195,10 @@ final class AppWiring {
     let displaySummarizer: DisplaySummarizer
     let captureDisplaySummarizer: CaptureDisplaySummarizer
 
+    // Daily check-ins
+    let dailyCheckinGenerator: DailyCheckinGenerator
+    let checkinTrigger: CheckinTrigger
+
     // Agent scheduler
     let agentScheduler: AgentScheduler
     var agentBackgroundScheduler: NSBackgroundActivityScheduler?
@@ -263,6 +267,45 @@ final class AppWiring {
         captureDisplaySummarizer = CaptureDisplaySummarizer(
             repo: StoreCaptureSummaryRepository(store: store, modelID: config.extractModel),
             relay: activityRelay
+        )
+
+        let checkinTimeZone = TimeZone.current
+        let checkinRepository = StoreCheckinRepository(
+            store: store,
+            clock: epochNowMs,
+            timeZone: checkinTimeZone
+        )
+        let checkinBuilder = CheckinInputBuilder(
+            repo: checkinRepository,
+            timeZone: checkinTimeZone,
+            dayBucket: { nowMs, timeZone in
+                var calendar = Calendar.current
+                calendar.timeZone = timeZone
+                let date = Date(timeIntervalSince1970: Double(nowMs) / 1_000)
+                return EpochMs(calendar.startOfDay(for: date).timeIntervalSince1970 * 1_000)
+            }
+        )
+        dailyCheckinGenerator = DailyCheckinGenerator(
+            repo: checkinRepository,
+            relay: activityRelay,
+            builder: checkinBuilder,
+            timeZone: checkinTimeZone
+        )
+        nonisolated(unsafe) let checkinStore = store
+        checkinTrigger = CheckinTrigger(
+            generator: dailyCheckinGenerator,
+            schedule: CheckinSchedule.isAutomaticGenerationEligible,
+            isActivitySynthesisEnabled: {
+                do {
+                    let consent = try checkinStore.activityConsent()
+                    let enabled = try checkinStore.activityEnabled()
+                    return consent == .granted && enabled
+                } catch {
+                    return false
+                }
+            },
+            clock: epochNowMs,
+            timeZone: checkinTimeZone
         )
 
         // Initialize agent scheduler
@@ -977,6 +1020,12 @@ final class AppWiring {
             onStartVoiceNote: { [weak self] in
                 Task { await self?.meetingSession?.startVoiceNote() }
             },
+            onCheckInNow: { [weak self] in
+                guard let checkinTrigger = self?.checkinTrigger else { return }
+                Task.detached {
+                    await checkinTrigger.regenerateNow(nowMs: epochNowMs())
+                }
+            },
             onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() },
             onOpenSettings: { [weak self] in
                 guard let self else { return }
@@ -1065,6 +1114,10 @@ final class AppWiring {
             Task { @MainActor in
                 guard let self, !self.paused else { return }
                 await self.pipeline.tick()
+                let checkinTrigger = self.checkinTrigger
+                Task.detached {
+                    await checkinTrigger.tick(nowMs: epochNowMs())
+                }
                 // Close idle activity sessions (5 min gap)
                 _ = try? self.store.closeIdleSessions(idleGapMs: 5*60_000, nowMs: epochNowMs())
                 // Summarize due sessions if activity enabled
