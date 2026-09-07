@@ -192,6 +192,7 @@ final class AppWiring {
     let captureHealthWindow: CaptureHealthWindow
     let menuPopoverNavigation: MenuPopoverViewModel
     var trayHomeViewModel: TrayHomeViewModel!
+    var checkinViewModel: CheckinViewModel!
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -892,6 +893,51 @@ final class AppWiring {
         menuPopoverNavigation = MenuPopoverViewModel()
 
         // Purpose-built tray home: live state, recent summaries, and private lexical search.
+        nonisolated(unsafe) let trayCheckinStore = store
+        let trayCheckinRepository = checkinRepository
+        let trayCheckinGenerator = dailyCheckinGenerator
+        checkinViewModel = CheckinViewModel(
+            load: { @Sendable in
+                let nowMs = epochNowMs()
+                let dayBucket = Store.dayBucket(forMs: nowMs, timeZone: .current)
+                return await Task.detached(priority: .userInitiated) {
+                    guard let checkin = await trayCheckinRepository.currentCheckin(
+                        dayBucket: dayBucket
+                    ) else {
+                        return nil
+                    }
+                    let openItemIDs = Set(checkin.openItemIDs)
+                    let openItems = await trayCheckinRepository.openItems(limit: 15)
+                        .filter { openItemIDs.contains($0.id) }
+                        .map { CheckinOpenItemDTO(title: $0.title, ageDays: $0.ageDays) }
+                    let isEmptySummary = checkin.summary == nil
+                        || checkin.summary?.range(
+                            of: "nothing meaningful",
+                            options: .caseInsensitive
+                        ) != nil
+                    return CheckinDTO(
+                        dayBucket: checkin.dayBucket,
+                        generatedAtMs: checkin.generatedAtMs,
+                        summary: checkin.summary,
+                        dismissedAtMs: checkin.dismissedAtMs,
+                        isEmptySummary: isEmptySummary,
+                        openItems: openItems
+                    )
+                }.value
+            },
+            dismiss: { @Sendable in
+                try await Task.detached(priority: .userInitiated) {
+                    let nowMs = epochNowMs()
+                    let dayBucket = Store.dayBucket(forMs: nowMs, timeZone: .current)
+                    try trayCheckinStore.dismissCheckin(dayBucket: dayBucket, nowMs: nowMs)
+                }.value
+            },
+            regenerate: { @Sendable in
+                await trayCheckinGenerator.regenerate(nowMs: epochNowMs())
+            },
+            now: { epochNowMs() },
+            timeZone: .current
+        )
         trayHomeViewModel = TrayHomeViewModel(
             loadStatus: { @MainActor [weak self] in
                 guard let self else {
@@ -945,6 +991,7 @@ final class AppWiring {
             recentCapturesViewModel: recentCapturesViewModel,
             activityViewModel: viewModel,
             actionItemsViewModel: actionItemsViewModel,
+            checkinViewModel: checkinViewModel,
             settingsViewModel: settingsViewModel,
             capturePrivacyViewModel: capturePrivacyViewModel,
             dataControlsViewModel: dataControlsViewModel,
@@ -968,6 +1015,7 @@ final class AppWiring {
                 case .home:
                     await recentCapturesViewModel.refresh()
                     await self.trayHomeViewModel.refresh()
+                    await self.checkinViewModel.refresh()
                 case .settings:
                     await settingsViewModel.refresh()
                     await capturePrivacyViewModel.refresh()
