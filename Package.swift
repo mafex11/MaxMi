@@ -43,7 +43,7 @@ let package = Package(
             linkerSettings: [.linkedFramework("Security")]
         ),
         .target(name: "MaxMiStore", dependencies: [
-            "MaxMiCore", "CSQLiteVec",
+            "MaxMiCore", "MaxMiActivity", "CSQLiteVec",
             .product(name: "GRDB", package: "GRDB.swift"),
         ]),
         .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),
@@ -67,6 +67,5 @@ let package = Package(
         .testTarget(name: "MaxMiUITests", dependencies: ["MaxMiUI"]),
         .testTarget(name: "MaxMiMCPTests", dependencies: ["MaxMiMCP"]),
         .testTarget(name: "MaxMiMeetingsTests", dependencies: ["MaxMiMeetings"]),
-        .testTarget(name: "MaxMiTests", dependencies: ["MaxMi", "MaxMiStore"]),
     ]
 )

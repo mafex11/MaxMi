@@ -1,5 +1,4 @@
 import XCTest
-@testable import MaxMi
 @testable import MaxMiStore
 import MaxMiCore
 
