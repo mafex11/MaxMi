@@ -190,7 +190,7 @@ extension Store {
         }
     }
 
-    /// The URL currently stored for a thread, for a `navigation` event's `oldURL`. Must be read
+    /// The URL currently stored for a thread, for a `navigation` event's `fromURL`. Must be read
     /// BEFORE `commitCapture`, which overwrites the row.
     ///
     /// nil for a thread that does not exist, for a shape that has no URL, and for an unreadable

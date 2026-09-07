@@ -110,6 +110,25 @@ final class CaptureEventStoreTests: XCTestCase {
         XCTAssertFalse(navigationJSON.contains("\"newURL\""))
     }
 
+    func testNavigationPayloadDecodesLegacyAndNewKeysToTheSameValue() throws {
+        let decoder = CapturedContentEnvelope.makeDecoder()
+        let expected = NavigationEventPayload(
+            fromURL: "https://example.com/from",
+            toURL: "https://example.com/to"
+        )
+        let newPayload = try decoder.decode(
+            NavigationEventPayload.self,
+            from: Data(#"{"fromURL":"https://example.com/from","toURL":"https://example.com/to"}"#.utf8)
+        )
+        let legacyPayload = try decoder.decode(
+            NavigationEventPayload.self,
+            from: Data(#"{"oldURL":"https://example.com/from","newURL":"https://example.com/to"}"#.utf8)
+        )
+
+        XCTAssertEqual(newPayload, expected)
+        XCTAssertEqual(legacyPayload, expected)
+    }
+
     func testHourBucketAndIdentifierAreDerivedFromTheTimestamp() throws {
         try recordFocus(nowMs: t0, trigger: .appActivated)
         let bucket = try db.dbQueue.read { d in

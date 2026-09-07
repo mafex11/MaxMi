@@ -32,6 +32,36 @@ public struct NavigationEventPayload: Codable, Sendable, Equatable {
         self.fromURL = fromURL
         self.toURL = toURL
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case fromURL
+        case toURL
+        case oldURL
+        case newURL
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fromURL = try container.decodeIfPresent(String.self, forKey: .fromURL)
+            ?? container.decodeIfPresent(String.self, forKey: .oldURL)
+        guard let toURL = try container.decodeIfPresent(String.self, forKey: .toURL)
+            ?? container.decodeIfPresent(String.self, forKey: .newURL) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.toURL,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "Expected toURL or newURL"
+                )
+            )
+        }
+        self.toURL = toURL
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(fromURL, forKey: .fromURL)
+        try container.encode(toURL, forKey: .toURL)
+    }
 }
 
 /// One meaningful change to the focused field's value. Produced by `TypingObserver`
