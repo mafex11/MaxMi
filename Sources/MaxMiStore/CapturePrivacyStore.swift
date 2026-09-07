@@ -1,7 +1,6 @@
 import Foundation
 import GRDB
 import MaxMiCore
-import MaxMiCapture
 
 public enum CapturePauseState: Sendable, Equatable {
     case active(untilMs: EpochMs?)
@@ -127,12 +126,18 @@ struct SourceCloudEligibility {
         )
         """
         let hostAndPort = "substr(\(authority), 1, (\(authorityEnd)) - 1)"
+        let hostWithUserInfoRemoved = """
+        CASE
+          WHEN instr(\(hostAndPort), '@') = 0 THEN \(hostAndPort)
+          ELSE substr(\(hostAndPort), instr(\(hostAndPort), '@') + 1)
+        END
+        """
         return """
         lower(
           CASE
             WHEN instr(\(urlColumn), '://') = 0 THEN ''
-            WHEN instr(\(hostAndPort), ':') = 0 THEN \(hostAndPort)
-            ELSE substr(\(hostAndPort), 1, instr(\(hostAndPort), ':') - 1)
+            WHEN instr(\(hostWithUserInfoRemoved), ':') = 0 THEN \(hostWithUserInfoRemoved)
+            ELSE substr(\(hostWithUserInfoRemoved), 1, instr(\(hostWithUserInfoRemoved), ':') - 1)
           END
         )
         """

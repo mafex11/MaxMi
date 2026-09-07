@@ -237,6 +237,32 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(page.versions.map(\.compactContent), ["Ordinary agent content"])
     }
 
+    func testCompleteRebuildExcludesSourceMadeLocalOnlyAfterClaim() throws {
+        let versionID = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://completion-local-only.example",
+            content: "Source is local only before completion"
+        )
+        let page = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50, leaseMs: 60_000, nowMs: t0 + 1
+        ))
+        XCTAssertEqual(page.versions.map(\.versionID), [versionID])
+
+        try store.setCloudProcessing("Web", allowed: false, nowMs: t0 + 2)
+        _ = try store.completeAgentRun(
+            runID: page.runID,
+            ops: [.create(
+                kind: "todo",
+                title: "Do not retain the newly local source",
+                details: nil,
+                sourceRefs: [versionID]
+            )],
+            nowMs: t0 + 3
+        )
+
+        XCTAssertEqual(try store.actionItems(status: "open", limit: 1).first?.sourceRefs, [])
+    }
+
     private func seedVersions(_ count: Int) throws {
         for index in 0..<count {
             _ = try seedVersion(

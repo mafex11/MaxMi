@@ -55,6 +55,102 @@ final class ActivityStoreTests: XCTestCase {
         XCTAssertEqual(try store.sessionsNeedingSummary(nowMs: t0 + 7, limit: 10).map(\.id), [sessionID])
     }
 
+    func testSessionsNeedingSummaryUsesSharedSourceCloudEligibility() throws {
+        guard case .committed(let localVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Local",
+                sourceKey: "https://local-only.example/work",
+                sourceTitle: "Local",
+                content: "Keep this local"
+            ),
+            nowMs: t0
+        ) else { return XCTFail("expected local capture") }
+        guard case .committed(let pausedVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://paused.example/work",
+                sourceTitle: "Paused",
+                content: "Paused thread"
+            ),
+            nowMs: t0 + 10
+        ) else { return XCTFail("expected paused capture") }
+        guard case .committed(let blockedVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://blocked.example/work",
+                sourceTitle: "Blocked",
+                content: "Blocked domain"
+            ),
+            nowMs: t0 + 20
+        ) else { return XCTFail("expected blocked capture") }
+        guard case .committed(let ordinaryVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://ordinary.example/work",
+                sourceTitle: "Ordinary",
+                content: "Ordinary work"
+            ),
+            nowMs: t0 + 30
+        ) else { return XCTFail("expected ordinary capture") }
+
+        try store.setCloudProcessing("Local", allowed: false, nowMs: t0 + 40)
+        try store.setThreadPaused("https://paused.example/work", paused: true, nowMs: t0 + 40)
+        _ = try store.setDomain("blocked.example", blocked: true, nowMs: t0 + 40)
+
+        let localSession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.local", appLabel: "Local", versionID: localVersion,
+            content: "Keep this local", nowMs: t0 + 50
+        )
+        try store.closeSession(localSession, nowMs: t0 + 51)
+        let pausedSession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.paused", appLabel: "Paused", versionID: pausedVersion,
+            content: "Paused thread", nowMs: t0 + 60
+        )
+        try store.closeSession(pausedSession, nowMs: t0 + 61)
+        let blockedSession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.blocked", appLabel: "Blocked", versionID: blockedVersion,
+            content: "Blocked domain", nowMs: t0 + 70
+        )
+        try store.closeSession(blockedSession, nowMs: t0 + 71)
+        let ordinarySession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.ordinary", appLabel: "Ordinary", versionID: ordinaryVersion,
+            content: "Ordinary work", nowMs: t0 + 80
+        )
+        try store.closeSession(ordinarySession, nowMs: t0 + 81)
+
+        XCTAssertEqual(
+            try store.sessionsNeedingSummary(nowMs: t0 + 90, limit: 10).map(\.id),
+            [ordinarySession]
+        )
+    }
+
+    func testBlockedDomainUserinfoURLIsExcludedInMemoryAndSQL() throws {
+        let url = "https://user:pass@blocked.example/work"
+        guard case .committed = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: url, sourceTitle: "Blocked", content: "content"),
+            nowMs: t0
+        ) else { return XCTFail("expected capture") }
+        let threadID = try store.threadID(forKey: url)
+        _ = try store.setDomain("blocked.example", blocked: true, nowMs: t0 + 1)
+
+        let eligibility = try store.sourceCloudEligibility()
+        XCTAssertFalse(eligibility.allows(sourceApp: "Web", threadID: threadID, url: url))
+
+        let filter = eligibility.sqlFilter(
+            sourceAppColumn: "t.source_app",
+            threadIDColumn: "t.id",
+            urlColumn: "t.source_key"
+        )
+        let matchingIDs = try db.dbQueue.read { database in
+            try String.fetchAll(
+                database,
+                sql: "SELECT t.id FROM threads t WHERE \(filter.condition)",
+                arguments: StatementArguments(filter.arguments)
+            )
+        }
+        XCTAssertFalse(matchingIDs.contains(threadID))
+    }
+
     func testDeleteActivityForAppCascades() throws {
         let s = try store.recordActivityCapture(appBundle: "com.secret", appLabel: "S", versionID: nil, content: "x", nowMs: t0)
         try store.closeActiveSession(nowMs: t0+1)

@@ -223,9 +223,7 @@ extension Store {
     }
 
     public func sessionsNeedingSummary(nowMs: EpochMs, limit: Int) throws -> [ActivitySession] {
-        let reviewed = try cloudReviewedSourceApps()
-        let localOnly = try cloudLocalOnlySourceApps()
-        let reviewGateEnabled = try cloudReviewInitialized()
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
             let rows = try Row.fetchAll(d, sql: """
                 SELECT id, app_bundle, app_label, started_at, ended_at, last_activity_at, summary_ciphertext, summary_status
@@ -235,16 +233,21 @@ extension Store {
                 ORDER BY started_at DESC
                 """, arguments: [nowMs])
             return try rows.filter { row in
-                guard reviewGateEnabled else { return true }
                 let sessionID: String = row["id"]
-                let apps = try String.fetchAll(d, sql: """
-                    SELECT DISTINCT t.source_app
+                let sources = try Row.fetchAll(d, sql: """
+                    SELECT DISTINCT t.source_app, t.id AS thread_id, t.source_key
                     FROM activity_session_evidence e
                     JOIN versions v ON v.id = e.version_id
                     JOIN threads t ON t.id = v.thread_id
                     WHERE e.session_id = ?
                     """, arguments: [sessionID])
-                return !apps.isEmpty && apps.allSatisfy { reviewed.contains($0) && !localOnly.contains($0) }
+                return sources.allSatisfy { source in
+                    privacy.allows(
+                        sourceApp: source["source_app"],
+                        threadID: source["thread_id"],
+                        url: source["source_key"]
+                    )
+                }
             }.prefix(max(limit, 0)).map { mapActivitySession($0) }
         }
     }
