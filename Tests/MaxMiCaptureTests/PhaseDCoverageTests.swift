@@ -2,126 +2,298 @@ import XCTest
 import MaxMiCore
 @testable import MaxMiCapture
 
-/// Spec §11 item 8 as a test: every rewritten parser is registered, and every one has at least
-/// two fixtures with goldens, at least one of them recorded at a nonzero window origin.
+/// Spec §11 item 8 as a test: every registered structured parser has executable fixture/golden
+/// coverage plus a known not-handled or refusal surface.
 final class PhaseDCoverageTests: XCTestCase {
-    /// Parser type name -> its two (fixture, golden) pairs.
-    static let coverage: [String: [(fixture: String, golden: String)]] = [
-        "TerminalParser": [("warp-session", "warp-session-golden"),
-                           ("iterm-offset-session", "iterm-offset-session-golden")],
-        "EditorParser": [("vscode-editor", "vscode-editor-golden"),
-                         ("cursor-offset-editor", "cursor-offset-editor-golden")],
-        // R-E rejects the former unanchored x-band fallback. This fixture keeps the verified
-        // DOM anchors while exercising the same parser at a nonzero window origin.
-        "SlackParser": [("slack-dom-messages", "slack-dom-messages-golden"),
-                        ("slack-offset-dom-messages", "slack-offset-dom-messages-golden"),
-                        ("slack-web-channel", "slack-web-channel-golden"),
-                        ("slack-web-offset-dm", "slack-web-offset-dm-golden")],
-        // Discord is geometry-free, so its offset fixture is pinned against the SAME golden
-        // (Task 11, ruling F25) — the pair is (two fixtures, one golden).
-        "DiscordParser": [("discord-messages", "discord-messages-golden"),
-                          ("discord-offset-messages", "discord-messages-golden")],
-        "MessagesParser": [("messages-thread", "messages-thread-golden"),
-                           ("messages-offset-thread", "messages-offset-thread-golden")],
-        "WhatsAppParser": [("whatsapp-bubbles", "whatsapp-bubbles-golden"),
-                           ("whatsapp-offset-bubbles", "whatsapp-offset-bubbles-golden")],
-        "NotesParser": [("notes-body", "notes-body-golden"),
-                        ("notes-offset-shared", "notes-offset-shared-golden")],
-        "NotionParser": [("notion-page", "notion-page-golden"),
-                         ("notion-offset-peek", "notion-offset-peek-golden")],
-        "ObsidianParser": [("obsidian-editor", "obsidian-editor-golden"),
-                           ("obsidian-offset-preview", "obsidian-offset-preview-golden")],
-        "GmailParser": [("gmail-thread", "gmail-thread-golden"),
-                        ("gmail-offset-inbox", "gmail-offset-inbox-golden")],
-        "LinkedInMessagingParser": [("linkedin-messaging", "linkedin-messaging-golden"),
-                                    ("linkedin-offset-messaging",
-                                     "linkedin-offset-messaging-golden")],
-        "TeamsWebParser": [("teams-web-chat", "teams-web-chat-golden"),
-                           ("teams-web-offset-chat", "teams-web-offset-chat-golden")],
-        "OutlookWebParser": [("outlook-web-reading", "outlook-web-reading-golden"),
-                              ("outlook-web-offset-list", "outlook-web-offset-list-golden")],
-        "FinderParser": [("finder-list", "finder-list-golden"),
-                         ("finder-offset-copy", "finder-offset-copy-golden")],
-        "CalendarParser": [("calendar-event", "calendar-event-golden"),
-                           ("calendar-offset-event", "calendar-offset-event-golden")],
-        "RemindersParser": [("reminder-task", "reminder-task-golden"),
-                            ("reminders-offset-list", "reminders-offset-list-golden")],
+    struct FixturePair {
+        let fixture: String
+        let golden: String
+        let context: ParseContext
+    }
+
+    struct Coverage {
+        let parser: any StructuredParser
+        let pairs: [FixturePair]
+        let blankContext: ParseContext
+    }
+
+    static func context(
+        bundleID: String,
+        name: String,
+        title: String?,
+        url: String? = nil
+    ) -> ParseContext {
+        ParseContext(
+            app: AppInfo(bundleID: bundleID, name: name, windowTitle: title),
+            url: url,
+            now: 1_790_078_400_000,
+            timeZone: TimeZone(secondsFromGMT: 19_800)!
+        )
+    }
+
+    static let coverage: [String: Coverage] = [
+        "TerminalParser": Coverage(
+            parser: TerminalParser(),
+            pairs: [
+                FixturePair(fixture: "warp-session", golden: "warp-session-golden",
+                            context: context(bundleID: "dev.warp.Warp-Stable", name: "Warp",
+                                             title: "~/code/sample")),
+                FixturePair(fixture: "iterm-offset-session", golden: "iterm-offset-session-golden",
+                            context: context(bundleID: "com.googlecode.iterm2", name: "iTerm2",
+                                             title: "~/code/sample")),
+            ],
+            blankContext: context(bundleID: "dev.warp.Warp-Stable", name: "Warp", title: nil)
+        ),
+        "EditorParser": Coverage(
+            parser: EditorParser(),
+            pairs: [
+                FixturePair(fixture: "vscode-editor", golden: "vscode-editor-golden",
+                            context: context(bundleID: ParserRegistry.vsCodeBundleID, name: "VS Code",
+                                             title: "sample.swift — sample")),
+                FixturePair(fixture: "cursor-offset-editor", golden: "cursor-offset-editor-golden",
+                            context: context(bundleID: ParserRegistry.cursorBundleID, name: "Cursor",
+                                             title: "sample — sample.swift")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.vsCodeBundleID, name: "VS Code",
+                                  title: "Welcome")
+        ),
+        "SlackParser": Coverage(
+            parser: SlackParser(),
+            pairs: [
+                FixturePair(fixture: "slack-dom-messages", golden: "slack-dom-messages-golden",
+                            context: context(bundleID: ParserRegistry.slackBundleID, name: "Slack",
+                                             title: "#general - Acme - Slack")),
+                FixturePair(fixture: "slack-offset-dom-messages",
+                            golden: "slack-offset-dom-messages-golden",
+                            context: context(bundleID: ParserRegistry.slackBundleID, name: "Slack",
+                                             title: "#general - Acme - Slack")),
+                FixturePair(fixture: "slack-web-channel", golden: "slack-web-channel-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "general - Acme - Slack",
+                                             url: "https://app.slack.com/client/T01/C02")),
+                FixturePair(fixture: "slack-web-offset-dm", golden: "slack-web-offset-dm-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "Ada Lovelace - Acme - Slack",
+                                             url: "https://app.slack.com/client/T01/D02")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.slackBundleID, name: "Slack",
+                                  title: "Slack")
+        ),
+        "DiscordParser": Coverage(
+            parser: DiscordParser(),
+            pairs: [
+                FixturePair(fixture: "discord-messages", golden: "discord-messages-golden",
+                            context: context(bundleID: ParserRegistry.discordBundleID, name: "Discord",
+                                             title: "#general | Acme - Discord")),
+                FixturePair(fixture: "discord-offset-messages", golden: "discord-messages-golden",
+                            context: context(bundleID: ParserRegistry.discordBundleID, name: "Discord",
+                                             title: "#general | Acme - Discord")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.discordBundleID, name: "Discord",
+                                  title: "Discord")
+        ),
+        "MessagesParser": Coverage(
+            parser: MessagesParser(),
+            pairs: [
+                FixturePair(fixture: "messages-thread", golden: "messages-thread-golden",
+                            context: context(bundleID: ParserRegistry.messagesBundleID, name: "Messages",
+                                             title: "Priya Vantar")),
+                FixturePair(fixture: "messages-offset-thread",
+                            golden: "messages-offset-thread-golden",
+                            context: context(bundleID: ParserRegistry.messagesBundleID, name: "Messages",
+                                             title: "Priya Vantar")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.messagesBundleID, name: "Messages",
+                                  title: "Messages")
+        ),
+        "WhatsAppParser": Coverage(
+            parser: WhatsAppParser(),
+            pairs: [
+                FixturePair(fixture: "whatsapp-bubbles", golden: "whatsapp-bubbles-golden",
+                            context: context(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
+                                             title: "WhatsApp")),
+                FixturePair(fixture: "whatsapp-offset-bubbles",
+                            golden: "whatsapp-offset-bubbles-golden",
+                            context: context(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
+                                             title: "WhatsApp")),
+            ],
+            blankContext: context(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
+                                  title: "WhatsApp")
+        ),
+        "NotesParser": Coverage(
+            parser: NotesParser(),
+            pairs: [
+                FixturePair(fixture: "notes-body", golden: "notes-body-golden",
+                            context: context(bundleID: ParserRegistry.notesBundleID, name: "Notes",
+                                             title: "Grocery list")),
+                FixturePair(fixture: "notes-offset-shared", golden: "notes-offset-shared-golden",
+                            context: context(bundleID: ParserRegistry.notesBundleID, name: "Notes",
+                                             title: "Trip plan")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.notesBundleID, name: "Notes",
+                                  title: "Notes")
+        ),
+        "NotionParser": Coverage(
+            parser: NotionParser(),
+            pairs: [
+                FixturePair(fixture: "notion-page", golden: "notion-page-golden",
+                            context: context(bundleID: ParserRegistry.notionBundleID, name: "Notion",
+                                             title: "Roadmap — Notion")),
+                FixturePair(fixture: "notion-offset-peek", golden: "notion-offset-peek-golden",
+                            context: context(bundleID: ParserRegistry.notionBundleID, name: "Notion",
+                                             title: "Roadmap — Notion")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.notionBundleID, name: "Notion",
+                                  title: "Notion")
+        ),
+        "ObsidianParser": Coverage(
+            parser: ObsidianParser(),
+            pairs: [
+                FixturePair(fixture: "obsidian-editor", golden: "obsidian-editor-golden",
+                            context: context(bundleID: ParserRegistry.obsidianBundleID, name: "Obsidian",
+                                             title: "Index rebuild - Research - Obsidian v1.5.3")),
+                FixturePair(fixture: "obsidian-offset-preview",
+                            golden: "obsidian-offset-preview-golden",
+                            context: context(bundleID: ParserRegistry.obsidianBundleID, name: "Obsidian",
+                                             title: "Index rebuild - Research - Obsidian v1.5.3")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.obsidianBundleID, name: "Obsidian",
+                                  title: "Obsidian")
+        ),
+        "GmailParser": Coverage(
+            parser: GmailParser(),
+            pairs: [
+                FixturePair(fixture: "gmail-thread", golden: "gmail-thread-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: nil,
+                                             url: "https://mail.google.com/mail/u/0/#inbox/FMfcgzQbfWxyz")),
+                FixturePair(fixture: "gmail-offset-inbox", golden: "gmail-offset-inbox-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: nil,
+                                             url: "https://mail.google.com/mail/u/0/#inbox")),
+            ],
+            blankContext: context(bundleID: "com.google.Chrome", name: "Google Chrome", title: nil,
+                                  url: "https://mail.google.com/mail/u/0/#inbox")
+        ),
+        "LinkedInMessagingParser": Coverage(
+            parser: LinkedInMessagingParser(),
+            pairs: [
+                FixturePair(fixture: "linkedin-messaging", golden: "linkedin-messaging-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "Messaging | LinkedIn",
+                                             url: "https://www.linkedin.com/messaging/thread/2-abc123def==")),
+                FixturePair(fixture: "linkedin-offset-messaging",
+                            golden: "linkedin-offset-messaging-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "Messaging | LinkedIn",
+                                             url: "https://www.linkedin.com/messaging/thread/2-abc123def==")),
+            ],
+            blankContext: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  title: "Messaging | LinkedIn",
+                                  url: "https://www.linkedin.com/messaging")
+        ),
+        "TeamsWebParser": Coverage(
+            parser: TeamsWebParser(),
+            pairs: [
+                FixturePair(fixture: "teams-web-chat", golden: "teams-web-chat-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "Chat | Microsoft Teams",
+                                             url: "https://teams.microsoft.com/v2/#/conversations/19:abc?ctx=chat")),
+                FixturePair(fixture: "teams-web-offset-chat", golden: "teams-web-offset-chat-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "Chat | Microsoft Teams",
+                                             url: "https://teams.microsoft.com/v2/#/conversations/19:abc?ctx=chat")),
+            ],
+            blankContext: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  title: "Chat | Microsoft Teams",
+                                  url: "https://teams.microsoft.com/v2/")
+        ),
+        "OutlookWebParser": Coverage(
+            parser: OutlookWebParser(),
+            pairs: [
+                FixturePair(fixture: "outlook-web-reading", golden: "outlook-web-reading-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "Quarterly index rebuild - Outlook",
+                                             url: "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00&exvsurl=1")),
+                FixturePair(fixture: "outlook-web-offset-list",
+                            golden: "outlook-web-offset-list-golden",
+                            context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                             title: "Inbox - Outlook",
+                                             url: "https://outlook.invalid/mail/inbox?itemid=fixture-item")),
+            ],
+            blankContext: context(bundleID: "com.google.Chrome", name: "Google Chrome",
+                                  title: "Outlook", url: "https://outlook.office.com/mail/")
+        ),
+        "FinderParser": Coverage(
+            parser: FinderParser(),
+            pairs: [
+                FixturePair(fixture: "finder-list", golden: "finder-list-golden",
+                            context: context(bundleID: ParserRegistry.finderBundleID, name: "Finder",
+                                             title: "project")),
+                FixturePair(fixture: "finder-offset-copy", golden: "finder-offset-copy-golden",
+                            context: context(bundleID: ParserRegistry.finderBundleID, name: "Finder",
+                                             title: "project")),
+            ],
+            blankContext: context(bundleID: ParserRegistry.finderBundleID, name: "Finder",
+                                  title: "Finder")
+        ),
+        "CalendarParser": Coverage(
+            parser: CalendarParser(),
+            pairs: [
+                FixturePair(fixture: "calendar-event", golden: "calendar-event-golden",
+                            context: context(bundleID: "com.apple.iCal", name: "Calendar",
+                                             title: "Calendar")),
+                FixturePair(fixture: "calendar-offset-event", golden: "calendar-offset-event-golden",
+                            context: context(bundleID: "com.apple.iCal", name: "Calendar",
+                                             title: "Calendar")),
+            ],
+            blankContext: context(bundleID: "com.apple.iCal", name: "Calendar", title: "Calendar")
+        ),
+        "FantasticalParser": Coverage(
+            parser: FantasticalParser(),
+            pairs: [
+                FixturePair(fixture: "calendar-event", golden: "calendar-event-golden",
+                            context: context(bundleID: "com.flexibits.fantastical2.mac",
+                                             name: "Fantastical", title: "Fantastical")),
+                FixturePair(fixture: "calendar-offset-event", golden: "calendar-offset-event-golden",
+                            context: context(bundleID: "com.flexibits.fantastical2.mac",
+                                             name: "Fantastical", title: "Fantastical")),
+            ],
+            blankContext: context(bundleID: "com.flexibits.fantastical2.mac", name: "Fantastical",
+                                  title: "Fantastical")
+        ),
+        "RemindersParser": Coverage(
+            parser: RemindersParser(),
+            pairs: [
+                FixturePair(fixture: "reminder-task", golden: "reminder-task-golden",
+                            context: context(bundleID: "com.apple.reminders", name: "Reminders",
+                                             title: "Reminders")),
+                FixturePair(fixture: "reminders-offset-list", golden: "reminders-offset-list-golden",
+                            context: context(bundleID: "com.apple.reminders", name: "Reminders",
+                                             title: "Reminders")),
+            ],
+            blankContext: context(bundleID: "com.apple.reminders", name: "Reminders",
+                                  title: "Reminders")
+        ),
     ]
 
-    /// The exact registration list Task 5 declares and Tasks 7-20 fill in, restated here so a
-    /// parser cannot be quietly dropped from `ParserRegistry.init()` (ruling F28). The four
-    /// host-only parsers (Tasks 22-26) are NOT in this set — they are unreachable by bundle ID by
-    /// design, and `hostCoverage` plus `testEveryHostRoutedParserIsReachableFromTheHostMap`
-    /// (added in Task 22) cover them.
-    static let registeredStructuredParserNames: Set<String> = [
-        "TerminalParser", "EditorParser", "SlackParser", "DiscordParser", "MessagesParser",
-        "WhatsAppParser", "NotesParser", "NotionParser", "ObsidianParser", "FinderParser",
-        "CalendarParser", "FantasticalParser", "RemindersParser",
-    ]
+    static func registeredParserNames(in registry: ParserRegistry) -> Set<String> {
+        let parsers = Array(registry.structuredParsers.values) + Array(registry.hostParsers.values)
+        return Set(parsers.map { String(describing: type(of: $0)) })
+    }
 
-    /// Parser type name -> the hosts it claims. Host-routed parsers (§14b) are registered by
-    /// host, not by bundle ID, so `testEveryCoveredParserIsRegisteredAsAStructuredParser`
-    /// cannot see them.
-    static let hostCoverage: [String: [String]] = [
-        "GmailParser": ["mail.google.com"],
-        "SlackParser": ["app.slack.com"],
-        "LinkedInMessagingParser": ["www.linkedin.com", "linkedin.com"],
-        "TeamsWebParser": ["teams.microsoft.com", "teams.cloud.microsoft"],
-        // lane-c begin
-        "OutlookWebParser": ["outlook.office.com", "outlook.live.com"],
-        // lane-c end
-    ]
-
-    func testTheRegistrationListIsExactlyTheThirteenBundleIDParsers() {
+    func testCoverageTableMatchesEveryParserRegisteredInTheRegistry() {
         let registry = ParserRegistry()
-        var names = Set<String>()
-        for bundleID in [
-            ParserRegistry.slackBundleID, ParserRegistry.notionBundleID,
-            ParserRegistry.obsidianBundleID, ParserRegistry.notesBundleID,
-            ParserRegistry.discordBundleID, ParserRegistry.messagesBundleID,
-            ParserRegistry.finderBundleID, ParserRegistry.cursorBundleID,
-            ParserRegistry.vsCodeBundleID,
-        ] + ParserRegistry.terminalBundleIDs + ParserRegistry.whatsAppBundleIDs
-          + ParserRegistry.calendarBundleIDs + ParserRegistry.fantasticalBundleIDs
-          + ParserRegistry.remindersBundleIDs {
-            if let parser = registry.structuredParser(for: bundleID) {
-                names.insert(String(describing: type(of: parser)))
-            }
-        }
-        XCTAssertEqual(names, Self.registeredStructuredParserNames)
+        XCTAssertEqual(Set(Self.coverage.keys), Self.registeredParserNames(in: registry))
         XCTAssertNil(registry.structuredParser(for: ParserRegistry.mailBundleID),
                      "Mail stays AppleScript-sourced (§12 Q6) and is deliberately unregistered")
     }
 
-    func testEveryCoveredParserIsRegisteredAsAStructuredParser() {
+    func testEveryCoveredHostIsReachableFromTheHostMap() {
         let registry = ParserRegistry()
-        var registered = Set<String>()
-        for bundleID in [
-            ParserRegistry.slackBundleID, ParserRegistry.notionBundleID,
-            ParserRegistry.obsidianBundleID, ParserRegistry.notesBundleID,
-            ParserRegistry.discordBundleID, ParserRegistry.messagesBundleID,
-            ParserRegistry.finderBundleID, ParserRegistry.cursorBundleID,
-            ParserRegistry.vsCodeBundleID,
-        ] + ParserRegistry.terminalBundleIDs + ParserRegistry.whatsAppBundleIDs
-          + ParserRegistry.calendarBundleIDs + ParserRegistry.fantasticalBundleIDs
-          + ParserRegistry.remindersBundleIDs {
-            guard let parser = registry.structuredParser(for: bundleID) else {
-                return XCTFail("no structured parser registered for \(bundleID)")
-            }
-            registered.insert(String(describing: type(of: parser)))
-        }
-        for name in Self.coverage.keys {
-            XCTAssertTrue(registered.contains(name) || Self.hostCoverage[name] != nil,
-                          "\(name) is reachable neither by bundle id nor by host")
-        }
-        XCTAssertTrue(registered.contains("FantasticalParser"),
-                      "Fantastical shares Calendar's fixtures but must still be registered")
-    }
-
-    func testEveryHostRoutedParserIsReachableFromTheHostMap() {
-        let registry = ParserRegistry()
-        for (name, hosts) in Self.hostCoverage {
-            for host in hosts {
+        for (name, coverage) in Self.coverage {
+            for configuredHost in type(of: coverage.parser).config.hosts {
+                let host = configuredHost.hasPrefix(".") ? "example\(configuredHost)" : configuredHost
                 guard let parser = registry.structuredParser(forHost: host) else {
                     return XCTFail("no structured parser registered for host \(host)")
                 }
@@ -131,20 +303,36 @@ final class PhaseDCoverageTests: XCTestCase {
         }
     }
 
-    func testEveryCoveredParserHasTwoFixturesAndTwoGoldens() throws {
-        for (parser, pairs) in Self.coverage {
-            XCTAssertGreaterThanOrEqual(pairs.count, 2, "\(parser) needs at least two fixtures")
-            for pair in pairs {
-                XCTAssertNoThrow(try fixture(pair.fixture), "\(parser): \(pair.fixture)")
-                XCTAssertNoThrow(try goldenCapturedContent(pair.golden), "\(parser): \(pair.golden)")
+    func testEveryCoveredParserExecutesItsFixtureGoldensAndBlankOutcome() throws {
+        let blank = AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
+                           frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+                           focused: false, children: [])
+        for (name, coverage) in Self.coverage {
+            XCTAssertGreaterThanOrEqual(coverage.pairs.count, 2,
+                                        "\(name) needs at least two fixture/golden cases")
+            for pair in coverage.pairs {
+                let actual = try XCTUnwrap(
+                    try coverage.parser.parse(try fixture(pair.fixture), context: pair.context),
+                    "\(name) did not parse \(pair.fixture)"
+                )
+                XCTAssertEqual(actual, try goldenCapturedContent(pair.golden),
+                               "\(name): \(pair.fixture)")
+            }
+
+            do {
+                let outcome = try coverage.parser.parse(blank, context: coverage.blankContext)
+                XCTAssertNil(outcome,
+                             "\(name) must not claim a blank surface")
+            } catch is ParserRefusal {
+                // Known blank/toolbar-only surfaces are intentionally refused.
             }
         }
     }
 
     func testEveryCoveredParserHasAtLeastOneNonzeroOriginFixture() throws {
-        for (parser, pairs) in Self.coverage {
+        for (parser, coverage) in Self.coverage {
             var sawNonzeroOrigin = false
-            for pair in pairs {
+            for pair in coverage.pairs {
                 let frame = try fixture(pair.fixture).frame
                 if let frame, frame.minX != 0 || frame.minY != 0 { sawNonzeroOrigin = true }
             }
@@ -157,11 +345,11 @@ final class PhaseDCoverageTests: XCTestCase {
 
     func testNoFixtureCarriesASecureFieldValue() throws {
         // Spec §8: a secure field's value is never read, so it can never reach a fixture either.
-        for pairs in Self.coverage.values {
-            for pair in pairs {
+        for coverage in Self.coverage.values {
+            for pair in coverage.pairs {
                 var offenders: [String] = []
                 func visit(_ node: AXNode) {
-                    if node.subrole == "AXSecureTextField", let value = node.value, !value.isEmpty {
+                    if node.isSecureField, let value = node.value, !value.isEmpty {
                         offenders.append(value)
                     }
                     for child in node.children { visit(child) }
