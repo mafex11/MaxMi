@@ -69,6 +69,7 @@ public struct ParserRegistry: Sendable {
         // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
         let structured: [any StructuredParser] = [
             // lane-c begin
+            MailParser(),
             FinderParser(),
             CalendarParser(),
             FantasticalParser(),

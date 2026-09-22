@@ -49,6 +49,15 @@ final class MailComposeDraftTests: XCTestCase {
                      "an untouched compose window carries no information")
     }
 
+    func testEmptyComposeWindowRefusesThroughTheStructuredBridge() {
+        let app = AppInfo(bundleID: ParserRegistry.mailBundleID, name: "Mail", windowTitle: "New Message")
+        XCTAssertThrowsError(try MailParser().parseStructured(
+            window: composeWindow(subject: "   ", body: "  "), app: app
+        )) {
+            XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "empty-compose-draft"))
+        }
+    }
+
     func testAWindowWithoutTheSubjectFieldIsNotAComposeWindow() {
         let reading = node("AXWindow", children: [
             node("AXTextArea", value: "the message you are reading"),
@@ -75,5 +84,20 @@ final class MailComposeDraftTests: XCTestCase {
         XCTAssertEqual(c.channel, "Re: index rebuild")
         XCTAssertTrue(c.messages.allSatisfy(\.isDraft),
                       "a frontmost compose window is what the user is doing right now")
+    }
+
+    func testSourceParserBridgeRendersTheComposeDraft() throws {
+        let app = AppInfo(bundleID: ParserRegistry.mailBundleID, name: "Mail",
+                          windowTitle: "Re: index rebuild")
+        let capture = try XCTUnwrap(try MailParser().parse(
+            window: composeWindow(subject: "Re: index rebuild", body: "Shipping the fix today."),
+            app: app
+        ))
+        XCTAssertEqual(capture.contentKind, .email)
+        XCTAssertTrue(capture.content.contains("Shipping the fix today."))
+        XCTAssertEqual(capture.structured, try MailParser().parseStructured(
+            window: composeWindow(subject: "Re: index rebuild", body: "Shipping the fix today."),
+            app: app
+        ))
     }
 }
