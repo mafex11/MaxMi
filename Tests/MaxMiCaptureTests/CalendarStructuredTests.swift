@@ -3,6 +3,9 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class CalendarStructuredTests: XCTestCase {
+    static let referenceMs: EpochMs = 1_790_078_400_000 // 2026-09-22 12:00:00 UTC
+    static let parsingTimeZone = TimeZone(secondsFromGMT: 19_800)! // UTC+05:30
+
     func node(_ role: String, value: String? = nil, identifier: String? = nil,
               frame: CGRect, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: nil, frame: frame, focused: false,
@@ -44,8 +47,16 @@ final class CalendarStructuredTests: XCTestCase {
         ])
     }
 
-    func context(_ bundleID: String, _ title: String?) -> ParseContext {
-        ParseContext(app: AppInfo(bundleID: bundleID, name: "Calendar", windowTitle: title))
+    func context(
+        _ bundleID: String,
+        _ title: String?,
+        timeZone: TimeZone = CalendarStructuredTests.parsingTimeZone
+    ) -> ParseContext {
+        ParseContext(
+            app: AppInfo(bundleID: bundleID, name: "Calendar", windowTitle: title),
+            now: CalendarStructuredTests.referenceMs,
+            timeZone: timeZone
+        )
     }
 
     func events(_ content: CapturedContent?) throws -> [CalendarEvent] {
@@ -77,8 +88,7 @@ final class CalendarStructuredTests: XCTestCase {
         XCTAssertEqual(event.organizer, "ada@example.com")
         XCTAssertFalse(event.hasConference)
         XCTAssertNil(event.notes, "all four fields were claimed, so nothing is left for notes")
-        XCTAssertNil(event.start, "M8 stores the date STRING; parsing it is not in scope")
-        XCTAssertNil(event.end)
+        XCTAssertFalse(event.allDay)
     }
 
     func testAConferenceLinkSetsHasConference() throws {
@@ -102,17 +112,82 @@ final class CalendarStructuredTests: XCTestCase {
         XCTAssertEqual(list[0].dateString, "Tomorrow 09:30 AM")
     }
 
+    func testTimedDetailParsesStartAndEndUsingTheInjectedReferenceAndTimeZone() throws {
+        let event = try events(CalendarParser().parse(
+            fixture("calendar-timed-event"), context: context("com.apple.iCal", "Calendar")
+        ))[0]
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Self.parsingTimeZone
+        let expectedStart = try XCTUnwrap(calendar.date(from: DateComponents(
+            calendar: calendar, timeZone: Self.parsingTimeZone,
+            year: 2026, month: 9, day: 24, hour: 14, minute: 0
+        )))
+        let expectedEnd = try XCTUnwrap(calendar.date(from: DateComponents(
+            calendar: calendar, timeZone: Self.parsingTimeZone,
+            year: 2026, month: 9, day: 24, hour: 15, minute: 30
+        )))
+        XCTAssertEqual(event.start, expectedStart)
+        XCTAssertEqual(event.end, expectedEnd)
+        XCTAssertFalse(event.allDay)
+    }
+
+    func testAllDayDetailParsesItsDayRange() throws {
+        let event = try events(CalendarParser().parse(
+            fixture("calendar-all-day-event"), context: context("com.apple.iCal", "Calendar")
+        ))[0]
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Self.parsingTimeZone
+        let expectedStart = try XCTUnwrap(calendar.date(from: DateComponents(
+            calendar: calendar, timeZone: Self.parsingTimeZone, year: 2026, month: 9, day: 25
+        )))
+        XCTAssertEqual(event.start, expectedStart)
+        XCTAssertEqual(event.end, calendar.date(byAdding: .day, value: 1, to: expectedStart))
+        XCTAssertTrue(event.allDay)
+    }
+
+    func testNoTimeDetailKeepsTheEventWithoutInventingDates() throws {
+        let event = try events(CalendarParser().parse(
+            fixture("calendar-no-time-event"), context: context("com.apple.iCal", "Calendar")
+        ))[0]
+        XCTAssertEqual(event.dateString, "Schedule pending")
+        XCTAssertNil(event.start)
+        XCTAssertNil(event.end)
+        XCTAssertFalse(event.allDay)
+    }
+
     func testSidebarChromeNeverBecomesAnEventTitle() throws {
         let list = try events(CalendarParser().parse(window(),
                                                    context: context("com.apple.iCal", "Calendar")))
         XCTAssertFalse(list.contains { $0.title == "Today" })
     }
 
-    func testNoDetailRootIsNotHandled() throws {
+    func testNoDetailRootIsRefusedByBothCalendarParsers() {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
                         children: [node("AXGroup", identifier: "calendar-sidebar",
                                         frame: CGRect(x: 0, y: 0, width: 220, height: 800))])
-        XCTAssertNil(try CalendarParser().parse(bare, context: context("com.apple.iCal", "Calendar")))
+        let unrelatedPopover = node(
+            "AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800), children: [
+                node("AXPopover", identifier: "share-sheet",
+                     frame: CGRect(x: 400, y: 120, width: 480, height: 420), children: [
+                        field("AXStaticText", "Share calendar", "share-copy", y: 140, x: 420),
+                     ]),
+            ]
+        )
+        let cases: [(any StructuredParser, String)] = [
+            (CalendarParser(), "com.apple.iCal"),
+            (FantasticalParser(), "com.flexibits.fantastical2.mac"),
+        ]
+        for window in [bare, unrelatedPopover] {
+            for (parser, bundleID) in cases {
+                XCTAssertThrowsError(try parser.parse(
+                    window, context: context(
+                        bundleID, parser is FantasticalParser ? "Fantastical" : "Calendar"
+                    )
+                )) {
+                    XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-calendar-window"))
+                }
+            }
+        }
     }
 
     func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
@@ -150,5 +225,58 @@ final class CalendarStructuredTests: XCTestCase {
                                                          context: context("com.apple.iCal",
                                                                           "Calendar"))),
                      matches: "calendar-offset-event-golden")
+    }
+
+    func testV1BridgesKeepEveryExistingCalendarFixtureAtItsPreChangeGolden() throws {
+        struct LegacyGolden {
+            let fixture: String
+            let golden: String
+            let parser: any SourceParser
+            let app: AppInfo
+            let sourceKey: String
+            let sourceTitle: String
+        }
+        let cases: [LegacyGolden] = [
+            LegacyGolden(
+                fixture: "calendar-event", golden: "calendar-event-golden", parser: CalendarParser(),
+                app: AppInfo(bundleID: "com.apple.iCal", name: "Calendar", windowTitle: "Calendar"),
+                sourceKey: "calendar:event:dece6aa504c82e6435b5c7ff", sourceTitle: "Design review"
+            ),
+            LegacyGolden(
+                fixture: "calendar-offset-event", golden: "calendar-offset-event-golden",
+                parser: CalendarParser(),
+                app: AppInfo(bundleID: "com.apple.iCal", name: "Calendar", windowTitle: "Calendar"),
+                sourceKey: "calendar:event:8771faff5dfe7643e03c9465", sourceTitle: "Planning check-in"
+            ),
+            LegacyGolden(
+                fixture: "calendar-event", golden: "calendar-event-golden", parser: FantasticalParser(),
+                app: AppInfo(
+                    bundleID: "com.flexibits.fantastical2.mac", name: "Fantastical",
+                    windowTitle: "Fantastical"
+                ),
+                sourceKey: "fantastical:event:dece6aa504c82e6435b5c7ff", sourceTitle: "Design review"
+            ),
+            LegacyGolden(
+                fixture: "calendar-offset-event", golden: "calendar-offset-event-golden",
+                parser: FantasticalParser(),
+                app: AppInfo(
+                    bundleID: "com.flexibits.fantastical2.mac", name: "Fantastical",
+                    windowTitle: "Fantastical"
+                ),
+                sourceKey: "fantastical:event:8771faff5dfe7643e03c9465",
+                sourceTitle: "Planning check-in"
+            ),
+        ]
+        for expected in cases {
+            let capture = try XCTUnwrap(try expected.parser.parse(
+                window: fixture(expected.fixture), app: expected.app
+            ))
+            XCTAssertEqual(capture.content, ContentRenderer.render(
+                try goldenCapturedContent(expected.golden), style: .full
+            ), expected.fixture)
+            XCTAssertEqual(capture.sourceKey, expected.sourceKey, expected.fixture)
+            XCTAssertEqual(capture.sourceTitle, expected.sourceTitle, expected.fixture)
+            XCTAssertFalse(capture.truncated, expected.fixture)
+        }
     }
 }

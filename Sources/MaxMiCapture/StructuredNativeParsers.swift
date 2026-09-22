@@ -64,9 +64,13 @@ public struct FantasticalParser: SourceParser {
 /// adapter that lets a `StructuredParser` reach it, NOT a second extractor (spec §7c, ruling
 /// F15's no-duplicate-implementations rule).
 enum CalendarStructuredExtraction {
-    static func events(in window: AXNode, app: AppInfo, sourceApp: String) -> [CalendarEvent] {
+    static func events(in window: AXNode, context: ParseContext, sourceApp: String) throws
+        -> [CalendarEvent] {
+        guard let detailRoot = StructuredEntityExtraction.calendarDetailRoot(in: window) else {
+            throw ParserRefusal(reason: "unmatched-calendar-window")
+        }
         guard let extracted = StructuredEntityExtraction.calendarContent(
-                window: window, app: app, sourceApp: sourceApp),
+                detailRoot: detailRoot, context: context, sourceApp: sourceApp),
               case .calendar(let events) = extracted.content else { return [] }
         return events
     }
@@ -80,9 +84,9 @@ extension CalendarParser: StructuredParser {
     )
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        let events = CalendarStructuredExtraction.events(
+        let events = try CalendarStructuredExtraction.events(
             in: snapshot,
-            app: context.app,
+            context: context,
             sourceApp: Self.config.app
         )
         return events.isEmpty ? nil : .calendar(events)
@@ -97,9 +101,9 @@ extension FantasticalParser: StructuredParser {
     )
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        let events = CalendarStructuredExtraction.events(
+        let events = try CalendarStructuredExtraction.events(
             in: snapshot,
-            app: context.app,
+            context: context,
             sourceApp: Self.config.app
         )
         return events.isEmpty ? nil : .calendar(events)
@@ -244,17 +248,21 @@ enum StructuredEntityExtraction {
         let sourceTitle: String
     }
 
-    static func calendarContent(window: AXNode, app: AppInfo, sourceApp: String) -> Extracted? {
-        let root = preferredDetailRoot(in: window, hints: ["event", "detail", "popover"])
-        let fields = orderedFields(in: root)
+    static func calendarContent(
+        detailRoot: AXNode,
+        context: ParseContext,
+        sourceApp: String
+    ) -> Extracted? {
+        let fields = orderedFields(in: detailRoot)
         guard !fields.isEmpty else { return nil }
 
         let title = firstValue(fields, metadataHints: ["title", "summary", "event-name"])
             ?? fields.first(where: { $0.role == "AXHeading" && !isChrome($0.value) })?.value
-            ?? meaningfulWindowTitle(app.windowTitle, excluding: [sourceApp, "Calendar"])
+            ?? meaningfulWindowTitle(context.windowTitle, excluding: [sourceApp, "Calendar"])
         guard let title, !title.isEmpty else { return nil }
         let when = firstValue(fields, metadataHints: ["date", "time", "start", "end"])
             ?? fields.first(where: { looksLikeDateOrTime($0.value) })?.value
+        let timing = calendarTiming(from: fields, context: context)
         let location = firstValue(fields, metadataHints: ["location", "place"])
         // No organizer is exposed by these detail views, so the account/calendar name — the
         // closest thing to "who owns this event" — lands in `organizer`.
@@ -273,11 +281,12 @@ enum StructuredEntityExtraction {
         let event = CalendarEvent(
             title: title,
             dateString: when ?? "",
-            start: nil, end: nil,
+            start: timing.start, end: timing.end,
             organizer: organizer,
             location: location,
             hasConference: hasConference,
-            notes: details.isEmpty ? nil : details.joined(separator: "\n")
+            notes: details.isEmpty ? nil : details.joined(separator: "\n"),
+            allDay: timing.allDay
         )
         let identity = [title, when ?? "", organizer ?? ""].joined(separator: "|")
         return Extracted(content: .calendar([event]),
@@ -424,6 +433,30 @@ enum StructuredEntityExtraction {
         return root
     }
 
+    /// Calendar/Fantastical only claims a detail surface, never the app's bare sidebar, toolbar,
+    /// or day grid. A surface can be explicitly named by AX metadata or be one of the native
+    /// popover/sheet/dialog roles Calendar uses for an event inspector.
+    static func calendarDetailRoot(in root: AXNode) -> AXNode? {
+        if isCalendarDetailSurface(root) { return root }
+        for child in root.children {
+            if let detail = calendarDetailRoot(in: child) { return detail }
+        }
+        return nil
+    }
+
+    private static func isCalendarDetailSurface(_ node: AXNode) -> Bool {
+        let metadata = [node.identifier, node.label, node.title]
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        let isSurface = ["AXSheet", "AXPopover", "AXDialog"].contains(node.role)
+            || ["event", "detail", "popover"].contains { metadata.contains($0) }
+        guard isSurface else { return false }
+        return orderedFields(in: node).contains { field in
+            ["event", "title", "summary", "date", "time", "start", "end", "all-day"].contains {
+                field.metadata.contains($0)
+            } || (field.role == "AXHeading" && !isChrome(field.value))
+        }
+    }
+
     private static func isPreferred(_ node: AXNode, hints: [String]) -> Bool {
         if ["AXSheet", "AXPopover", "AXDialog"].contains(node.role) { return true }
         let metadata = [node.identifier, node.label, node.title]
@@ -474,6 +507,169 @@ enum StructuredEntityExtraction {
             "september", "october", "november", "december", "am", "pm", "tomorrow", "today",
         ]
         return tokens.contains(where: lower.contains)
+    }
+
+    struct CalendarTiming {
+        let start: Date?
+        let end: Date?
+        let allDay: Bool
+    }
+
+    /// Parses only the detail surface's explicitly date/time-like fields. The reference instant
+    /// and timezone are injected through `ParseContext`: capture parsing must never consult the
+    /// machine's current clock or timezone.
+    static func calendarTiming(from fields: [Field], context: ParseContext) -> CalendarTiming {
+        let timingFields = fields.filter { field in
+            ["date", "time", "start", "end", "all-day", "allday"].contains {
+                field.metadata.contains($0)
+            } || looksLikeDateOrTime(field.value)
+        }
+        guard !timingFields.isEmpty else {
+            return CalendarTiming(start: nil, end: nil, allDay: false)
+        }
+
+        let raw = timingFields.map(\.value).joined(separator: " ")
+        let explicitAllDay = timingFields.contains { field in
+            guard field.metadata.contains("all-day") || field.metadata.contains("allday")
+                    || field.value.localizedCaseInsensitiveContains("all day") else {
+                return false
+            }
+            return !["0", "false", "no", "unchecked"].contains(
+                field.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            )
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = context.timeZone
+        let reference = Date(timeIntervalSince1970: TimeInterval(context.now) / 1_000)
+        let date = calendarDate(in: raw, reference: reference, calendar: calendar)
+        let times = timeTokens(in: raw).compactMap(parseClockTime)
+
+        if explicitAllDay || (date != nil && times.isEmpty) {
+            guard let date else { return CalendarTiming(start: nil, end: nil, allDay: true) }
+            let start = calendar.startOfDay(for: date)
+            let end = calendar.date(byAdding: .day, value: 1, to: start)
+            return CalendarTiming(start: start, end: end, allDay: true)
+        }
+        guard let first = times.first else {
+            return CalendarTiming(start: nil, end: nil, allDay: false)
+        }
+
+        let base = date ?? reference
+        var components = calendar.dateComponents([.year, .month, .day], from: base)
+        components.hour = first.hour
+        components.minute = first.minute
+        guard let start = calendar.date(from: components) else {
+            return CalendarTiming(start: nil, end: nil, allDay: false)
+        }
+        guard let second = times.dropFirst().first else {
+            return CalendarTiming(start: start, end: nil, allDay: false)
+        }
+        components.hour = second.hour
+        components.minute = second.minute
+        guard var end = calendar.date(from: components) else {
+            return CalendarTiming(start: start, end: nil, allDay: false)
+        }
+        if end < start {
+            end = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        }
+        return CalendarTiming(start: start, end: end, allDay: false)
+    }
+
+    private static let months: [String: Int] = [
+        "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+        "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    ]
+    private static let weekdays: [String: Int] = [
+        "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
+        "thursday": 5, "friday": 6, "saturday": 7,
+    ]
+
+    private static func calendarDate(in raw: String, reference: Date, calendar: Calendar) -> Date? {
+        let lower = raw.lowercased()
+        if lower.contains("tomorrow") {
+            return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: reference))
+        }
+        if lower.contains("today") {
+            return calendar.startOfDay(for: reference)
+        }
+        if let parts = captures(#"\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b"#, in: lower),
+           let day = Int(parts[0]), let month = months[parts[1]] {
+            return calendarDate(year: nil, month: month, day: day, reference: reference, calendar: calendar)
+        }
+        if let parts = captures(#"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\b"#, in: lower),
+           let month = months[parts[0]], let day = Int(parts[1]) {
+            return calendarDate(year: nil, month: month, day: day, reference: reference, calendar: calendar)
+        }
+        guard let wanted = weekdays.first(where: { lower.contains($0.key) })?.value else { return nil }
+        let current = calendar.component(.weekday, from: reference)
+        let delta = (wanted - current + 7) % 7
+        return calendar.date(byAdding: .day, value: delta, to: calendar.startOfDay(for: reference))
+    }
+
+    private static func calendarDate(
+        year: Int?,
+        month: Int,
+        day: Int,
+        reference: Date,
+        calendar: Calendar
+    ) -> Date? {
+        let referenceComponents = calendar.dateComponents([.year], from: reference)
+        guard var candidate = calendar.date(from: DateComponents(
+            calendar: calendar, timeZone: calendar.timeZone,
+            year: year ?? referenceComponents.year, month: month, day: day
+        )) else { return nil }
+        if year == nil, candidate < calendar.startOfDay(for: reference) {
+            candidate = calendar.date(byAdding: .year, value: 1, to: candidate) ?? candidate
+        }
+        return candidate
+    }
+
+    private static func timeTokens(in raw: String) -> [String] {
+        allMatches(
+            #"\b\d{1,2}:\d{2}\s*(?:[AaPp]\.?[Mm]\.?)?\b|\b\d{1,2}\s*(?:[AaPp]\.?[Mm]\.?)\b"#,
+            in: raw
+        )
+    }
+
+    private static func parseClockTime(_ raw: String) -> (hour: Int, minute: Int)? {
+        var value = raw.lowercased().replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        let isPM = value.hasSuffix("pm")
+        let isAM = value.hasSuffix("am")
+        if isPM || isAM { value.removeLast(2) }
+        let pieces = value.split(separator: ":", maxSplits: 1).map(String.init)
+        guard let rawHour = Int(pieces[0]), rawHour >= 0, rawHour <= 23 else { return nil }
+        let minute = pieces.count == 2 ? Int(pieces[1]) : 0
+        guard let minute, (0...59).contains(minute) else { return nil }
+        let hour: Int
+        if isPM {
+            hour = rawHour == 12 ? 12 : rawHour + 12
+        } else if isAM {
+            hour = rawHour == 12 ? 0 : rawHour
+        } else {
+            hour = rawHour
+        }
+        return (hour, minute)
+    }
+
+    private static func captures(_ pattern: String, in value: String) -> [String]? {
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(
+                in: value, range: NSRange(value.startIndex..., in: value)
+              ) else { return nil }
+        return (1..<match.numberOfRanges).compactMap { index in
+            guard let range = Range(match.range(at: index), in: value) else { return nil }
+            return String(value[range])
+        }
+    }
+
+    private static func allMatches(_ pattern: String, in value: String) -> [String] {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return expression.matches(in: value, range: NSRange(value.startIndex..., in: value))
+            .compactMap { match in
+                guard let range = Range(match.range, in: value) else { return nil }
+                return String(value[range])
+            }
     }
 
     private static func meaningfulWindowTitle(_ title: String?, excluding: [String]) -> String? {

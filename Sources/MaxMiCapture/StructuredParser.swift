@@ -42,22 +42,26 @@ public struct ParseContext: Sendable {
     public let url: String?
     public let previousStructured: CapturedContent?
     public let now: EpochMs
+    public let timeZone: TimeZone
 
     public init(app: AppInfo, windowTitle: String?, url: String?,
-                previousStructured: CapturedContent?, now: EpochMs) {
+                previousStructured: CapturedContent?, now: EpochMs,
+                timeZone: TimeZone = TimeZone(secondsFromGMT: 0)!) {
         self.app = app
         self.windowTitle = windowTitle
         self.url = url
         self.previousStructured = previousStructured
         self.now = now
+        self.timeZone = timeZone
     }
 
     /// Convenience for the `SourceParser.parseStructured(window:app:)` bridges, where the only
     /// thing known beyond `AppInfo` is sometimes a URL.
     public init(app: AppInfo, url: String? = nil, previousStructured: CapturedContent? = nil,
-                now: EpochMs = EpochMs(Date().timeIntervalSince1970 * 1000)) {
+                now: EpochMs = epochNowMs(),
+                timeZone: TimeZone = TimeZone(secondsFromGMT: 0)!) {
         self.init(app: app, windowTitle: app.windowTitle, url: url,
-                  previousStructured: previousStructured, now: now)
+                  previousStructured: previousStructured, now: now, timeZone: timeZone)
     }
 }
 
