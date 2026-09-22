@@ -124,15 +124,15 @@ final class TerminalStructuredTests: XCTestCase {
 
     // MARK: - cwd
 
-    func testCwdPrefersTheWindowTitleAndFallsBackToThePromptPath() {
+    func testCwdComesFromTheWindowTitleOnly() {
         XCTAssertEqual(
             TerminalParser.cwdPath(windowTitle: "~/code/MaxMi — -zsh",
                                    scrollback: "ada@mac ~/other %"),
             "~/code/MaxMi")
-        XCTAssertEqual(
+        XCTAssertNil(
             TerminalParser.cwdPath(windowTitle: "Claude Code",
                                    scrollback: "ada@mac ~/code/MaxMi % swift test"),
-            "~/code/MaxMi", "no path in the title, so the most recent prompt cwd wins")
+            "prompt text is untrusted captured content, not a cwd source")
         XCTAssertNil(TerminalParser.cwdPath(windowTitle: nil, scrollback: "no paths here"))
     }
 

@@ -207,18 +207,12 @@ extension TerminalParser: StructuredParser {
         return segments
     }
 
-    /// The full cwd path (not the slug `terminalKey` wants). Title first, because a prompt theme
-    /// may render a shortened cwd, then the most recent prompt line.
-    static func cwdPath(windowTitle: String?, scrollback: String) -> String? {
+    /// The full cwd path (not the slug `terminalKey` wants), derived from the window title only.
+    /// Prompt text is untrusted captured content and must not determine the session cwd.
+    static func cwdPath(windowTitle: String?, scrollback _: String) -> String? {
         if let windowTitle,
            let range = windowTitle.range(of: pathBodyPattern, options: .regularExpression) {
             return String(windowTitle[range])
-        }
-        let anchored = "\(pathBodyPattern)\\s*[%$#>❯]"
-        for line in scrollback.components(separatedBy: "\n").reversed() {
-            guard let range = line.range(of: anchored, options: .regularExpression) else { continue }
-            return String(line[range])
-                .trimmingCharacters(in: CharacterSet(charactersIn: " \t%$#>❯"))
         }
         return nil
     }
