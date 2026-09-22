@@ -49,7 +49,7 @@ final class TodoPanelController: NSObject, NSWindowDelegate {
             await viewModel.refresh()
             guard let screen = screenContainingMouse() else { return }
             resizeAndCenter(on: screen)
-            panel.orderFront(nil)
+            panel.makeKeyAndOrderFront(nil)
         }
     }
 
