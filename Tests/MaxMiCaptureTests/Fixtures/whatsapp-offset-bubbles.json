@@ -1,0 +1,75 @@
+{
+  "role": "AXWindow",
+  "title": "WhatsApp",
+  "focused": false,
+  "frame": { "x": 1440, "y": 220, "width": 1000, "height": 700 },
+  "children": [
+    {
+      "role": "AXGroup",
+      "label": "Chats",
+      "focused": false,
+      "frame": { "x": 1440, "y": 220, "width": 300, "height": 700 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Archived",
+          "focused": false,
+          "frame": { "x": 1460, "y": 256, "width": 120, "height": 18 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXHeading",
+      "value": "Contact Quill",
+      "label": "conversation title",
+      "focused": false,
+      "frame": { "x": 1780, "y": 240, "width": 220, "height": 22 },
+      "children": []
+    },
+    {
+      "role": "AXCell",
+      "identifier": "WAMessageBubbleTableViewCell",
+      "focused": false,
+      "frame": { "x": 1780, "y": 320, "width": 300, "height": 44 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "synthetic inbound note",
+          "focused": false,
+          "frame": { "x": 1800, "y": 328, "width": 220, "height": 18 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "16:02",
+          "focused": false,
+          "frame": { "x": 2000, "y": 348, "width": 40, "height": 12 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXCell",
+      "identifier": "WAMessageBubbleTableViewCell",
+      "focused": false,
+      "frame": { "x": 2100, "y": 384, "width": 300, "height": 44 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "synthetic outbound note",
+          "focused": false,
+          "frame": { "x": 2120, "y": 392, "width": 220, "height": 18 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "16:04",
+          "focused": false,
+          "frame": { "x": 2320, "y": 412, "width": 40, "height": 12 },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

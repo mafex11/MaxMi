@@ -34,6 +34,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `messages-thread-golden.json` | Golden `CapturedContentEnvelope` for `messages-thread.json` | `MessagesParser` conversation output |
 | `messages-offset-thread.json` | Hand-authored Messages thread at a nonzero origin with the same left and right bubble geometry | `MessagesParser` window-relative authorship |
 | `messages-offset-thread-golden.json` | Golden `CapturedContentEnvelope` for `messages-offset-thread.json` | `MessagesParser` conversation output |
+| `whatsapp-bubbles.json` | Hand-authored WhatsApp bubble-cell thread at the origin with a sidebar and timestamp nodes | `WhatsAppParser` bubble-cell anchor |
+| `whatsapp-bubbles-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-bubbles.json` | `WhatsAppParser` conversation output |
+| `whatsapp-offset-bubbles.json` | Hand-authored WhatsApp bubble-cell thread at a nonzero origin with the same semantic content | `WhatsAppParser` window-relative authorship |
+| `whatsapp-offset-bubbles-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-offset-bubbles.json` | `WhatsAppParser` conversation output |
 <!-- // lane-b end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
