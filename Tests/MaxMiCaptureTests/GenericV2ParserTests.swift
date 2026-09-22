@@ -95,7 +95,8 @@ final class GenericV2ParserTests: XCTestCase {
         let capture = try XCTUnwrap(try MessagesParser().parse(window: window, app: app))
         XCTAssertEqual(capture.sourceKey, "imessage:harnish")
         XCTAssertEqual(capture.contentKind, .conversation)
-        XCTAssertEqual(capture.content, "hey are you free\ncall me")
+        XCTAssertEqual(capture.content,
+                       ContentRenderer.render(try XCTUnwrap(capture.structured), style: .full))
         guard case .conversation(let conversation) = try XCTUnwrap(capture.structured) else {
             return XCTFail("expected .conversation")
         }

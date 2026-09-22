@@ -28,9 +28,9 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `discord-messages.json` | Hand-authored Discord transcript list at the origin with grouped messages, reaction chrome, and a sidebar | `DiscordParser` tree-order sender attribution |
 | `discord-messages-golden.json` | Golden `CapturedContentEnvelope` for `discord-messages.json` | `DiscordParser` conversation output |
 | `discord-offset-messages.json` | Hand-authored Discord transcript list at a nonzero origin with the same semantic content | `DiscordParser` geometry-free output |
-| `messages-thread.json` | Hand-authored Messages thread at the origin with left and right bubbles plus a delivery status | `MessagesParser` bubble-side authorship |
+| `messages-thread.json` | Hand-authored Messages thread for invented Priya Vantar at the origin, with left and right bubbles plus a delivery status | `MessagesParser` bubble-side authorship |
 | `messages-thread-golden.json` | Golden `CapturedContentEnvelope` for `messages-thread.json` | `MessagesParser` conversation output |
-| `messages-offset-thread.json` | Hand-authored Messages thread at a nonzero origin with the same left and right bubble geometry | `MessagesParser` window-relative authorship |
+| `messages-offset-thread.json` | Hand-authored Messages thread for invented Priya Vantar at a nonzero origin with the same left and right bubble geometry | `MessagesParser` window-relative authorship |
 | `messages-offset-thread-golden.json` | Golden `CapturedContentEnvelope` for `messages-offset-thread.json` | `MessagesParser` conversation output |
 | `whatsapp-bubbles.json` | Hand-authored WhatsApp bubble-cell thread at the origin with a sidebar and timestamp nodes | `WhatsAppParser` bubble-cell anchor |
 | `whatsapp-bubbles-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-bubbles.json` | `WhatsAppParser` conversation output |

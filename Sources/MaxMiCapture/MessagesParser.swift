@@ -13,18 +13,17 @@ public struct MessagesParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
-        return CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        try parse(window, context: ParseContext(app: app))
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
+        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
         let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
         return ParsedCapture(
             sourceApp: "Messages",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: Self.legacyTranscript(from: content),
+            content: ContentRenderer.render(content, style: .full),
             contentKind: .conversation,
             parserVersion: 2,
             accumulationPolicy: .appendItems,
@@ -75,16 +74,6 @@ extension MessagesParser: StructuredParser {
         return AXQuery.sortedByVisualOrder(found, relativeTo: snapshot.frame)
     }
 
-    /// Keep the v1 bridge's established plain-bubble text while `structured` carries sender
-    /// attribution for Phase A consumers. This derives from the v2 result; it is not a second
-    /// AX extraction path.
-    static func legacyTranscript(from content: CapturedContent) -> String {
-        guard case .conversation(let conversation) = content else {
-            return ContentRenderer.render(content, style: .full)
-        }
-        return conversation.messages.map(\.text).joined(separator: "\n")
-    }
-
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let chat = Self.chatName(fromTitle: context.windowTitle)
         let messages = Self.bubbles(in: snapshot).compactMap { bubble -> Message? in
@@ -95,9 +84,10 @@ extension MessagesParser: StructuredParser {
             // chat exposes nothing, so the chat name IS the other party.
             let sender = isUser
                 ? "You"
-                : (bubble.label?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
-                    $0.isEmpty ? nil : $0
-                } ?? chat
+                : bubble.label
+                    .map { [$0, text] }
+                    .flatMap(NativeConversationExtraction.senderLabel)
+                    ?? chat
             return Message(id: Message.makeID(sender: sender, timeString: nil, text: text),
                            sender: sender, text: text, timestamp: nil, timeString: nil,
                            isUser: isUser, isDraft: false)

@@ -47,26 +47,26 @@ final class MessagesStructuredTests: XCTestCase {
     }
 
     func testChatNameComesFromTheWindowTitle() {
-        XCTAssertEqual(MessagesParser.chatName(fromTitle: "Ada Lovelace"), "Ada Lovelace")
+        XCTAssertEqual(MessagesParser.chatName(fromTitle: "Priya Vantar"), "Priya Vantar")
         XCTAssertEqual(MessagesParser.chatName(fromTitle: "  "), "unknown")
         XCTAssertEqual(MessagesParser.chatName(fromTitle: nil), "unknown")
     }
 
     func testBubbleSideDecidesIsUser() throws {
-        let c = try conversation(MessagesParser().parse(window(), context: context("Ada Lovelace")))
-        XCTAssertEqual(c.channel, "Ada Lovelace")
+        let c = try conversation(MessagesParser().parse(window(), context: context("Priya Vantar")))
+        XCTAssertEqual(c.channel, "Priya Vantar")
         XCTAssertFalse(c.isGroup)
         XCTAssertEqual(c.messages.map(\.text),
                        ["are we still on for 4", "yes, see you then", "Delivered"])
         XCTAssertEqual(c.messages.map(\.isUser), [false, true, true])
-        XCTAssertEqual(c.messages.map(\.sender), ["Ada Lovelace", "You", "You"])
+        XCTAssertEqual(c.messages.map(\.sender), ["Priya Vantar", "You", "You"])
     }
 
     func testBubbleSideIsWindowRelativeSoANonzeroOriginChangesNothing() throws {
         let flush = try conversation(MessagesParser().parse(window(),
-                                                          context: context("Ada Lovelace")))
+                                                          context: context("Priya Vantar")))
         let offset = try conversation(MessagesParser().parse(
-            window(origin: CGPoint(x: 1440, y: 220)), context: context("Ada Lovelace")))
+            window(origin: CGPoint(x: 1440, y: 220)), context: context("Priya Vantar")))
         XCTAssertEqual(flush.messages.map(\.isUser), offset.messages.map(\.isUser),
                        "AXFrame is global, so midX must be compared against the window's midX")
         XCTAssertEqual(flush, offset)
@@ -97,19 +97,19 @@ final class MessagesStructuredTests: XCTestCase {
     }
 
     func testMessagesAreOrderedTopToBottom() throws {
-        let c = try conversation(MessagesParser().parse(window(), context: context("Ada Lovelace")))
+        let c = try conversation(MessagesParser().parse(window(), context: context("Priya Vantar")))
         XCTAssertEqual(c.messages.map(\.text).first, "are we still on for 4")
     }
 
     func testEmptyTranscriptIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
                         children: [node("AXButton", frame: CGRect(x: 0, y: 0, width: 10, height: 10))])
-        XCTAssertNil(try MessagesParser().parse(bare, context: context("Ada Lovelace")))
+        XCTAssertNil(try MessagesParser().parse(bare, context: context("Priya Vantar")))
     }
 
     func testRenderedOutputUsesYouAndNeverTheInternalUserMarker() throws {
         let rendered = ContentRenderer.render(
-            try XCTUnwrap(MessagesParser().parse(window(), context: context("Ada Lovelace"))),
+            try XCTUnwrap(MessagesParser().parse(window(), context: context("Priya Vantar"))),
             style: .full)
         XCTAssertTrue(rendered.contains("(From: You): yes, see you then"))
         XCTAssertFalse(rendered.contains("[user]"))
@@ -117,13 +117,13 @@ final class MessagesStructuredTests: XCTestCase {
 
     func testMessagesFixtureMatchesItsGolden() throws {
         assertGolden(try XCTUnwrap(MessagesParser().parse(try fixture("messages-thread"),
-                                                        context: context("Ada Lovelace"))),
+                                                        context: context("Priya Vantar"))),
                      matches: "messages-thread-golden")
     }
 
     func testOffsetMessagesFixtureMatchesItsGolden() throws {
         assertGolden(try XCTUnwrap(MessagesParser().parse(try fixture("messages-offset-thread"),
-                                                        context: context("Ada Lovelace"))),
+                                                        context: context("Priya Vantar"))),
                      matches: "messages-offset-thread-golden")
     }
 }

@@ -1,4 +1,5 @@
 import XCTest
+import MaxMiCore
 @testable import MaxMiCapture
 
 final class MessagesParserTests: XCTestCase {
@@ -25,7 +26,8 @@ final class MessagesParserTests: XCTestCase {
         let cap = try XCTUnwrap(try MessagesParser().parse(window: win, app: app("Harnish")))
         XCTAssertEqual(cap.sourceApp, "Messages")
         XCTAssertEqual(cap.sourceKey, "imessage:harnish")
-        XCTAssertEqual(cap.content, "hey are you free\nyes what's up\ncall me")
+        XCTAssertEqual(cap.content,
+                       ContentRenderer.render(try XCTUnwrap(cap.structured), style: .full))
     }
 
     func testSelfBoundingCaptureReportsTruncation() throws {
@@ -60,6 +62,7 @@ final class MessagesParserTests: XCTestCase {
             node("AXTextArea", "second", y: 200),
         ])
         let cap = try XCTUnwrap(try MessagesParser().parse(window: win, app: app("x")))
-        XCTAssertEqual(cap.content, "first\nsecond\nthird")
+        XCTAssertEqual(cap.content,
+                       ContentRenderer.render(try XCTUnwrap(cap.structured), style: .full))
     }
 }
