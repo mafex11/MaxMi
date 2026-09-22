@@ -1,0 +1,126 @@
+{
+  "role": "AXWindow",
+  "title": "Signal map check - Outlook",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1600, "height": 900 },
+  "children": [
+    {
+      "role": "AXHeading",
+      "value": "Signal map check",
+      "focused": false,
+      "frame": { "x": 500, "y": 60, "width": 500, "height": 24 },
+      "domClassList": ["outlook-subject"],
+      "children": []
+    },
+    {
+      "role": "AXGroup",
+      "label": "Message From: Nira Vale, Sent: Tue 08:17 AM",
+      "focused": false,
+      "frame": { "x": 500, "y": 100, "width": 800, "height": 120 },
+      "domClassList": ["outlook-message-card"],
+      "children": [
+        {
+          "role": "AXGroup",
+          "label": "Message From: Nira Vale, Sent: Tue 08:17 AM",
+          "focused": false,
+          "frame": { "x": 500, "y": 100, "width": 800, "height": 20 },
+          "domClassList": ["outlook-message-header"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "Nira Vale",
+              "focused": false,
+              "frame": { "x": 500, "y": 100, "width": 160, "height": 16 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "Tue 08:17 AM",
+              "focused": false,
+              "frame": { "x": 670, "y": 100, "width": 140, "height": 16 },
+              "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 500, "y": 130, "width": 800, "height": 80 },
+          "domClassList": ["outlook-message-body"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "The map review is complete.",
+              "focused": false,
+              "frame": { "x": 500, "y": 130, "width": 400, "height": 16 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "No delayed signals remain.",
+              "focused": false,
+              "frame": { "x": 500, "y": 150, "width": 400, "height": 16 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXGroup",
+      "label": "Message",
+      "focused": false,
+      "frame": { "x": 500, "y": 260, "width": 800, "height": 120 },
+      "domClassList": ["outlook-message-card"],
+      "children": [
+        {
+          "role": "AXGroup",
+          "label": "Message",
+          "focused": false,
+          "frame": { "x": 500, "y": 260, "width": 800, "height": 20 },
+          "domClassList": ["outlook-message-header"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "Sol Renn",
+              "focused": false,
+              "frame": { "x": 500, "y": 260, "width": 160, "height": 16 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "Tue 08:39 AM",
+              "focused": false,
+              "frame": { "x": 670, "y": 260, "width": 140, "height": 16 },
+              "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 500, "y": 290, "width": 800, "height": 80 },
+          "domClassList": ["outlook-message-body"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "The last probe is green.",
+              "focused": false,
+              "frame": { "x": 500, "y": 290, "width": 400, "height": 16 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXTextArea",
+      "value": "I will send the map note.",
+      "label": "Message body",
+      "focused": false,
+      "frame": { "x": 500, "y": 500, "width": 600, "height": 120 },
+      "domIdentifier": "outlook-compose-body",
+      "children": []
+    }
+  ]
+}

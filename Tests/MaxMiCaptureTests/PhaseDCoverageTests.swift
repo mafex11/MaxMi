@@ -31,6 +31,8 @@ final class PhaseDCoverageTests: XCTestCase {
                            ("obsidian-offset-preview", "obsidian-offset-preview-golden")],
         "GmailParser": [("gmail-thread", "gmail-thread-golden"),
                         ("gmail-offset-inbox", "gmail-offset-inbox-golden")],
+        "OutlookWebParser": [("outlook-web-reading", "outlook-web-reading-golden"),
+                              ("outlook-web-offset-list", "outlook-web-offset-list-golden")],
         "FinderParser": [("finder-list", "finder-list-golden"),
                          ("finder-offset-copy", "finder-offset-copy-golden")],
         "CalendarParser": [("calendar-event", "calendar-event-golden"),
@@ -55,6 +57,9 @@ final class PhaseDCoverageTests: XCTestCase {
     /// cannot see them.
     static let hostCoverage: [String: [String]] = [
         "GmailParser": ["mail.google.com"],
+        // lane-c begin
+        "OutlookWebParser": ["outlook.office.com", "outlook.live.com"],
+        // lane-c end
     ]
 
     func testTheRegistrationListIsExactlyTheThirteenBundleIDParsers() {

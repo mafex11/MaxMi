@@ -1,0 +1,117 @@
+{
+  "role": "AXWindow",
+  "title": "Inbox - Outlook",
+  "focused": false,
+  "frame": { "x": 1600, "y": 300, "width": 1600, "height": 900 },
+  "children": [
+    {
+      "role": "AXTable",
+      "focused": false,
+      "frame": { "x": 1900, "y": 380, "width": 400, "height": 700 },
+      "children": [
+        {
+          "role": "AXRow",
+          "selected": true,
+          "focused": false,
+          "frame": { "x": 1900, "y": 400, "width": 400, "height": 40 },
+          "domClassList": ["outlook-message-row"],
+          "children": [
+            {
+              "role": "AXCell",
+              "focused": false,
+              "frame": { "x": 1900, "y": 400, "width": 110, "height": 40 },
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "Nira Vale",
+                  "focused": false,
+                  "frame": { "x": 1900, "y": 400, "width": 110, "height": 16 },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "role": "AXCell",
+              "focused": false,
+              "frame": { "x": 2020, "y": 400, "width": 160, "height": 40 },
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "Signal map check",
+                  "focused": false,
+                  "frame": { "x": 2020, "y": 400, "width": 160, "height": 16 },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "role": "AXCell",
+              "focused": false,
+              "frame": { "x": 2190, "y": 400, "width": 110, "height": 40 },
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "08:17 AM",
+                  "focused": false,
+                  "frame": { "x": 2190, "y": 400, "width": 110, "height": 16 },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "AXRow",
+          "selected": false,
+          "focused": false,
+          "frame": { "x": 1900, "y": 450, "width": 400, "height": 40 },
+          "domClassList": ["outlook-message-row"],
+          "children": [
+            {
+              "role": "AXCell",
+              "focused": false,
+              "frame": { "x": 1900, "y": 450, "width": 110, "height": 40 },
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "Sol Renn",
+                  "focused": false,
+                  "frame": { "x": 1900, "y": 450, "width": 110, "height": 16 },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "role": "AXCell",
+              "focused": false,
+              "frame": { "x": 2020, "y": 450, "width": 160, "height": 40 },
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "Probe window",
+                  "focused": false,
+                  "frame": { "x": 2020, "y": 450, "width": 160, "height": 16 },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "role": "AXCell",
+              "focused": false,
+              "frame": { "x": 2190, "y": 450, "width": 110, "height": 40 },
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "07:52 AM",
+                  "focused": false,
+                  "frame": { "x": 2190, "y": 450, "width": 110, "height": 16 },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
