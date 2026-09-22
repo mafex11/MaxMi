@@ -35,11 +35,15 @@ public struct WhatsAppParser: SourceParser {
 }
 
 public struct TeamsParser: SourceParser {
+    static let transcriptRole = "AXList"
+
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        try NativeConversationExtraction.extract(
+        guard let transcript = Self.transcript(in: window) else { return nil }
+        return try NativeConversationExtraction.extract(
             window: window,
+            messageRoot: transcript,
             app: app,
             sourceApp: "Microsoft Teams",
             keyPrefix: "teams"
@@ -47,12 +51,29 @@ public struct TeamsParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        try NativeConversationExtraction.capture(
+        guard let transcript = Self.transcript(in: window) else { return nil }
+        return try NativeConversationExtraction.capture(
             window: window,
+            messageRoot: transcript,
             app: app,
             sourceApp: "Microsoft Teams",
             keyPrefix: "teams"
         )
+    }
+
+    /// Teams exposes message rows beneath an AXList whose identifier or accessibility
+    /// description names the message list/transcript. Never infer a conversation from loose
+    /// whole-window text: the sidebar and search surfaces contain unrelated chat names.
+    static func transcript(in snapshot: AXNode) -> AXNode? {
+        AXQuery.all(in: snapshot, where: { node in
+            guard node.role == transcriptRole else { return false }
+            let metadata = [node.identifier, node.label, node.title]
+                .compactMap { $0?.lowercased() }
+                .joined(separator: " ")
+            return metadata.contains("message") && (
+                metadata.contains("list") || metadata.contains("transcript")
+            )
+        }).first
     }
 }
 
@@ -74,70 +95,41 @@ enum NativeConversationExtraction {
         let truncated: Bool
     }
 
-    /// Throws `ParserRefusal` rather than returning nil when this window is a conversation
-    /// surface it will not let through. Both parsers own apps whose windows are dominated by a
-    /// sidebar chat list, so a generic fall-through would store the titles of conversations the
-    /// user never opened — worse than storing nothing (spec 4f rule 3, refusal case).
+    /// Builds a native Teams conversation only from an explicitly anchored transcript.
     static func extract(
         window: AXNode,
+        messageRoot: AXNode,
         app: AppInfo,
         sourceApp: String,
-        keyPrefix: String,
-        requiresConversationIdentity: Bool = false,
-        allowsFallback: Bool = true,
-        // WhatsApp's two sender conventions: the user's own bubbles carry the literal sender
-        // "You", and a whole bubble is often exposed as ONE accessible label reading
-        // "<sender>: <body>". Teams does neither, so it opts out.
-        usesWhatsAppSenderLabels: Bool = false,
-        boundsContent: Bool = true
+        keyPrefix: String
     ) throws -> Extracted {
         let boundary = mainPaneBoundary(window)
         let conversation = conversationTitle(
             in: window,
             app: app,
             mainBoundary: boundary,
-            requiresHeaderSemantics: requiresConversationIdentity
+            requiresHeaderSemantics: false
         )
         var containers: [(y: CGFloat, sender: String?, texts: [String])] = []
-        collectMessageContainers(
-            window,
-            mainBoundary: boundary,
-            requiresMessageSemantics: requiresConversationIdentity,
-            into: &containers
-        )
+        for child in messageRoot.children {
+            collectMessageContainers(
+                child,
+                mainBoundary: boundary,
+                into: &containers
+            )
+        }
 
         var bubbles = containers.sorted { $0.y < $1.y }
             .map { (sender: $0.sender, text: $0.texts.joined(separator: " ")) }
-        if bubbles.isEmpty, allowsFallback {
-            // The fallback reads loose main-pane text, so nothing there is sender-attributed.
-            bubbles = fallbackMainPaneLines(in: window, mainBoundary: boundary)
-                .map { (sender: nil, text: $0) }
-        }
         bubbles = uniqueAdjacent(bubbles).filter { $0.sender != nil || !isChrome($0.text) }
-        // Everything on screen was app chrome: a non-chat surface (Teams' Calendar, Activity or
-        // Apps tab; WhatsApp with no chat open), not a message list this parser misread.
         guard !bubbles.isEmpty else {
             throw ParserRefusal(reason: "no-conversation-content")
-        }
-        // WhatsApp only: without a confirmed chat header there is no conversation to key on, so
-        // the content cannot be attributed to a thread at all.
-        guard !requiresConversationIdentity || conversation != nil else {
-            throw ParserRefusal(reason: "unconfirmed-conversation-identity")
-        }
-        if usesWhatsAppSenderLabels {
-            // Participants this walk can vouch for: the user, plus the contact in a 1:1 chat —
-            // which is exactly the conversation title. No group marker survives the walk, so
-            // `isGroup` below is always false and the title is always the contact; Phase D's
-            // group detection must drop the title from this set for a group chat.
-            var known: Set<String> = ["you"]
-            if let conversation { known.insert(conversation.lowercased()) }
-            bubbles = bubbles.map { split($0, byKnownParticipant: known) }
         }
 
         let identity = conversation ?? meaningfulWindowTitle(app.windowTitle, excluding: sourceApp) ?? "unknown"
         var typedMessages = bubbles.map {
             message(sender: $0.sender, text: $0.text,
-                    labelsUserAsYou: usesWhatsAppSenderLabels)
+                    labelsUserAsYou: false)
         }
         if let draft = ComposerDraft.draft(window: window) { typedMessages.append(draft) }
         let typed = Conversation(
@@ -148,9 +140,7 @@ enum NativeConversationExtraction {
             messages: typedMessages
         )
         let unbounded = CapturedContent.conversation(typed)
-        let content = boundsContent
-            ? CaptureAccumulator.boundHard(unbounded, to: contentCap)
-            : unbounded
+        let content = CaptureAccumulator.boundHard(unbounded, to: contentCap)
         return Extracted(
             content: content,
             sourceKey: "\(keyPrefix):\(slug(identity))",
@@ -161,18 +151,14 @@ enum NativeConversationExtraction {
 
     static func capture(
         window: AXNode,
+        messageRoot: AXNode,
         app: AppInfo,
         sourceApp: String,
-        keyPrefix: String,
-        requiresConversationIdentity: Bool = false,
-        allowsFallback: Bool = true,
-        usesWhatsAppSenderLabels: Bool = false
+        keyPrefix: String
     ) throws -> ParsedCapture {
         let extracted = try extract(
-            window: window, app: app, sourceApp: sourceApp, keyPrefix: keyPrefix,
-            requiresConversationIdentity: requiresConversationIdentity,
-            allowsFallback: allowsFallback,
-            usesWhatsAppSenderLabels: usesWhatsAppSenderLabels
+            window: window, messageRoot: messageRoot, app: app, sourceApp: sourceApp,
+            keyPrefix: keyPrefix
         )
         return ParsedCapture(
             sourceApp: sourceApp,
@@ -186,19 +172,6 @@ enum NativeConversationExtraction {
             structured: extracted.content,
             truncated: extracted.truncated
         )
-    }
-
-    /// Splits a one-label bubble ("<sender>: <body>") when the prefix names a KNOWN participant.
-    /// Any other prefix is left alone: this walk cannot tell a speaker from a word, so
-    /// "Note: check the doc" must stay a message rather than become a message from "Note".
-    static func split(
-        _ bubble: (sender: String?, text: String),
-        byKnownParticipant known: Set<String>
-    ) -> (sender: String?, text: String) {
-        guard bubble.sender == nil, let separator = bubble.text.range(of: ": ") else { return bubble }
-        let prefix = String(bubble.text[..<separator.lowerBound])
-        guard known.contains(prefix.lowercased()) else { return bubble }
-        return (prefix, String(bubble.text[separator.upperBound...]))
     }
 
     /// A bubble the AX walk attributed (`sender != nil`) or could not (`sender == nil`, which
@@ -290,7 +263,6 @@ enum NativeConversationExtraction {
     private static func collectMessageContainers(
         _ node: AXNode,
         mainBoundary: CGFloat,
-        requiresMessageSemantics: Bool,
         into out: inout [(y: CGFloat, sender: String?, texts: [String])]
     ) {
         let metadata = [node.identifier, node.label, node.title]
@@ -300,7 +272,7 @@ enum NativeConversationExtraction {
             || metadata.contains("wamessage")
         let x = node.frame?.minX ?? mainBoundary
         let candidate = x >= mainBoundary
-            && (requiresMessageSemantics ? hasMessageHint : (messageRoles.contains(node.role) || hasMessageHint))
+            && (messageRoles.contains(node.role) || hasMessageHint)
         if candidate {
             var values: [(y: CGFloat, x: CGFloat, value: String)] = []
             collectText(node, into: &values)
@@ -318,19 +290,9 @@ enum NativeConversationExtraction {
             collectMessageContainers(
                 child,
                 mainBoundary: mainBoundary,
-                requiresMessageSemantics: requiresMessageSemantics,
                 into: &out
             )
         }
-    }
-
-    private static func fallbackMainPaneLines(in root: AXNode, mainBoundary: CGFloat) -> [String] {
-        var values: [(y: CGFloat, x: CGFloat, value: String)] = []
-        collectText(root, into: &values)
-        return values
-            .filter { $0.x >= mainBoundary }
-            .sorted { $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x }
-            .map(\.value)
     }
 
     private static func collectText(

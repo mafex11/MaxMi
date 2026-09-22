@@ -15,13 +15,31 @@ final class NativeConversationParserTests: XCTestCase {
             AXNode(
                 role: "AXWindow", value: nil, title: "Project chat", url: nil,
                 frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
-                children: bodies.enumerated().map { index, body in
+                children: [
                     AXNode(
-                        role: "AXStaticText", value: body, title: nil, url: nil,
-                        frame: CGRect(x: 400, y: CGFloat(index * 20), width: 500, height: 18),
-                        focused: false, children: []
+                        role: "AXList", value: nil, title: nil, url: nil,
+                        frame: CGRect(x: 400, y: 100, width: 500, height: 500),
+                        focused: false,
+                        children: bodies.enumerated().map { index, body in
+                            AXNode(
+                                role: "AXRow", value: nil, title: nil, url: nil,
+                                frame: CGRect(x: 400, y: 100 + CGFloat(index * 20),
+                                              width: 500, height: 18),
+                                focused: false,
+                                children: [
+                                    AXNode(
+                                        role: "AXStaticText", value: body, title: nil, url: nil,
+                                        frame: CGRect(x: 420, y: 100 + CGFloat(index * 20),
+                                                      width: 460, height: 18),
+                                        focused: false, children: []
+                                    )
+                                ]
+                            )
+                        },
+                        identifier: "teams-message-list",
+                        label: "Chat message transcript"
                     )
-                }
+                ]
             )
         }
         let app = AppInfo(
@@ -39,6 +57,29 @@ final class NativeConversationParserTests: XCTestCase {
             app: app
         ))
         XCTAssertTrue(oversize.truncated)
+    }
+
+    func testTeamsRequiresTranscriptAnchorAndReadsOnlyItsMessages() throws {
+        let app = AppInfo(
+            bundleID: "com.microsoft.teams2", name: "Microsoft Teams", windowTitle: "Project chat"
+        )
+        let parser = TeamsParser()
+
+        let unanchored = try fixture("teams-native-no-transcript")
+        XCTAssertNil(try parser.parseStructured(window: unanchored, app: app))
+        XCTAssertNil(try parser.parse(window: unanchored, app: app))
+
+        guard case .conversation(let conversation) = try XCTUnwrap(
+            parser.parseStructured(window: try fixture("teams-native-transcript"), app: app)
+        ) else {
+            return XCTFail("expected an anchored Teams conversation")
+        }
+        XCTAssertEqual(conversation.messages.map(\.text), [
+            "anchored release note",
+            "anchored follow-up",
+        ])
+        XCTAssertFalse(ContentRenderer.render(.conversation(conversation), style: .full)
+            .contains("outside message row"))
     }
 
     func testEmptyConversationIsNotHandled() throws {

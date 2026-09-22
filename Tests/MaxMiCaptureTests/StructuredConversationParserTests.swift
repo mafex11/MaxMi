@@ -144,7 +144,15 @@ final class StructuredConversationParserTests: XCTestCase {
         ])
         let window = AXNode(role: "AXWindow", value: nil, title: "Microsoft Teams", url: nil,
                             frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
-                            children: [row])
+                            children: [
+                                AXNode(
+                                    role: "AXList", value: nil, title: nil, url: nil,
+                                    frame: CGRect(x: 400, y: 180, width: 500, height: 200),
+                                    focused: false, children: [row],
+                                    identifier: "teams-message-list",
+                                    label: "Chat message transcript"
+                                )
+                            ])
         let app = AppInfo(bundleID: "com.microsoft.teams2", name: "Microsoft Teams",
                           windowTitle: "Alex")
         let messages = try messages(try TeamsParser().parseStructured(window: window, app: app))
@@ -164,7 +172,15 @@ final class StructuredConversationParserTests: XCTestCase {
         ])
         let window = AXNode(role: "AXWindow", value: nil, title: "Microsoft Teams", url: nil,
                             frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
-                            children: [row])
+                            children: [
+                                AXNode(
+                                    role: "AXList", value: nil, title: nil, url: nil,
+                                    frame: CGRect(x: 400, y: 180, width: 500, height: 200),
+                                    focused: false, children: [row],
+                                    identifier: "teams-message-list",
+                                    label: "Chat message transcript"
+                                )
+                            ])
         let app = AppInfo(bundleID: "com.microsoft.teams2", name: "Microsoft Teams",
                           windowTitle: "Platform Team")
         let messages = try messages(try TeamsParser().parseStructured(window: window, app: app))
