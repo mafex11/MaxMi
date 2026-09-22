@@ -13,12 +13,15 @@ final class DocumentParsersTests: XCTestCase {
                focused: false, children: body)
     }
 
-    func testNotionKeyFromTitleAndBody() throws {
+    func testNotionWithoutFrameFallsThroughToGenericCapture() throws {
         let app = AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "June LP")
-        let cap = try XCTUnwrap(try NotionParser().parse(window: win([n("AXTextArea", "Anime list", 10)]), app: app))
-        XCTAssertEqual(cap.sourceApp, "Notion")
-        XCTAssertEqual(cap.sourceKey, "notion:june-lp")
-        XCTAssertTrue(cap.content.contains("Anime list"))
+        let window = genericWindow([n("AXTextArea", "Anime list", 10)])
+        XCTAssertNil(try NotionParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "notion.id:June LP")
     }
     func testObsidianKeyFromTitleParts() throws {
         let app = AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Welcome - My Vault - Obsidian 1.12.7")

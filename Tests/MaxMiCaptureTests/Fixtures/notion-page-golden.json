@@ -1,0 +1,1 @@
+{"content":{"document":{"_0":{"author":{"user":{}},"blocks":[{"authoredByUser":false,"text":"Implementation","type":{"heading":{"level":2}}},{"authoredByUser":false,"text":"Build the parser around the page frame.","type":{"paragraph":{}}},{"authoredByUser":false,"text":"Keep fallback capture available.","type":{"paragraph":{}}}],"title":"Project outline"}}},"v":1}

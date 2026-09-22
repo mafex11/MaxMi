@@ -39,6 +39,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `notes-body-golden.json` | Expected `CapturedContent` for `notes-body.json` | golden comparison |
 | `notes-offset-shared.json` | Hand-authored shared Notes window at a nonzero origin with folder and note-list chrome retained | `NotesParser` origin invariance and shared author |
 | `notes-offset-shared-golden.json` | Expected `CapturedContent` for `notes-offset-shared.json` | golden comparison |
+| `notion-page.json` | Hand-authored Notion page at the origin with page properties and right-margin chrome retained | `NotionParser` notion-frame anchor |
+| `notion-page-golden.json` | Expected `CapturedContent` for `notion-page.json` | golden comparison |
+| `notion-offset-peek.json` | Hand-authored Notion peek renderer at a nonzero origin with page properties and right-margin chrome retained | `NotionParser` origin invariance |
+| `notion-offset-peek-golden.json` | Expected `CapturedContent` for `notion-offset-peek.json` | golden comparison |
 | <!-- // lane-a end --> |  |  |
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the

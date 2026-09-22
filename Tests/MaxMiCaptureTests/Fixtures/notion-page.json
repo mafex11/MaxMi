@@ -1,0 +1,89 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 20, "width": 400, "x": 20, "y": 12},
+              "role": "AXStaticText",
+              "value": "Project outline"
+            }
+          ],
+          "domClassList": ["notion-topbar"],
+          "focused": false,
+          "frame": {"height": 44, "width": 1400, "x": 0, "y": 0},
+          "role": "AXGroup"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "focused": false,
+                  "frame": {"height": 20, "width": 400, "x": 300, "y": 60},
+                  "role": "AXStaticText",
+                  "value": "Phase: Draft"
+                }
+              ],
+              "domClassList": ["notion-page-properties"],
+              "focused": false,
+              "frame": {"height": 30, "width": 400, "x": 300, "y": 60},
+              "role": "AXGroup"
+            },
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 30, "width": 400, "x": 300, "y": 100},
+              "headingLevel": 2,
+              "role": "AXHeading",
+              "value": "Implementation"
+            },
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 20, "width": 400, "x": 300, "y": 150},
+              "role": "AXStaticText",
+              "value": "Build the parser around the page frame."
+            },
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 20, "width": 400, "x": 300, "y": 180},
+              "role": "AXStaticText",
+              "value": "Keep fallback capture available."
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "focused": false,
+                  "frame": {"height": 20, "width": 240, "x": 1100, "y": 100},
+                  "role": "AXStaticText",
+                  "value": "Discussion"
+                }
+              ],
+              "domClassList": ["layout-margin-right"],
+              "focused": false,
+              "frame": {"height": 700, "width": 280, "x": 1100, "y": 100},
+              "role": "AXGroup"
+            }
+          ],
+          "domClassList": ["notion-frame"],
+          "focused": false,
+          "frame": {"height": 856, "width": 1400, "x": 0, "y": 44},
+          "role": "AXGroup"
+        }
+      ],
+      "focused": false,
+      "frame": {"height": 900, "width": 1400, "x": 0, "y": 0},
+      "role": "AXWebArea"
+    }
+  ],
+  "focused": false,
+  "frame": {"height": 900, "width": 1400, "x": 0, "y": 0},
+  "role": "AXWindow"
+}

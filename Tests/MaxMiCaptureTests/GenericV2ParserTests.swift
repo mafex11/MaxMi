@@ -15,7 +15,7 @@ final class GenericV2ParserTests: XCTestCase {
     }
 
     /// Every parser here keeps a contentKind that the `.generic` shape cannot imply.
-    func testSevenPageParsersProduceGenericStructureWithTheirOwnKind() throws {
+    func testPageParsersProduceGenericStructureWithTheirOwnKind() throws {
         let document = body([
             AXNode(role: "AXHeading", value: "Heading one", title: nil, url: nil,
                    frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
@@ -23,7 +23,6 @@ final class GenericV2ParserTests: XCTestCase {
             text("body line", y: 40),
         ], title: nil)
         let cases: [(parser: any SourceParser, app: AppInfo, kind: CaptureContentKind, label: String)] = [
-            (NotionParser(), AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "June LP"), .document, "Notion"),
             (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Welcome - My Vault - Obsidian v1.5"), .document, "Obsidian"),
             (WordParser(), AppInfo(bundleID: "com.microsoft.Word", name: "Word", windowTitle: "Brief - Microsoft Word"), .document, "Word"),
             (PagesParser(), AppInfo(bundleID: "com.apple.iWork.Pages", name: "Pages", windowTitle: "Brief - Pages"), .document, "Pages"),
@@ -42,6 +41,22 @@ final class GenericV2ParserTests: XCTestCase {
             // Whole-page v2 semantics: each extraction supersedes the previous one.
             XCTAssertEqual(capture.accumulationPolicy, .replace, entry.label)
         }
+    }
+
+    func testNotionWithoutFrameFallsThroughToGenericPageExtractor() throws {
+        let window = body([
+            AXNode(role: "AXHeading", value: "Roadmap", title: nil, url: nil,
+                   frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
+                   children: [], headingLevel: 2),
+            text("ship the index rebuild", y: 40),
+        ], title: "Roadmap")
+        let app = AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Roadmap")
+        XCTAssertNil(try NotionParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "notion.id:Roadmap")
     }
 
     func testNotesWithoutBodyAnchorFallsThroughToGenericPageExtractor() throws {
@@ -112,7 +127,6 @@ final class GenericV2ParserTests: XCTestCase {
             text("paragraph \(index) " + String(repeating: "x", count: 40), y: CGFloat(20 * index))
         }, title: "Long note")
         let cases: [(parser: any SourceParser, app: AppInfo, label: String)] = [
-            (NotionParser(), AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Long note"), "Notion"),
             (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Long note - My Vault - Obsidian v1.5"), "Obsidian"),
         ]
         for entry in cases {
@@ -124,6 +138,37 @@ final class GenericV2ParserTests: XCTestCase {
             XCTAssertLessThanOrEqual(capture.content.count,
                                      StructuredEntityExtraction.pageBudget, entry.label)
         }
+        let notion = AXNode(
+            role: "AXWindow",
+            value: nil,
+            title: nil,
+            url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_200, height: 800),
+            focused: false,
+            children: [
+                AXNode(
+                    role: "AXGroup",
+                    value: nil,
+                    title: nil,
+                    url: nil,
+                    frame: CGRect(x: 0, y: 0, width: 1_200, height: 800),
+                    focused: false,
+                    children: (0..<400).map { index in
+                        text("paragraph \(index) " + String(repeating: "x", count: 40),
+                             y: CGFloat(20 * index))
+                    },
+                    domClassList: ["notion-frame"]
+                ),
+            ]
+        )
+        let notionApp = AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Long note")
+        let notionCapture = try XCTUnwrap(try NotionParser().parse(window: notion, app: notionApp))
+        XCTAssertEqual(notionCapture.offscreenPolicy.maxCharacters,
+                       StructuredEntityExtraction.pageBudget, "Notion")
+        XCTAssertGreaterThan(notionCapture.content.count, 8_000,
+                             "Notion must not be trimmed at the 8_000 default")
+        XCTAssertLessThanOrEqual(notionCapture.content.count,
+                                 StructuredEntityExtraction.pageBudget, "Notion")
         let notes = body([
             AXNode(
                 role: "AXTextArea",
