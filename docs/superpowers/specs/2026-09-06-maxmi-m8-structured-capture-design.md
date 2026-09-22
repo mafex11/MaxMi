@@ -1025,6 +1025,11 @@ Three additions the architect approved on 2026-09-07. Each bullet below records 
 
 **Q22 — `StoreAPI.pendingWork` neither selects `structured_ciphertext` nor re-qualifies a version whose only failure was the context embedding.** §14a needs a `.compact(maxChars: 6_000)` render, but `pendingWork` reads `v.content` only; and its gate is `v.extract_status = 'pending'` with a retry-deferral predicate hardcoded to `r.kind = 'extract'` (`StoreAPI.swift:250-273`), so once `markExtracted` sets `'completed'`, no `embed_version` retry row can bring that version back. **Decision:** two narrow additions rather than a new state machine — `pendingWork` selects `structured_ciphertext` and populates `PipelineVersion.compactContent` / `.sourceTitle` where it already decrypts (`CapturePipeline` never renders); and Phase C adds a separate "versions with no `context_embeddings` row" query, so the retry queue stays what its comment already calls it — a wake-up list — and the missing-embedding fact lives in the index, not in a status column.
 
+**Amendments (2026-09-22, M9 plan repair)**
+
+- M8's “no `NSEvent.addGlobalMonitorForEvents`, ever” rule targets keystroke and typing capture. M9 permits exactly one global and one local `NSEvent` monitor with the `.flagsChanged` mask only, confined to `Sources/MaxMi/OptionDoubleTapMonitor.swift`; `.keyDown`, `.keyUp`, and every CGEvent tap remain banned everywhere.
+- Q9's “reminder slot legend” is superseded by M9's per-item `remind_at`; M9 adds no legend.
+
 ## 13. Rollout
 
 Per the established M5/M6 workflow: **spec → Codex review → revise → implementation plan per phase → Codex review of the plan → revise → subagent-driven build → Codex review of the implementation → revise → live verify.** Phase A's plan lands first and must include the `AXNode`/`AXReader` attribute additions, because both B and D build on them. Phase D runs in its own worktree in parallel with B/C.
