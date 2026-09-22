@@ -16,6 +16,7 @@ public struct ReminderItem: Sendable, Equatable {
 
 public protocol ReminderRepository: Sendable {
     func dueReminders(nowMs: EpochMs) async -> [ReminderItem]
+    func dueReminder(id: String, nowMs: EpochMs) async -> ReminderItem?
     func markReminded(_ id: String, nowMs: EpochMs) async
 }
 
@@ -57,7 +58,10 @@ public actor ReminderScheduler {
         inFlight = true
         defer { inFlight = false }
 
-        for item in await repository.dueReminders(nowMs: nowMs) {
+        for candidate in await repository.dueReminders(nowMs: nowMs) {
+            guard let item = await repository.dueReminder(id: candidate.id, nowMs: nowMs) else {
+                continue
+            }
             let sourceApp = item.sourceApp ?? "MaxMi"
             let age = Self.ageDescription(detectedAtMs: item.detectedAtMs, nowMs: nowMs)
             let outcome = await notifier.post(

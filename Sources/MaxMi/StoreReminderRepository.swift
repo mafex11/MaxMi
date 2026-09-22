@@ -30,6 +30,25 @@ struct StoreReminderRepository: ReminderRepository, @unchecked Sendable {
         }.value
     }
 
+    func dueReminder(id: String, nowMs: EpochMs) async -> ReminderItem? {
+        await Task.detached(priority: .utility) {
+            do {
+                guard let item = try self.store.dueReminder(id: id, nowMs: nowMs) else {
+                    return nil
+                }
+                let sourceApps = try self.store.sourceApps(forVersionIDs: Set(item.sourceRefs))
+                return ReminderItem(
+                    id: item.id,
+                    title: item.title,
+                    sourceApp: item.sourceRefs.lazy.compactMap { sourceApps[$0] }.first,
+                    detectedAtMs: item.detectedAtMs
+                )
+            } catch {
+                return nil
+            }
+        }.value
+    }
+
     func markReminded(_ id: String, nowMs: EpochMs) async {
         await Task.detached(priority: .utility) {
             try? self.store.markReminded(id, nowMs: nowMs)

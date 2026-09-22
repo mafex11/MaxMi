@@ -58,7 +58,7 @@ Non-goals: user-authored todos, editing item text, snooze/manual scheduling, syn
 
 ### 3f. `ReminderScheduler` (Sources/MaxMiActivity) + notifications (Sources/MaxMi)
 - Actor `ReminderScheduler(repository: ReminderRepository, notifier: ReminderNotifier, clock:)` with `tick(nowMs:)`; AppWiring calls it right after `checkinTrigger.tick()` on the same pipeline timer. `inFlight` guard like `CheckinTrigger`.
-- Each tick: `dueReminders(nowMs)` → for each, `notifier.post(id:title:body:)` then `markReminded`. Body = `"\(sourceApp ?? "MaxMi") · \(age)"`. Items due more than 24 h ago are never posted (the Store predicate excludes them) but are marked reminded so they do not linger.
+- Each tick: `dueReminders(nowMs)` → re-read each candidate immediately before `notifier.post(id:title:body:)`; only an item that is still open with its reminder intact is posted, then `markReminded`. Body = `"\(sourceApp ?? "MaxMi") · \(age)"`. Items due more than 24 h ago are never posted (the Store predicate excludes them) but are marked reminded so they do not linger.
 - `UNUserNotificationCenterNotifier` (Sources/MaxMi) requests authorization lazily on first post; if denied, `post` is a no-op and the panel's clock glyph remains the only signal. Notification click → `TodoPanelController.show()`.
 - Gate: reminders run only when `isActivitySynthesisEnabled()` is true (same consent as the hourly review that creates the items).
 

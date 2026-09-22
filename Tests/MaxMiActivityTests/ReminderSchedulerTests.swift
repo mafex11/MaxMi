@@ -8,6 +8,7 @@ private actor ReminderSchedulerState {
     private var marked: [(String, EpochMs)] = []
     private var dueLookupCount = 0
     private var blocksDueLookup = false
+    private var resolvesBeforeNextRevalidation = false
     private var didStartLookup = false
     private var lookupStarted: CheckedContinuation<Void, Never>?
     private var lookupRelease: CheckedContinuation<Void, Never>?
@@ -33,12 +34,26 @@ private actor ReminderSchedulerState {
         due.removeAll { $0.id == id }
     }
 
+    func revalidate(id: String, nowMs: EpochMs) -> ReminderItem? {
+        _ = nowMs
+        if resolvesBeforeNextRevalidation {
+            resolvesBeforeNextRevalidation = false
+            due.removeAll { $0.id == id }
+            return nil
+        }
+        return due.first { $0.id == id }
+    }
+
     func post(id: String, title: String, body: String) {
         posted.append((id, title, body))
     }
 
     func setBlocksDueLookup(_ value: Bool) {
         blocksDueLookup = value
+    }
+
+    func resolveBeforeNextRevalidation() {
+        resolvesBeforeNextRevalidation = true
     }
 
     func waitForLookupStart() async {
@@ -71,6 +86,10 @@ private struct ReminderSchedulerRepositoryFake: ReminderRepository {
 
     func dueReminders(nowMs: EpochMs) async -> [ReminderItem] {
         await state.readDue(nowMs: nowMs)
+    }
+
+    func dueReminder(id: String, nowMs: EpochMs) async -> ReminderItem? {
+        await state.revalidate(id: id, nowMs: nowMs)
     }
 
     func markReminded(_ id: String, nowMs: EpochMs) async {
@@ -158,6 +177,28 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertTrue(posts.isEmpty)
         XCTAssertTrue(marks.isEmpty)
         XCTAssertEqual(dueLookups, 0)
+    }
+
+    func testRevalidatesEachReminderBeforePosting() async {
+        let state = ReminderSchedulerState()
+        let nowMs: EpochMs = 1_800_000_000_000
+        await state.setDue([
+            ReminderItem(id: "resolved", title: "Do not post", sourceApp: "Mail", detectedAtMs: nowMs),
+        ])
+        await state.resolveBeforeNextRevalidation()
+        let scheduler = ReminderScheduler(
+            repository: ReminderSchedulerRepositoryFake(state: state),
+            notifier: ReminderSchedulerNotifierFake(state: state),
+            isActivitySynthesisEnabled: { true },
+            clock: { nowMs }
+        )
+
+        await scheduler.tick()
+
+        let posts = await state.posts()
+        let marks = await state.marks()
+        XCTAssertTrue(posts.isEmpty)
+        XCTAssertTrue(marks.isEmpty)
     }
 
     func testInFlightGuardRejectsConcurrentTicks() async {
