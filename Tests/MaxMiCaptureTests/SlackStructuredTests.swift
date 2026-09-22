@@ -85,7 +85,7 @@ final class SlackStructuredTests: XCTestCase {
         let c = try conversation(SlackParser().parse(domWindow(),
                                                     context: context("#general - Acme - Slack")))
         XCTAssertEqual(c.channel, "general")
-        XCTAssertTrue(c.isGroup)
+        XCTAssertTrue(c.isGroup, "no header anchor in this fixture, so the channel default holds")
         XCTAssertEqual(c.messages.map(\.sender), ["Ada", "Grace"])
         XCTAssertEqual(c.messages.map(\.text), ["index rebuilt", "deploy looks green"])
         XCTAssertEqual(c.messages.map(\.timeString), ["10:14 AM", "10:16 AM"])

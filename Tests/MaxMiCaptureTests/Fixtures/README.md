@@ -51,6 +51,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `gmail-thread-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
 | `gmail-offset-inbox.json` | Hand-authored scrubbed Gmail inbox at a nonzero screen origin | `GmailParser` generic page of three-cell table rows |
 | `gmail-offset-inbox-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
+| `slack-web-channel.json` | Hand-authored scrubbed Chrome `app.slack.com` channel shape | `SlackParser` web anchors, `#` header → `isGroup` true |
+| `slack-web-channel-golden.json` | Golden `CapturedContent` for the above | `SlackParser` |
+| `slack-web-offset-dm.json` | Hand-authored scrubbed Chrome `app.slack.com` DM shape at a nonzero screen origin | `SlackParser` DM header → `isGroup` false, composer draft |
+| `slack-web-offset-dm-golden.json` | Golden `CapturedContent` for the above | `SlackParser` |
 | <!-- // lane-a end --> |  |  |
 <!-- // lane-b begin -->
 | `slack-dom-messages.json` | Hand-authored Slack DOM-class message list with an invented composer draft | `SlackParser` DOM-class message and draft anchors |

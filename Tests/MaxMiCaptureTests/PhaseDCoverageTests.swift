@@ -14,7 +14,9 @@ final class PhaseDCoverageTests: XCTestCase {
         // R-E rejects the former unanchored x-band fallback. This fixture keeps the verified
         // DOM anchors while exercising the same parser at a nonzero window origin.
         "SlackParser": [("slack-dom-messages", "slack-dom-messages-golden"),
-                        ("slack-offset-dom-messages", "slack-offset-dom-messages-golden")],
+                        ("slack-offset-dom-messages", "slack-offset-dom-messages-golden"),
+                        ("slack-web-channel", "slack-web-channel-golden"),
+                        ("slack-web-offset-dm", "slack-web-offset-dm-golden")],
         // Discord is geometry-free, so its offset fixture is pinned against the SAME golden
         // (Task 11, ruling F25) — the pair is (two fixtures, one golden).
         "DiscordParser": [("discord-messages", "discord-messages-golden"),
@@ -55,6 +57,7 @@ final class PhaseDCoverageTests: XCTestCase {
     /// cannot see them.
     static let hostCoverage: [String: [String]] = [
         "GmailParser": ["mail.google.com"],
+        "SlackParser": ["app.slack.com"],
     ]
 
     func testTheRegistrationListIsExactlyTheThirteenBundleIDParsers() {

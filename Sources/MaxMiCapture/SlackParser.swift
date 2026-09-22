@@ -1,9 +1,16 @@
 import Foundation
 import MaxMiCore
 
-/// Dedicated parser for the native Slack app. Window reached by the caller via
-/// AXReader's locator (Slack leaves AXWindows empty). Verified DOM anchors are
-/// `c-message_list`, `c-virtual_list__item`, `c-message__sender`, `c-timestamp`, and `ql-editor`.
+/// Slack's native and web parser. The native window reaches this parser through AXReader's
+/// locator because Slack leaves AXWindows empty; browser tabs reach it through app.slack.com.
+///
+/// ANCHORS. The privacy rule forbids recording or inspecting live application windows. The
+/// following web anchors are verified by hand-authored, scrubbed fixtures only:
+/// `c-message_list`, `c-virtual_list__item`, `c-message_kit__background`,
+/// `c-message__sender`, `c-timestamp` (readable time in AXDescription), `p-rich_text_section`,
+/// `ql-editor`, and `p-view_header__channel_title`. The web fixtures match the native message
+/// list class-for-class except for the message_kit wrapper, description-only timestamp, and
+/// header title. No unanchored whole-tree or geometry fallback is used.
 public struct SlackParser: SourceParser {
     static let contentCap = 8000
     public init() {}
@@ -80,9 +87,11 @@ extension SlackParser: StructuredParser {
 
     static let messageListClass = "c-message_list"
     static let messageItemClass = "c-virtual_list__item"
+    static let messageBackgroundClass = "c-message_kit__background"
     static let senderClass = "c-message__sender"
     static let timestampClass = "c-timestamp"
     static let composerClass = "ql-editor"
+    static let headerChannelClass = "p-view_header__channel_title"
 
     private struct TextNode {
         let path: [Int]
@@ -122,37 +131,82 @@ extension SlackParser: StructuredParser {
         }.map(\.element)
     }
 
+    private static func paths(ofDOMClass domClass: String, in root: AXNode) -> [[Int]] {
+        var found: [[Int]] = []
+        func visit(_ node: AXNode, path: [Int]) {
+            if (node.domClassList ?? []).contains(where: {
+                $0.caseInsensitiveCompare(domClass) == .orderedSame
+            }) {
+                found.append(path)
+            }
+            for (index, child) in node.children.enumerated() {
+                visit(child, path: path + [index])
+            }
+        }
+        visit(root, path: [])
+        return found
+    }
+
+    /// The channel title from the view header, e.g. "#general" for a channel and a person's name
+    /// for a DM. nil when the header is not exposed, which is Task 10's native fixture shape.
+    static func headerChannel(in snapshot: AXNode) -> String? {
+        AXQuery.find("//*[domClass=\"\(headerChannelClass)\"]", in: snapshot)
+            .flatMap(WebHostParsing.text(of:))
+    }
+
+    /// The channel NAME, with the group marker removed: "#general" and native "general" must
+    /// produce the same name so one thread does not read two ways across surfaces. With no header
+    /// the existing title helper answers — this task adds a source, it does not replace one.
+    func channel(in snapshot: AXNode, windowTitle: String?) -> String {
+        guard let header = Self.headerChannel(in: snapshot) else {
+            return channel(fromTitle: windowTitle)
+        }
+        return header.hasPrefix("#") ? String(header.dropFirst()) : header
+    }
+
+    /// A leading "#" in the header title is the only group marker Slack exposes. Native fixtures
+    /// have no header, so their title rule remains unchanged. The web message_kit anchor retains
+    /// Task 10's legacy channel default when the header is temporarily absent.
+    func isGroup(in snapshot: AXNode, windowTitle: String?) -> Bool {
+        guard let header = Self.headerChannel(in: snapshot) else {
+            if AXQuery.find("//*[domClass*=\"\(Self.messageBackgroundClass)\"]", in: snapshot) != nil {
+                return true
+            }
+            return isGroup(fromTitle: windowTitle)
+        }
+        return header.hasPrefix("#")
+    }
+
+    /// Message items: the virtual-list rows when they are exposed, else the message_kit
+    /// backgrounds directly. Never both, so one message cannot be counted twice.
+    static func domItems(in list: AXNode) -> [AXNode] {
+        let virtualItems = AXQuery.findAll("//*[domClass*=\"\(messageItemClass)\"]", in: list)
+        let items = virtualItems.isEmpty
+            ? AXQuery.findAll("//*[domClass*=\"\(messageBackgroundClass)\"]", in: list)
+            : virtualItems
+        return AXQuery.sortedByVisualOrder(items, relativeTo: list.frame)
+    }
+
     static func domMessages(in snapshot: AXNode) -> [Message] {
         guard let list = AXQuery.find("//*[domClass*=\"\(messageListClass)\"]", in: snapshot)
         else { return [] }
-        let items = AXQuery.findAll("//*[domClass*=\"\(messageItemClass)\"]", in: list)
-        return AXQuery.sortedByVisualOrder(items, relativeTo: list.frame).compactMap { item in
+        return domItems(in: list).compactMap { item in
+            let senderNode = AXQuery.find("//*[domClass*=\"\(senderClass)\"]", in: item)
+            let timeNode = AXQuery.find("//*[domClass*=\"\(timestampClass)\"]", in: item)
+            let sender = senderNode.flatMap(WebHostParsing.text(of:))
+            // Slack web folds the readable time into the timestamp's aria-label, which AXReader
+            // exposes as `label`; native Slack puts it in the value. `text(of:)` reads both.
+            let timeString = timeNode.flatMap(WebHostParsing.text(of:))
+            let excludedRoots = paths(ofDOMClass: senderClass, in: item)
+                + paths(ofDOMClass: timestampClass, in: item)
             let texts = staticTextNodes(in: item)
-            let senderNode = texts.first {
-                ($0.node.domClassList ?? []).contains {
-                    $0.caseInsensitiveCompare(senderClass) == .orderedSame
+                .filter { text in
+                    !excludedRoots.contains { text.path.starts(with: $0) }
                 }
-            }
-            let timestampNode = texts.first {
-                ($0.node.domClassList ?? []).contains {
-                    $0.caseInsensitiveCompare(timestampClass) == .orderedSame
-                }
-            }
-            let excluded = Set([senderNode?.path, timestampNode?.path].compactMap { $0 })
-            let body = texts.filter { !excluded.contains($0.path) }
                 .map(\.value)
-                .joined(separator: " ")
-            guard !body.isEmpty else { return nil }
-            let resolvedSender = senderNode.flatMap {
-                NativeConversationExtraction.senderLabel([$0.value, body])
-            } ?? "unknown"
-            let timeString = timestampNode?.value
-            return Message(
-                id: Message.makeID(sender: resolvedSender, timeString: timeString, text: body),
-                sender: resolvedSender, text: body, timestamp: nil,
-                timeString: timeString?.isEmpty == false ? timeString : nil,
-                isUser: false, isDraft: false
-            )
+            let isUser = sender?.caseInsensitiveCompare("[user]") == .orderedSame
+            return WebHostParsing.message(sender: isUser ? "You" : sender, timeString: timeString,
+                                          texts: texts, isUser: isUser)
         }
     }
 
@@ -160,12 +214,7 @@ extension SlackParser: StructuredParser {
     static func draftMessage(in snapshot: AXNode) -> Message? {
         if let composer = AXQuery.find("//*[domClass*=\"\(composerClass)\"]", in: snapshot) {
             guard composer.subrole != GenericPageExtractor.secureSubrole else { return nil }
-            let text = (composer.value ?? AXQuery.collectStaticTexts(in: composer).joined(separator: " "))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return nil }
-            return Message(id: Message.makeID(sender: "You", timeString: nil, text: text),
-                           sender: "You", text: text, timestamp: nil, timeString: nil,
-                           isUser: true, isDraft: true)
+            return WebHostParsing.draft(in: composer)
         }
         // Preserve the established native composer predicate when Slack has not exposed DOM
         // attributes yet. This is reached through the same v2 path, not a separate extraction.
@@ -174,12 +223,29 @@ extension SlackParser: StructuredParser {
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         var messages = Self.domMessages(in: snapshot)
-        guard !messages.isEmpty else { return nil }
         if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
+        guard !messages.isEmpty else {
+            // The ONE refusal case: a visible, empty composer and nothing else readable.
+            if refusesEmptyCompose(snapshot, context: context) {
+                throw ParserRefusal(reason: "empty-compose")
+            }
+            return nil
+        }
         return .conversation(Conversation(
-            channel: channel(fromTitle: context.windowTitle),
-            isGroup: isGroup(fromTitle: context.windowTitle),
+            channel: channel(in: snapshot, windowTitle: context.windowTitle),
+            isGroup: isGroup(in: snapshot, windowTitle: context.windowTitle),
             messages: messages
         ))
+    }
+
+    /// True only for a compose-only Slack surface: a visible composer, an empty draft and no
+    /// anchored message. `parse` turns that into `ParserRefusal`; every other empty read stays
+    /// nil and degrades to generic v2.
+    func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
+        guard let composer = AXQuery.find("//*[domClass*=\"\(Self.composerClass)\"]", in: snapshot)
+        else { return false }
+        return Self.draftMessage(in: snapshot) == nil
+            && Self.domMessages(in: snapshot).isEmpty
+            && composer.hidden == false
     }
 }

@@ -1,0 +1,117 @@
+{
+  "role": "AXWindow",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1200, "height": 800 },
+  "children": [
+    {
+      "role": "AXStaticText",
+      "value": "#operations",
+      "focused": false,
+      "frame": { "x": 260, "y": 40, "width": 300, "height": 16 },
+      "domClassList": ["p-view_header__channel_title"],
+      "children": []
+    },
+    {
+      "role": "AXGroup",
+      "focused": false,
+      "frame": { "x": 260, "y": 80, "width": 900, "height": 600 },
+      "domClassList": ["c-message_list"],
+      "children": [
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 260, "y": 100, "width": 900, "height": 40 },
+          "domClassList": ["c-virtual_list__item"],
+          "children": [
+            {
+              "role": "AXGroup",
+              "focused": false,
+              "frame": { "x": 260, "y": 100, "width": 900, "height": 40 },
+              "domClassList": ["c-message_kit__background"],
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "Nori",
+                  "focused": false,
+                  "frame": { "x": 260, "y": 100, "width": 120, "height": 16 },
+                  "domClassList": ["c-message__sender"],
+                  "children": []
+                },
+                {
+                  "role": "AXStaticText",
+                  "label": "09:41 AM",
+                  "focused": false,
+                  "frame": { "x": 700, "y": 100, "width": 100, "height": 16 },
+                  "domClassList": ["c-timestamp"],
+                  "children": []
+                },
+                {
+                  "role": "AXGroup",
+                  "focused": false,
+                  "frame": { "x": 260, "y": 118, "width": 600, "height": 16 },
+                  "domClassList": ["p-rich_text_section"],
+                  "children": [
+                    {
+                      "role": "AXStaticText",
+                      "value": "report queue cleared",
+                      "focused": false,
+                      "frame": { "x": 260, "y": 118, "width": 300, "height": 16 },
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 260, "y": 160, "width": 900, "height": 40 },
+          "domClassList": ["c-virtual_list__item"],
+          "children": [
+            {
+              "role": "AXGroup",
+              "focused": false,
+              "frame": { "x": 260, "y": 160, "width": 900, "height": 40 },
+              "domClassList": ["c-message_kit__background"],
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "Kai",
+                  "focused": false,
+                  "frame": { "x": 260, "y": 160, "width": 120, "height": 16 },
+                  "domClassList": ["c-message__sender"],
+                  "children": []
+                },
+                {
+                  "role": "AXStaticText",
+                  "label": "09:43 AM",
+                  "focused": false,
+                  "frame": { "x": 700, "y": 160, "width": 100, "height": 16 },
+                  "domClassList": ["c-timestamp"],
+                  "children": []
+                },
+                {
+                  "role": "AXGroup",
+                  "focused": false,
+                  "frame": { "x": 260, "y": 178, "width": 600, "height": 16 },
+                  "domClassList": ["p-rich_text_section"],
+                  "children": [
+                    {
+                      "role": "AXStaticText",
+                      "value": "handoff is ready",
+                      "focused": false,
+                      "frame": { "x": 260, "y": 178, "width": 300, "height": 16 },
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

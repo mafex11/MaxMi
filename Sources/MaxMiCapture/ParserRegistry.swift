@@ -78,10 +78,11 @@ public struct ParserRegistry: Sendable {
             NotionParser(),
             ObsidianParser(),
             GmailParser(),
+            SlackParser(),
             // lane-a end
         ]
         // lane-b begin
-        structured.append(contentsOf: [SlackParser(), DiscordParser(), MessagesParser(), WhatsAppParser()] as [any StructuredParser])
+        structured.append(contentsOf: [DiscordParser(), MessagesParser(), WhatsAppParser()] as [any StructuredParser])
         // lane-b end
         // lane-c begin
         structured.append(contentsOf: [FinderParser(), CalendarParser(), FantasticalParser(), RemindersParser()] as [any StructuredParser])
