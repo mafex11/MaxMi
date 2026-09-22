@@ -12,7 +12,8 @@ final class WebAppStructuredTests: XCTestCase {
         guard case .generic(let page) = try XCTUnwrap(result.capture.structured) else {
             return XCTFail("expected .generic")
         }
-        XCTAssertEqual(page.url, "https://app.slack.com/client/T123/C456/thread?utm_source=test")
+        XCTAssertEqual(page.url,
+                       "https://app.slack.com/fixture/workspace-alpha/channel-general/thread-placeholder?source=fixture")
         XCTAssertFalse(page.regions.isEmpty)
         XCTAssertEqual(result.capture.contentKind, .conversation)
         XCTAssertEqual(result.capture.content, ContentRenderer.render(.generic(page), style: .full))
@@ -55,7 +56,7 @@ final class WebAppStructuredTests: XCTestCase {
         let webArea = BrowserTabExtractor.primaryWebArea(
             in: try fixture("chrome-article"), windowTitle: "How SQLite Works", engine: .chromium)
         XCTAssertEqual(webArea?.role, "AXWebArea")
-        XCTAssertEqual(webArea?.url, "https://sqlite.org/arch.html")
+        XCTAssertEqual(webArea?.url, "https://docs.invalid/architecture")
     }
 
     func testPrimaryWebAreaIsNilWhenTheWindowExposesNone() throws {

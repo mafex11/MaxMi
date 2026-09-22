@@ -389,7 +389,7 @@ final class GmailParserTests: XCTestCase {
     func testOffsetInboxFixtureMatchesItsGolden() throws {
         assertGolden(try XCTUnwrap(GmailParser().parse(
             try fixture("gmail-offset-inbox"),
-            context: context(nil, url: "https://mail.google.com/mail/u/0/#inbox"))),
+            context: context(nil, url: "https://mail.google.com/fixture/inbox-alpha"))),
                      matches: "gmail-offset-inbox-golden")
     }
 

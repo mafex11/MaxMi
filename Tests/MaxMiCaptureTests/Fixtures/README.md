@@ -5,18 +5,18 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | Fixture | Source evidence | Expected route |
 |---|---|---|
 | `cursor-editor.json` | Cursor 3.11.19, live-verified 2026-07-14; editor exposed as `AXTextArea` | `GenericAXParser`, document/rollingText |
-| `chromium-gmail-thread.json` | Sanitized Chromium Gmail thread shape | email web profile |
-| `gecko-slack-chat.json` | Sanitized Gecko Slack message-row shape | sender/message boundaries |
+| `chromium-gmail-thread.json` | Sanitized Chromium Gmail thread shape at an invented fixture route | email web profile |
+| `gecko-slack-chat.json` | Sanitized Gecko Slack message-row shape at an invented fixture route | sender/message boundaries |
 | `whatsapp-conversation.json` | Sanitized native WhatsApp split-pane shape | conversation identity and message rows |
 | `teams-native-no-transcript.json` | Hand-authored native Teams sidebar/search surface with a loose main-pane row | `TeamsParser` generic fall-through without a transcript anchor |
 | `teams-native-transcript.json` | Hand-authored native Teams transcript with sidebar/search chrome and a loose external row | `TeamsParser` scans only its message-list anchor |
 | `calendar-event.json` | Sanitized native event-detail shape | event title/time/location/calendar |
 | `reminder-task.json` | Sanitized reminder-detail shape | task status/list/due date |
 | `pages-document.json` | Sanitized word-processing editor shape | stable document identity and rolling text |
-| `chrome-article.json` | Chromium article shape | `BrowserTabExtractor` |
+| `chrome-article.json` | Chromium article shape at an invented `.invalid` URL | `BrowserTabExtractor` |
 | `safari-domain-only.json` | Safari address fallback shape | `BrowserTabExtractor` |
 | `slack-window.json` | Native Slack message-row shape | `SlackParser` |
-| `zen-meet.json` | Gecko web-area shape | blocked meeting URL |
+| `zen-meet.json` | Gecko web-area shape at an invented `.invalid` URL | blocked meeting URL |
 | `ax-attributes.json` | Hand-authored attribute coverage shape | `AXNode` decoding of subrole/headingLevel/selected/placeholder/selectedText/hidden |
 | `finder-offset-window.json` | Hand-authored Finder-shaped window at a nonzero screen origin, including a row whose name cell is an editable text field | `GenericPageExtractor` sidebar/main/toolbar regions, joined table rows, text-field name cells |
 | `web-table-with-columns.json` | Hand-authored web table that republishes its cells as `AXColumn`s | `GenericPageExtractor` emitting each cell once |
@@ -50,7 +50,7 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `obsidian-offset-preview-golden.json` | Expected `CapturedContent` for `obsidian-offset-preview.json` | golden comparison |
 | `gmail-thread.json` | Hand-authored scrubbed Gmail thread at the origin | `GmailParser` conversation: expanded message, collapsed skip, composer draft |
 | `gmail-thread-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
-| `gmail-offset-inbox.json` | Hand-authored scrubbed Gmail inbox at a nonzero screen origin | `GmailParser` generic page of three-cell table rows |
+| `gmail-offset-inbox.json` | Hand-authored scrubbed Gmail inbox at a nonzero screen origin and invented fixture route | `GmailParser` generic page of three-cell table rows |
 | `gmail-offset-inbox-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
 | `slack-web-channel.json` | Hand-authored scrubbed Chrome `app.slack.com` channel shape | `SlackParser` web anchors, `#` header → `isGroup` true |
 | `slack-web-channel-golden.json` | Golden `CapturedContent` for the above | `SlackParser` |

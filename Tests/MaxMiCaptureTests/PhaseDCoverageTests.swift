@@ -169,14 +169,14 @@ final class PhaseDCoverageTests: XCTestCase {
                 FixturePair(fixture: "gmail-thread", golden: "gmail-thread-golden",
                             context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
                                              title: nil,
-                                             url: "https://mail.google.com/mail/u/0/#inbox/FMfcgzQbfWxyz")),
+                                             url: "https://mail.google.com/fixture/thread-alpha")),
                 FixturePair(fixture: "gmail-offset-inbox", golden: "gmail-offset-inbox-golden",
                             context: context(bundleID: "com.google.Chrome", name: "Google Chrome",
                                              title: nil,
-                                             url: "https://mail.google.com/mail/u/0/#inbox")),
+                                             url: "https://mail.google.com/fixture/inbox-alpha")),
             ],
             blankContext: context(bundleID: "com.google.Chrome", name: "Google Chrome", title: nil,
-                                  url: "https://mail.google.com/mail/u/0/#inbox")
+                                  url: "https://mail.google.com/fixture/inbox-alpha")
         ),
         "LinkedInMessagingParser": Coverage(
             parser: LinkedInMessagingParser(),

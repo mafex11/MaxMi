@@ -9,7 +9,8 @@ final class BrowserCapturePipelineTests: XCTestCase {
             window: try fixture("gecko-slack-chat"), windowTitle: "general - Workspace", browser: browser
         )
         XCTAssertEqual(result.capture.sourceApp, "Web")
-        XCTAssertEqual(result.capture.sourceKey, "https://app.slack.com/client/T123/C456")
+        XCTAssertEqual(result.capture.sourceKey,
+                       "https://app.slack.com/fixture/workspace-alpha/channel-general")
         XCTAssertEqual(result.capture.contentKind, .conversation)
         XCTAssertEqual(result.capture.accumulationPolicy, .appendItems)
         guard case .generic = try XCTUnwrap(result.capture.structured) else {
