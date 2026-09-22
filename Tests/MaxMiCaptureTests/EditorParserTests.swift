@@ -43,7 +43,8 @@ final class EditorParserTests: XCTestCase {
 
     func document(_ content: CapturedContent?) throws -> Document {
         guard case .document(let doc) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .document, got \(String(describing: content))")
+            XCTFail("expected .document, got \(String(describing: content))")
+            throw NSError(domain: "EditorParserTests", code: 1)
         }
         return doc
     }
