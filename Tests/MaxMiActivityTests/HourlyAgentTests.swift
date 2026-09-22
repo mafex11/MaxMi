@@ -2,9 +2,11 @@ import XCTest
 @testable import MaxMiActivity
 import MaxMiCore
 
+private let fixedHourlyAgentTimeZone = TimeZone(identifier: "Asia/Kolkata")!
+
 actor MockAgentRepo: AgentRepository {
     private var claimedPages: [AgentLeasedPage?] = []
-    private var completeCalls: [(runID: String, ops: [AgentOpDTO])] = []
+    private var completeCalls: [(runID: String, ops: [ValidatedAgentOp])] = []
     private var failCalls: [(runID: String, error: String)] = []
     private var currentPageIndex = 0
 
@@ -13,7 +15,7 @@ actor MockAgentRepo: AgentRepository {
         currentPageIndex = 0
     }
 
-    func getCompleteCalls() -> [(runID: String, ops: [AgentOpDTO])] {
+    func getCompleteCalls() -> [(runID: String, ops: [ValidatedAgentOp])] {
         completeCalls
     }
 
@@ -28,7 +30,7 @@ actor MockAgentRepo: AgentRepository {
         return page
     }
 
-    func complete(runID: String, ops: [AgentOpDTO]) async throws {
+    func complete(runID: String, ops: [ValidatedAgentOp]) async throws {
         completeCalls.append((runID, ops))
     }
 
@@ -134,7 +136,7 @@ actor FailingTimelineAgentRepository: AgentRepository {
         return nil
     }
 
-    func complete(runID: String, ops: [AgentOpDTO]) async throws {
+    func complete(runID: String, ops: [ValidatedAgentOp]) async throws {
         XCTFail("A failed input build must not complete a run.")
     }
 
@@ -175,15 +177,32 @@ final class HourlyAgentTests: XCTestCase {
         )
         await relay.setReturnedOps([createOp, resolveOp])
 
-        await HourlyAgent(repo: repo, relay: relay).runIfDue()
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
 
         let completeCalls = await repo.getCompleteCalls()
         XCTAssertEqual(completeCalls.count, 1)
         XCTAssertEqual(completeCalls.first?.runID, "run1")
         XCTAssertEqual(completeCalls.first?.ops.count, 2)
-        XCTAssertEqual(completeCalls.first?.ops[0].op, "create")
-        XCTAssertEqual(completeCalls.first?.ops[1].op, "resolve")
-        XCTAssertEqual(completeCalls.first?.ops[1].id, "item1")
+        guard let firstOp = completeCalls.first?.ops.first else {
+            return XCTFail("Expected the relay create operation to be validated.")
+        }
+        guard case .create(let kind, let title, _, let sourceRefs, .unchanged)
+            = firstOp else {
+            return XCTFail("Expected the relay create operation to be validated.")
+        }
+        XCTAssertEqual(kind, "todo")
+        XCTAssertEqual(title, "New task")
+        XCTAssertEqual(sourceRefs, ["v1"])
+        guard let lastOp = completeCalls.first?.ops.last,
+              case .resolve(let id, let evidence) = lastOp else {
+            return XCTFail("Expected the relay resolve operation to be validated.")
+        }
+        XCTAssertEqual(id, "item1")
+        XCTAssertEqual(evidence, "done")
 
         let failCalls = await repo.getFailCalls()
         XCTAssertTrue(failCalls.isEmpty)
@@ -194,7 +213,11 @@ final class HourlyAgentTests: XCTestCase {
         let relay = MockAgentRelay()
         await repo.setPages([nil])
 
-        await HourlyAgent(repo: repo, relay: relay).runIfDue()
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
 
         let completeCalls = await repo.getCompleteCalls()
         let failCalls = await repo.getFailCalls()
@@ -206,7 +229,11 @@ final class HourlyAgentTests: XCTestCase {
         let repo = FailingTimelineAgentRepository()
         let relay = MockAgentRelay()
 
-        await HourlyAgent(repo: repo, relay: relay).runIfDue()
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
 
         let failCalls = await repo.getFailCalls()
         let reviewCalls = await relay.getReviewCalls()
@@ -221,7 +248,11 @@ final class HourlyAgentTests: XCTestCase {
         await repo.setPages([leasedPage(runID: "run2", versions: [reviewVersion(versionID: "v3")])])
         await relay.setShouldThrow(true)
 
-        await HourlyAgent(repo: repo, relay: relay).runIfDue()
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
 
         let completeCalls = await repo.getCompleteCalls()
         let failCalls = await repo.getFailCalls()
@@ -239,7 +270,8 @@ final class HourlyAgentTests: XCTestCase {
         await HourlyAgent(
             repo: repo,
             relay: RenewalAwareFailingRelay(probe: probe),
-            renewalSleep: { nanoseconds in try await probe.sleep(nanoseconds) }
+            renewalSleep: { nanoseconds in try await probe.sleep(nanoseconds) },
+            timeZone: fixedHourlyAgentTimeZone
         ).runIfDue()
 
         await probe.waitForCancellation()
@@ -258,7 +290,11 @@ final class HourlyAgentTests: XCTestCase {
         await repo.setPages(pages + [nil])
         await relay.setReturnedOps([])
 
-        await HourlyAgent(repo: repo, relay: relay).runIfDue()
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
 
         let completeCalls = await repo.getCompleteCalls()
         XCTAssertEqual(completeCalls.map(\.runID), ["run1", "run2", "run3"])
@@ -273,12 +309,100 @@ final class HourlyAgentTests: XCTestCase {
         await repo.setPages(pages)
         await relay.setReturnedOps([])
 
-        await HourlyAgent(repo: repo, relay: relay, maxPagesPerTick: 4).runIfDue()
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            maxPagesPerTick: 4,
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
 
         let completeCalls = await repo.getCompleteCalls()
         XCTAssertEqual(completeCalls.count, 4)
         XCTAssertEqual(completeCalls.first?.runID, "run1")
         XCTAssertEqual(completeCalls.last?.runID, "run4")
+    }
+
+    func testValidRemindAtReachesRepositoryAsAcceptedReminder() async {
+        let repo = ReminderCapturingAgentRepository()
+        let relay = ReminderCapturingAgentRelay(ops: [
+            AgentOpDTO(
+                op: "create",
+                id: nil,
+                kind: "todo",
+                title: "Send report",
+                details: nil,
+                evidence: nil,
+                sourceRefs: ["v1"],
+                remindAt: "2026-09-22T12:30:00Z"
+            ),
+        ])
+        await repo.setPage(leasedPage(
+            runID: "reminder-run",
+            versions: [reviewVersion(versionID: "v1")]
+        ))
+
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            clock: { 1_790_000_000_000 },
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
+
+        let completed = await repo.completedOps()
+        guard let firstOp = completed.first?.first,
+              case .create(_, _, _, _, .set(let remindAtMs)) = firstOp else {
+            return XCTFail("Expected a create operation with an accepted reminder.")
+        }
+        XCTAssertEqual(remindAtMs, 1_790_080_200_000)
+    }
+
+    func testInvalidRemindAtDropsOnlyReminderAndKeepsCreateOperation() async {
+        let repo = ReminderCapturingAgentRepository()
+        let relay = ReminderCapturingAgentRelay(ops: [
+            AgentOpDTO(
+                op: "create",
+                id: nil,
+                kind: "todo",
+                title: "Keep the task",
+                details: "The date text is malformed.",
+                evidence: nil,
+                sourceRefs: ["v1"],
+                remindAt: "not-a-date"
+            ),
+        ])
+        await repo.setPage(leasedPage(
+            runID: "invalid-reminder-run",
+            versions: [reviewVersion(versionID: "v1")]
+        ))
+
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            clock: { 1_790_000_000_000 },
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
+
+        let completed = await repo.completedOps()
+        guard let firstOp = completed.first?.first else {
+            return XCTFail("Expected the invalid reminder to leave the create operation intact.")
+        }
+        guard case .create(let kind, let title, let details, let sourceRefs, let reminder)
+            = firstOp else {
+            return XCTFail("Expected the invalid reminder to leave the create operation intact.")
+        }
+        XCTAssertEqual(kind, "todo")
+        XCTAssertEqual(title, "Keep the task")
+        XCTAssertEqual(details, "The date text is malformed.")
+        XCTAssertEqual(sourceRefs, ["v1"])
+        XCTAssertEqual(reminder, .unchanged)
+    }
+
+    func testMalformedReminderOnlyUpdateDropsOnlyReminderAndCompletesRun() async {
+        await assertInvalidReminderOnlyUpdateCompletes(rawReminder: "tomorrow after standup")
+    }
+
+    func testOutOfWindowReminderOnlyUpdateDropsOnlyReminderAndCompletesRun() async {
+        await assertInvalidReminderOnlyUpdateCompletes(rawReminder: "2026-09-25T12:00:00Z")
     }
 
     func testBudgetDropsSmallestDeltaFirstButRetainsTimelineFloorAndOpenItems() {
@@ -465,13 +589,13 @@ final class HourlyAgentTests: XCTestCase {
         XCTAssertEqual(input.timelineText.count, HourlyReviewBudget.timelineFloor)
     }
 
-    func testHourlyPromptContainsVersionsTimelineAndNoReminderSlots() {
+    func testHourlyPromptContainsVersionsTimelineAndReminderInstruction() {
         let prompt = AgentPrompts.hourlyReview(input: reviewInput())
         XCTAssertTrue(prompt.contains("Versions in this window"))
         XCTAssertTrue(prompt.contains("Timeline"))
         XCTAssertTrue(prompt.contains("Open action items"))
         XCTAssertTrue(prompt.contains("version IDs"))
-        XCTAssertFalse(prompt.lowercased().contains("remind_at"))
+        XCTAssertTrue(prompt.lowercased().contains("remind_at"))
         XCTAssertFalse(prompt.lowercased().contains("slot legend"))
     }
 
@@ -621,5 +745,97 @@ final class HourlyAgentTests: XCTestCase {
             deltaSummary: deltaSummary,
             deltaChars: deltaChars
         )
+    }
+
+    private func assertInvalidReminderOnlyUpdateCompletes(rawReminder: String) async {
+        let repo = ReminderCapturingAgentRepository()
+        let relay = ReminderCapturingAgentRelay(ops: [
+            AgentOpDTO(
+                op: "update",
+                id: "open-item",
+                kind: nil,
+                title: nil,
+                details: nil,
+                evidence: nil,
+                sourceRefs: nil,
+                remindAt: rawReminder
+            ),
+        ])
+        await repo.setPage(leasedPage(runID: "invalid-reminder-update", versions: []))
+
+        await HourlyAgent(
+            repo: repo,
+            relay: relay,
+            clock: { 1_790_000_000_000 },
+            timeZone: fixedHourlyAgentTimeZone
+        ).runIfDue()
+
+        let completed = await repo.completedOps()
+        guard let firstOp = completed.first?.first else {
+            return XCTFail("Expected the invalid reminder-only update to complete.")
+        }
+        guard case .update(let id, let title, let details, let reminder)
+            = firstOp else {
+            return XCTFail("Expected the invalid reminder-only update to complete.")
+        }
+        XCTAssertEqual(id, "open-item")
+        XCTAssertNil(title)
+        XCTAssertNil(details)
+        XCTAssertEqual(reminder, .unchanged)
+        let failedRunIDs = await repo.failedRunIDs()
+        XCTAssertEqual(failedRunIDs, [])
+    }
+}
+
+private actor ReminderCapturingAgentRepository: AgentRepository {
+    private var page: AgentLeasedPage?
+    private var didClaim = false
+    private var completed: [[ValidatedAgentOp]] = []
+    private var failed: [String] = []
+
+    func setPage(_ page: AgentLeasedPage) {
+        self.page = page
+        didClaim = false
+    }
+
+    func claimNextPage() async -> AgentLeasedPage? {
+        guard !didClaim else { return nil }
+        didClaim = true
+        return page
+    }
+
+    func complete(runID: String, ops: [ValidatedAgentOp]) async throws {
+        _ = runID
+        completed.append(ops)
+    }
+
+    func fail(runID: String, error: String) async {
+        _ = error
+        failed.append(runID)
+    }
+
+    func renew(runID: String) async {
+        _ = runID
+    }
+
+    func completedOps() -> [[ValidatedAgentOp]] {
+        completed
+    }
+
+    func failedRunIDs() -> [String] {
+        failed
+    }
+}
+
+private actor ReminderCapturingAgentRelay: AgentGenerationRelay {
+    private let ops: [AgentOpDTO]
+
+    init(ops: [AgentOpDTO]) {
+        self.ops = ops
+    }
+
+    func reviewActivity(_ input: AgentReviewInput) async throws -> [AgentOpDTO] {
+        _ = input
+        return ops
     }
 }

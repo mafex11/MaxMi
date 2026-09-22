@@ -29,7 +29,13 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(page.versions.first?.compactContent, "Implement raw embeddings")
         _ = try store.completeAgentRun(
             runID: page.runID,
-            ops: [.create(kind: "todo", title: "Review embedding", details: nil, sourceRefs: [versionID])],
+            ops: [.create(
+                kind: "todo",
+                title: "Review embedding",
+                details: nil,
+                sourceRefs: [versionID],
+                reminder: .unchanged
+            )],
             nowMs: t0 + 2
         )
         XCTAssertEqual(try store.actionItems(status: "open", limit: 1).first?.sourceRefs, [versionID])
@@ -47,7 +53,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Keep only known refs",
                 details: nil,
-                sourceRefs: [versionID, "unknown-version-id"]
+                sourceRefs: [versionID, "unknown-version-id"],
+                reminder: .unchanged
             )],
             nowMs: t0 + 2
         )
@@ -100,7 +107,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Reply",
                 details: "Send the update",
-                sourceRefs: page.versions.map(\.versionID)
+                sourceRefs: page.versions.map(\.versionID),
+                reminder: .unchanged
             )],
             nowMs: t0
         )
@@ -119,7 +127,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Reply",
                 details: nil,
-                sourceRefs: page.versions.map(\.versionID)
+                sourceRefs: page.versions.map(\.versionID),
+                reminder: .unchanged
             )],
             nowMs: t0 + 1
         )
@@ -149,7 +158,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Task",
                 details: nil,
-                sourceRefs: firstPage.versions.map(\.versionID)
+                sourceRefs: firstPage.versions.map(\.versionID),
+                reminder: .unchanged
             )],
             nowMs: t0
         )
@@ -183,7 +193,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Task",
                 details: nil,
-                sourceRefs: ["invalid-version-id-1", "invalid-version-id-2"]
+                sourceRefs: ["invalid-version-id-1", "invalid-version-id-2"],
+                reminder: .unchanged
             )],
             nowMs: t0
         )
@@ -255,12 +266,64 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Do not retain the newly local source",
                 details: nil,
-                sourceRefs: [versionID]
+                sourceRefs: [versionID],
+                reminder: .unchanged
             )],
             nowMs: t0 + 3
         )
 
         XCTAssertEqual(try store.actionItems(status: "open", limit: 1).first?.sourceRefs, [])
+    }
+
+    func testAgentCreateAndUpdateApplyAcceptedReminderUsingStoreSetReminderPath() throws {
+        let versionID = try seedVersion(
+            sourceKey: "cursor:reminder",
+            content: "Deadline is today at 15:00."
+        )
+        let page = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50,
+            leaseMs: 60_000,
+            nowMs: t0
+        ))
+
+        _ = try store.completeAgentRun(
+            runID: page.runID,
+            ops: [
+                .create(
+                    kind: "todo",
+                    title: "Send draft",
+                    details: nil,
+                    sourceRefs: [versionID],
+                    reminder: .set(t0 + 3_600_000)
+                ),
+            ],
+            nowMs: t0
+        )
+        let itemID = try XCTUnwrap(try store.actionItems(status: "open", limit: 1).first?.id)
+
+        try seedVersions(1)
+        let updatePage = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50,
+            leaseMs: 60_000,
+            nowMs: t0 + 1
+        ))
+        _ = try store.completeAgentRun(
+            runID: updatePage.runID,
+            ops: [
+                .update(
+                    id: itemID,
+                    title: nil,
+                    details: nil,
+                    reminder: .set(t0 + 7_200_000)
+                ),
+            ],
+            nowMs: t0 + 1
+        )
+
+        XCTAssertEqual(
+            try store.actionItems(status: "open", limit: 1).first?.remindAtMs,
+            t0 + 7_200_000
+        )
     }
 
     func testDueRemindersIncludesOnlyDueUnremindedItemsInsideTwentyFourHourWindow() throws {

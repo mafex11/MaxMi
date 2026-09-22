@@ -313,7 +313,11 @@ final class AppWiring {
         // Initialize agent scheduler
         let agentRepo = StoreAgentRepository(store: store)
         let agentRelay = GeminiAgentRelay(geminiClient: relay, modelID: config.extractModel)
-        let hourlyAgent = HourlyAgent(repo: agentRepo, relay: agentRelay)
+        let hourlyAgent = HourlyAgent(
+            repo: agentRepo,
+            relay: agentRelay,
+            timeZone: checkinTimeZone
+        )
         agentScheduler = AgentScheduler(agent: hourlyAgent)
 
         // Initialize activity UI

@@ -136,8 +136,23 @@ public struct AgentOpDTO: Sendable, Codable {
     public let details: String?
     public let evidence: String?
     public let sourceRefs: [String]?
+    public let remindAt: String?
 
-    public init(op: String, id: String?, kind: String?, title: String?, details: String?, evidence: String?, sourceRefs: [String]?) {
+    private enum CodingKeys: String, CodingKey {
+        case op, id, kind, title, details, evidence, sourceRefs
+        case remindAt = "remind_at"
+    }
+
+    public init(
+        op: String,
+        id: String?,
+        kind: String?,
+        title: String?,
+        details: String?,
+        evidence: String?,
+        sourceRefs: [String]?,
+        remindAt: String? = nil
+    ) {
         self.op = op
         self.id = id
         self.kind = kind
@@ -145,12 +160,129 @@ public struct AgentOpDTO: Sendable, Codable {
         self.details = details
         self.evidence = evidence
         self.sourceRefs = sourceRefs
+        self.remindAt = remindAt
+    }
+}
+
+public enum ReminderChange: Sendable, Equatable {
+    case unchanged
+    case set(EpochMs)
+}
+
+public enum ValidatedAgentOp: Sendable {
+    case create(
+        kind: String,
+        title: String,
+        details: String?,
+        sourceRefs: [String],
+        reminder: ReminderChange = .unchanged
+    )
+    case update(
+        id: String,
+        title: String?,
+        details: String?,
+        reminder: ReminderChange = .unchanged
+    )
+    case resolve(id: String, evidence: String)
+}
+
+public enum AgentOperationValidator {
+    public static func validateAndMap(
+        _ dtos: [AgentOpDTO],
+        nowMs: EpochMs,
+        timeZone: TimeZone
+    ) throws -> [ValidatedAgentOp] {
+        try dtos.map { dto in
+            let hasReminderField = dto.remindAt != nil
+            let reminder: ReminderChange
+            if let rawReminder = dto.remindAt,
+               let accepted = ReminderTimeValidator.accept(
+                   rawReminder,
+                   nowMs: nowMs,
+                   timeZone: timeZone
+               ) {
+                reminder = .set(accepted)
+            } else {
+                reminder = .unchanged
+            }
+
+            switch dto.op {
+            case "create":
+                guard let kind = dto.kind, !kind.isEmpty else {
+                    throw ValidationError.missingField("create op requires non-empty 'kind'")
+                }
+                guard let title = dto.title, !title.isEmpty else {
+                    throw ValidationError.missingField("create op requires non-empty 'title'")
+                }
+                guard title.count <= 500 else {
+                    throw ValidationError.fieldTooLong("title exceeds 500 chars")
+                }
+                let details = dto.details.flatMap { $0.isEmpty ? nil : $0 }
+                if let details, details.count > 2_000 {
+                    throw ValidationError.fieldTooLong("details exceeds 2000 chars")
+                }
+                return .create(
+                    kind: kind,
+                    title: title,
+                    details: details,
+                    sourceRefs: dto.sourceRefs ?? [],
+                    reminder: reminder
+                )
+
+            case "update":
+                guard let id = dto.id, !id.isEmpty else {
+                    throw ValidationError.missingField("update op requires non-empty 'id'")
+                }
+                let title = dto.title.flatMap { $0.isEmpty ? nil : $0 }
+                let details = dto.details.flatMap { $0.isEmpty ? nil : $0 }
+                if let title, title.count > 500 {
+                    throw ValidationError.fieldTooLong("title exceeds 500 chars")
+                }
+                if let details, details.count > 2_000 {
+                    throw ValidationError.fieldTooLong("details exceeds 2000 chars")
+                }
+                guard title != nil || details != nil || hasReminderField else {
+                    throw ValidationError.missingField(
+                        "update op requires title, details, or remind_at"
+                    )
+                }
+                return .update(id: id, title: title, details: details, reminder: reminder)
+
+            case "resolve":
+                guard let id = dto.id, !id.isEmpty else {
+                    throw ValidationError.missingField("resolve op requires non-empty 'id'")
+                }
+                guard let evidence = dto.evidence, !evidence.isEmpty else {
+                    throw ValidationError.missingField("resolve op requires non-empty 'evidence'")
+                }
+                guard evidence.count <= 2_000 else {
+                    throw ValidationError.fieldTooLong("evidence exceeds 2000 chars")
+                }
+                return .resolve(id: id, evidence: evidence)
+
+            default:
+                throw ValidationError.unknownOp("unknown op type: '\(dto.op)'")
+            }
+        }
+    }
+
+    public enum ValidationError: Error, LocalizedError {
+        case unknownOp(String)
+        case missingField(String)
+        case fieldTooLong(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .unknownOp(let message), .missingField(let message), .fieldTooLong(let message):
+                return message
+            }
+        }
     }
 }
 
 public protocol AgentRepository: Sendable {
     func claimNextPage() async -> AgentLeasedPage?
-    func complete(runID: String, ops: [AgentOpDTO]) async throws
+    func complete(runID: String, ops: [ValidatedAgentOp]) async throws
     func fail(runID: String, error: String) async
     func renew(runID: String) async
 }
@@ -164,6 +296,8 @@ public struct HourlyAgent: Sendable {
     private let relay: any AgentGenerationRelay
     private let maxPagesPerTick: Int
     private let renewalSleep: @Sendable (UInt64) async throws -> Void
+    private let clock: @Sendable () -> EpochMs
+    private let timeZone: TimeZone
 
     public init(
         repo: any AgentRepository,
@@ -171,12 +305,16 @@ public struct HourlyAgent: Sendable {
         maxPagesPerTick: Int = 4,
         renewalSleep: @escaping @Sendable (UInt64) async throws -> Void = { nanoseconds in
             try await Task.sleep(nanoseconds: nanoseconds)
-        }
+        },
+        clock: @escaping @Sendable () -> EpochMs = epochNowMs,
+        timeZone: TimeZone
     ) {
         self.repo = repo
         self.relay = relay
         self.maxPagesPerTick = maxPagesPerTick
         self.renewalSleep = renewalSleep
+        self.clock = clock
+        self.timeZone = timeZone
     }
 
     public static func boundedInput(
@@ -309,8 +447,13 @@ public struct HourlyAgent: Sendable {
                 }
                 defer { renewalTask.cancel() }
 
-                let ops = try await relay.reviewActivity(input)
-                try await repo.complete(runID: page.runID, ops: ops)
+                let rawOps = try await relay.reviewActivity(input)
+                let validatedOps = try AgentOperationValidator.validateAndMap(
+                    rawOps,
+                    nowMs: clock(),
+                    timeZone: timeZone
+                )
+                try await repo.complete(runID: page.runID, ops: validatedOps)
             } catch {
                 SafeLogger.shared.log(
                     .error,

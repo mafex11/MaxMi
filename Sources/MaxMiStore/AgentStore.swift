@@ -75,12 +75,6 @@ public struct AgentPage: Sendable {
     }
 }
 
-public enum AgentOp: Sendable {
-    case create(kind: String, title: String, details: String?, sourceRefs: [String])
-    case update(id: String, title: String?, details: String?)
-    case resolve(id: String, evidence: String)
-}
-
 public struct AgentRunResult: Sendable {
     public let newCount, resolvedCount, updatedCount: Int
 
@@ -166,7 +160,11 @@ extension Store {
         }
     }
 
-    public func completeAgentRun(runID: String, ops: [AgentOp], nowMs: EpochMs) throws -> AgentRunResult {
+    public func completeAgentRun(
+        runID: String,
+        ops: [ValidatedAgentOp],
+        nowMs: EpochMs
+    ) throws -> AgentRunResult {
         let privacy = try sourceCloudEligibility()
         return try db.dbQueue.write { d in
             guard let runRow = try Row.fetchOne(d, sql: """
@@ -214,7 +212,7 @@ extension Store {
 
             for (i, op) in ops.enumerated() {
                 switch op {
-                case .create(let kind, let title, let details, let sourceRefs):
+                case .create(let kind, let title, let details, let sourceRefs, let reminder):
                     let idemKey = "\(runID):\(i)"
                     let itemID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
                     let titleCipher = try cipher.encrypt(title)
@@ -237,6 +235,9 @@ extension Store {
                     }
 
                     if d.changesCount > 0 {
+                        if case .set(let remindAtMs) = reminder {
+                            try setReminder(d, id: itemID, remindAtMs: remindAtMs, nowMs: nowMs)
+                        }
                         newCount += 1
                         newIDs.append(itemID)
                         let eventID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
@@ -246,7 +247,7 @@ extension Store {
                             """, arguments: [eventID, itemID, "created", runID, nowMs])
                     }
 
-                case .update(let id, let title, let details):
+                case .update(let id, let title, let details, let reminder):
                     guard let itemRow = try Row.fetchOne(d, sql: """
                         SELECT status FROM agent_action_items WHERE id=?
                         """, arguments: [id]),
@@ -278,16 +279,19 @@ extension Store {
                             WHERE id=?
                             """, arguments: StatementArguments(args))
 
-                        if d.changesCount > 0 {
-                            updatedCount += 1
-                            updatedIDs.append(id)
-                            let eventID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
-                            try d.execute(sql: """
-                                INSERT INTO agent_action_item_events (id, item_id, event, run_id, at)
-                                VALUES (?,?,?,?,?)
-                                """, arguments: [eventID, id, "updated", runID, nowMs])
-                        }
                     }
+
+                    if case .set(let remindAtMs) = reminder {
+                        try setReminder(d, id: id, remindAtMs: remindAtMs, nowMs: nowMs)
+                    }
+
+                    updatedCount += 1
+                    updatedIDs.append(id)
+                    let eventID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
+                    try d.execute(sql: """
+                        INSERT INTO agent_action_item_events (id, item_id, event, run_id, at)
+                        VALUES (?,?,?,?,?)
+                        """, arguments: [eventID, id, "updated", runID, nowMs])
 
                 case .resolve(let id, let evidence):
                     guard let itemRow = try Row.fetchOne(d, sql: """
