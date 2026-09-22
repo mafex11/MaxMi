@@ -51,6 +51,8 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 <!-- // lane-b begin -->
 | `slack-dom-messages.json` | Hand-authored Slack DOM-class message list with an invented composer draft | `SlackParser` DOM-class message and draft anchors |
 | `slack-dom-messages-golden.json` | Golden `CapturedContentEnvelope` for `slack-dom-messages.json` | `SlackParser` DOM-class conversation output |
+| `slack-offset-dom-messages.json` | Hand-authored Slack DOM-class message list at a nonzero origin | `SlackParser` DOM anchors and origin invariance |
+| `slack-offset-dom-messages-golden.json` | Golden `CapturedContentEnvelope` for `slack-offset-dom-messages.json` | `SlackParser` DOM-class conversation output |
 | `discord-messages.json` | Hand-authored Discord transcript list at the origin with grouped messages, reaction chrome, and a sidebar | `DiscordParser` tree-order sender attribution |
 | `discord-messages-golden.json` | Golden `CapturedContentEnvelope` for `discord-messages.json` | `DiscordParser` conversation output |
 | `discord-offset-messages.json` | Hand-authored Discord transcript list at a nonzero origin with the same semantic content | `DiscordParser` geometry-free output |

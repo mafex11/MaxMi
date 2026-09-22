@@ -139,6 +139,12 @@ final class SlackStructuredTests: XCTestCase {
                      matches: "slack-dom-messages-golden")
     }
 
+    func testOffsetDOMFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(SlackParser().parse(try fixture("slack-offset-dom-messages"),
+                                                      context: context("#general - Acme - Slack"))),
+                     matches: "slack-offset-dom-messages-golden")
+    }
+
     func testBodyMatchingTheSenderIsNotDropped() throws {
         let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1_200, height: 800), children: [
             node("AXGroup", domClassList: ["c-message_list"], children: [
