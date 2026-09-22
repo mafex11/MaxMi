@@ -17,8 +17,10 @@ public struct NotesParser: SourceParser, StructuredParser {
     /// Notes exposes the editor as one text area with a stable identifier, which keeps the note
     /// list and folder sidebar out of the document.
     static let bodyIdentifier = "Note Body Text View"
+    /// Notes appends this exact suffix to a shared window title.
+    static let sharedTitleSuffix = " — Shared"
     /// Notes appends this to a collaborator line on a shared note.
-    static let sharedSuffix = "— Shared"
+    static let sharedHeaderSuffix = "— Shared"
 
     public init() {}
 
@@ -27,8 +29,9 @@ public struct NotesParser: SourceParser, StructuredParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
-        let structured = CaptureAccumulator.boundHard(unbounded, to: StructuredEntityExtraction.pageBudget)
+        let context = ParseContext(app: app)
+        guard let structured = try parse(window, context: context),
+              let unbounded = unboundedDocument(window, context: context) else { return nil }
         let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "untitled"
         return ParsedCapture(sourceApp: "Notes", sourceKey: "notes:\(docSlug(title))",
                              sourceTitle: app.windowTitle,
@@ -49,11 +52,19 @@ public struct NotesParser: SourceParser, StructuredParser {
            !first.isEmpty {
             return first
         }
-        let fallback = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var fallback = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if fallback.hasSuffix(Self.sharedTitleSuffix) {
+            fallback.removeLast(Self.sharedTitleSuffix.count)
+        }
         return fallback.isEmpty ? "untitled" : fallback
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
+        return CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+    }
+
+    private func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
         guard let body = AXQuery.find("//*[identifier=\"\(Self.bodyIdentifier)\"]", in: snapshot),
               body.subrole != GenericPageExtractor.secureSubrole,
               let raw = body.value,
@@ -65,10 +76,10 @@ public struct NotesParser: SourceParser, StructuredParser {
 
         var author = Authorship.user
         if let index = lines.firstIndex(where: {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(Self.sharedSuffix)
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(Self.sharedHeaderSuffix)
         }) {
             let header = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = String(header.dropLast(Self.sharedSuffix.count))
+            let name = String(header.dropLast(Self.sharedHeaderSuffix.count))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             author = name.isEmpty ? .unknown : .other(name)
             lines.remove(at: index)

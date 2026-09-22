@@ -4,12 +4,15 @@ import MaxMiCore
 
 final class NotesStructuredTests: XCTestCase {
     func node(_ role: String, value: String? = nil, identifier: String? = nil,
+              subrole: String? = nil, selectedText: String? = nil,
               frame: CGRect, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: nil, frame: frame, focused: false,
-               children: children, identifier: identifier, label: nil)
+               children: children, identifier: identifier, label: nil, subrole: subrole,
+               selectedText: selectedText)
     }
 
-    func window(body: String?, origin: CGPoint = .zero) -> AXNode {
+    func window(body: String?, origin: CGPoint = .zero,
+                bodyChildren: [AXNode] = []) -> AXNode {
         let x = origin.x
         let y = origin.y
         var children = [
@@ -20,7 +23,8 @@ final class NotesStructuredTests: XCTestCase {
         ]
         if let body {
             children.append(node("AXTextArea", value: body, identifier: "Note Body Text View",
-                                 frame: CGRect(x: x + 300, y: y + 60, width: 700, height: 620)))
+                                 frame: CGRect(x: x + 300, y: y + 60, width: 700, height: 620),
+                                 children: bodyChildren))
         }
         return node("AXWindow", frame: CGRect(origin: origin,
                                              size: CGSize(width: 1100, height: 760)),
@@ -34,7 +38,8 @@ final class NotesStructuredTests: XCTestCase {
 
     func document(_ content: CapturedContent?) throws -> Document {
         guard case .document(let doc) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .document, got \(String(describing: content))")
+            XCTFail("expected .document, got \(String(describing: content))")
+            throw NSError(domain: "NotesStructuredTests", code: 1)
         }
         return doc
     }
@@ -63,6 +68,18 @@ final class NotesStructuredTests: XCTestCase {
         XCTAssertEqual(doc.blocks.map(\.text), ["milk"])
     }
 
+    func testOnlyTheExactTrailingSharedWindowTitleSuffixIsStripped() throws {
+        let doc = try document(NotesParser().parse(
+            window(body: "\nbody"),
+            context: context("Shared planning — Shared")))
+        XCTAssertEqual(doc.title, "Shared planning")
+
+        let midTitle = try document(NotesParser().parse(
+            window(body: "\nbody"),
+            context: context("Planning Shared — notes")))
+        XCTAssertEqual(midTitle.title, "Planning Shared — notes")
+    }
+
     func testTitleFallsBackToUntitledWithNeitherSource() throws {
         let doc = try document(NotesParser().parse(window(body: "\nmilk"), context: context(nil)))
         XCTAssertEqual(doc.title, "untitled")
@@ -87,6 +104,44 @@ final class NotesStructuredTests: XCTestCase {
         let doc = try document(NotesParser().parse(window(body: "Grocery list\nmilk"),
                                                   context: context("Grocery list")))
         XCTAssertFalse(doc.blocks.contains { $0.text == "All iCloud" })
+    }
+
+    func testSecureFieldsInsideTheBodyAreNeverCaptured() throws {
+        let secrets = ["role secret", "subrole secret", "selected secret"]
+        let content = try XCTUnwrap(NotesParser().parse(
+            window(body: "Private note\nvisible text", bodyChildren: [
+                node("AXSecureTextField", value: secrets[0],
+                     frame: CGRect(x: 320, y: 180, width: 300, height: 24)),
+                node("AXTextField", value: secrets[1],
+                     subrole: GenericPageExtractor.secureSubrole, selectedText: secrets[2],
+                     frame: CGRect(x: 320, y: 220, width: 300, height: 24)),
+            ]),
+            context: context("Private note")))
+        let doc = try document(content)
+        let rendered = ContentRenderer.render(content, style: .full)
+        for secret in secrets {
+            XCTAssertFalse(doc.title.contains(secret))
+            XCTAssertFalse(doc.blocks.contains { $0.text.contains(secret) })
+            XCTAssertFalse(rendered.contains(secret))
+        }
+    }
+
+    func testStructuredPathBoundsOversizeDocumentsAndV1MarksThemTruncated() throws {
+        let body = (["Oversized note"] + (0..<40).map {
+            "line \($0) " + String(repeating: "x", count: 1_000)
+        }).joined(separator: "\n")
+        let snapshot = window(body: body)
+        let v2 = try XCTUnwrap(NotesParser().parse(snapshot, context: context("Oversized note")))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(v2, style: .full).count,
+            StructuredEntityExtraction.pageBudget
+        )
+
+        let app = AppInfo(bundleID: ParserRegistry.notesBundleID, name: "Notes",
+                          windowTitle: "Oversized note")
+        let v1 = try XCTUnwrap(NotesParser().parse(window: snapshot, app: app))
+        XCTAssertTrue(v1.truncated)
+        XCTAssertEqual(v1.structured, v2)
     }
 
     func testWithoutTheBodyAnchorTheNoteIsNotHandled() throws {
