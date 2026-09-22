@@ -76,6 +76,14 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `whatsapp-group-senders-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-group-senders.json` | `WhatsAppParser` group conversation output |
 | `whatsapp-direct-senders.json` | Hand-authored WhatsApp 1:1 chat for invented Priya Vantar, with left and right bubble cells | `WhatsAppParser` bubble-side user attribution |
 | `whatsapp-direct-senders-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-direct-senders.json` | `WhatsAppParser` direct conversation output |
+| `linkedin-messaging.json` | Hand-authored scrubbed LinkedIn messaging thread | `LinkedInMessagingParser` groups, continuation items, `isUser` from the self name |
+| `linkedin-messaging-golden.json` | Golden `CapturedContent` for the above | `LinkedInMessagingParser` |
+| `linkedin-offset-messaging.json` | Hand-authored scrubbed LinkedIn messaging thread at a nonzero screen origin | `LinkedInMessagingParser` with a composer draft |
+| `linkedin-offset-messaging-golden.json` | Golden `CapturedContent` for the above | `LinkedInMessagingParser` |
+| `teams-web-chat.json` | Hand-authored scrubbed Teams web chat shape | `TeamsWebParser` class-anchored messages |
+| `teams-web-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
+| `teams-web-offset-chat.json` | Hand-authored scrubbed Teams web chat shape at a nonzero screen origin | `TeamsWebParser` AXDescription fallback and composer draft |
+| `teams-web-offset-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
 <!-- // lane-b end -->
 <!-- lane-c begin -->
 | `finder-list.json` | Hand-authored scrubbed Finder list-view shape at the screen origin | `FinderParser` sidebar, listing, selection and toolbar regions |

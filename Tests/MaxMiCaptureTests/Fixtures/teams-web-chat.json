@@ -1,0 +1,93 @@
+{
+  "role": "AXWindow",
+  "title": "Chat | Microsoft Teams",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1500, "height": 900 },
+  "children": [
+    {
+      "role": "AXHeading",
+      "value": "Atlas planning",
+      "focused": false,
+      "frame": { "x": 400, "y": 40, "width": 400, "height": 24 },
+      "children": []
+    },
+    {
+      "role": "AXGroup",
+      "focused": false,
+      "frame": { "x": 400, "y": 100, "width": 700, "height": 50 },
+      "domClassList": ["fui-ChatMessage"],
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Mira Rowan",
+          "focused": false,
+          "frame": { "x": 400, "y": 100, "width": 180, "height": 16 },
+          "domClassList": ["message-author-name"],
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "09:08 AM",
+          "focused": false,
+          "frame": { "x": 700, "y": 100, "width": 100, "height": 16 },
+          "domClassList": ["message-timestamp"],
+          "children": []
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 400, "y": 120, "width": 700, "height": 20 },
+          "domClassList": ["fui-ChatMessage__body"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "The staging check passed.",
+              "focused": false,
+              "frame": { "x": 400, "y": 120, "width": 300, "height": 16 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXGroup",
+      "focused": false,
+      "frame": { "x": 400, "y": 180, "width": 700, "height": 50 },
+      "domClassList": ["fui-ChatMessage"],
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Noah Bell",
+          "focused": false,
+          "frame": { "x": 400, "y": 180, "width": 180, "height": 16 },
+          "domClassList": ["message-author-name"],
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "09:11 AM",
+          "focused": false,
+          "frame": { "x": 700, "y": 180, "width": 100, "height": 16 },
+          "domClassList": ["message-timestamp"],
+          "children": []
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 400, "y": 200, "width": 700, "height": 20 },
+          "domClassList": ["fui-ChatMessage__body"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "I will publish the notes.",
+              "focused": false,
+              "frame": { "x": 400, "y": 200, "width": 300, "height": 16 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
