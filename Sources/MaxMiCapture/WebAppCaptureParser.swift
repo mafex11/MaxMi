@@ -39,7 +39,8 @@ public enum WebAppCaptureParser {
         if host == "app.slack.com" || host.hasSuffix(".slack.com") { return .slack }
         if host == "discord.com" || host == "www.discord.com" { return .discord }
         if host == "web.whatsapp.com" { return .whatsapp }
-        if host == "teams.microsoft.com" || host == "teams.live.com" { return .teams }
+        if host == "teams.microsoft.com" || host == "teams.live.com"
+            || host == "teams.cloud.microsoft" { return .teams }
         if host == "outlook.office.com" || host == "outlook.live.com"
             || host == "outlook.office365.com" { return .outlook }
         if host == "linkedin.com" || host == "www.linkedin.com" { return .linkedin }

@@ -87,6 +87,7 @@ public struct ParserRegistry: Sendable {
             MessagesParser(),
             WhatsAppParser(),
             LinkedInMessagingParser(),
+            TeamsWebParser(),
         ] as [any StructuredParser])
         // lane-b end
         // lane-c begin

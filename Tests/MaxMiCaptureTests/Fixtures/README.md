@@ -76,6 +76,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `linkedin-messaging-golden.json` | Golden `CapturedContent` for the above | `LinkedInMessagingParser` |
 | `linkedin-offset-messaging.json` | Hand-authored scrubbed LinkedIn messaging thread at a nonzero screen origin | `LinkedInMessagingParser` with a composer draft |
 | `linkedin-offset-messaging-golden.json` | Golden `CapturedContent` for the above | `LinkedInMessagingParser` |
+| `teams-web-chat.json` | Hand-authored scrubbed Teams web chat shape | `TeamsWebParser` class-anchored messages |
+| `teams-web-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
+| `teams-web-offset-chat.json` | Hand-authored scrubbed Teams web chat shape at a nonzero screen origin | `TeamsWebParser` AXDescription fallback and composer draft |
+| `teams-web-offset-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
 <!-- // lane-b end -->
 <!-- lane-c begin -->
 | `finder-list.json` | Hand-authored scrubbed Finder list-view shape at the screen origin | `FinderParser` sidebar, listing, selection and toolbar regions |
