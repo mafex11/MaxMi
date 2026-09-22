@@ -312,6 +312,55 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertTrue(try store.actionItems(status: "open", limit: 1).isEmpty)
     }
 
+    func testClaimExcludesOpenItemWhoseOnlySourceBecomesLocalOnlyAfterCreation() throws {
+        let localOnlyVersion = try seedVersion(
+            sourceApp: "Localizable",
+            sourceKey: "https://localizable-open-item.example",
+            content: "This source later becomes local only"
+        )
+        let ordinaryVersion = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://ordinary-open-item.example",
+            content: "This source remains eligible"
+        )
+        let createPage = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50, leaseMs: 60_000, nowMs: t0 + 1
+        ))
+        _ = try store.completeAgentRun(
+            runID: createPage.runID,
+            ops: [
+                .create(
+                    kind: "todo",
+                    title: "Keep local open item",
+                    details: nil,
+                    sourceRefs: [localOnlyVersion],
+                    reminder: .unchanged
+                ),
+                .create(
+                    kind: "todo",
+                    title: "Ordinary open item",
+                    details: nil,
+                    sourceRefs: [ordinaryVersion],
+                    reminder: .unchanged
+                ),
+            ],
+            nowMs: t0 + 2
+        )
+
+        try store.setCloudProcessing("Localizable", allowed: false, nowMs: t0 + 3)
+        _ = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://next-agent-page.example",
+            content: "Start the next claimed agent page"
+        )
+
+        let nextPage = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50, leaseMs: 60_000, nowMs: t0 + 4
+        ))
+
+        XCTAssertEqual(nextPage.openItems.map(\.title), ["Ordinary open item"])
+    }
+
     func testAgentUpdateSkipsItemWhoseOnlySourceBecomesIneligible() throws {
         let localVersionID = try seedVersion(
             sourceApp: "Local",

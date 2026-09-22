@@ -147,12 +147,12 @@ extension Store {
         let privacy = try sourceCloudEligibility()
 
         return try db.dbQueue.read { d in
-            let rows = try Row.fetchAll(d, sql: """
-                SELECT id, title_ciphertext, details_ciphertext, source_refs, detected_at
-                FROM agent_action_items
-                WHERE status='open'
-                ORDER BY detected_at DESC, id ASC
-                """)
+            let rows = try eligibleOpenActionItemRows(
+                d,
+                privacy: privacy,
+                ordering: .checkin,
+                limit: boundedLimit
+            )
 
             let refsByItemID = Dictionary(uniqueKeysWithValues: rows.map {
                 ($0["id"] as String, sourceReferences(from: $0))
@@ -163,9 +163,6 @@ extension Store {
             return rows.compactMap { row -> CheckinOpenItemRecord? in
                 let itemID: String = row["id"]
                 let refs = refsByItemID[itemID] ?? []
-                guard allowsCheckinActionItem(refs, sources: sources, privacy: privacy) else {
-                    return nil
-                }
                 let titleCiphertext: String = row["title_ciphertext"]
                 guard let title = try? cipher.decrypt(titleCiphertext) else { return nil }
                 let details = (row["details_ciphertext"] as String?).flatMap {
@@ -176,9 +173,20 @@ extension Store {
                     title: title,
                     details: details,
                     detectedAtMs: row["detected_at"],
-                    sourceApp: refs.compactMap { sources[$0]?.sourceApp }.first
+                    sourceApp: refs.lazy.compactMap { versionID in
+                        guard let source = sources[versionID],
+                              privacy.allows(
+                                  sourceApp: source.sourceApp,
+                                  threadID: source.threadID,
+                                  url: source.sourceKey
+                              )
+                        else {
+                            return nil
+                        }
+                        return source.sourceApp
+                    }.first
                 )
-            }.prefix(boundedLimit).map { $0 }
+            }
         }
     }
 

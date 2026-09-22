@@ -89,6 +89,23 @@ private enum AgentReviewPromptVersion {
     static let versions = "agent-review-v2-versions"
 }
 
+enum OpenActionItemOrdering {
+    case agentPage
+    case newestFirst
+    case checkin
+
+    var sql: String? {
+        switch self {
+        case .agentPage:
+            nil
+        case .newestFirst:
+            "detected_at DESC, id DESC"
+        case .checkin:
+            "detected_at DESC, id ASC"
+        }
+    }
+}
+
 extension Store {
     public func claimNextAgentRun(
         maxVersions: Int,
@@ -140,11 +157,11 @@ extension Store {
                     last.committedAt, last.versionID, leaseExpires, nowMs, dayBucket,
                 ])
 
-            let openItemRows = try Row.fetchAll(d, sql: """
-                SELECT id, title_ciphertext, details_ciphertext, detected_at
-                FROM agent_action_items
-                WHERE status='open'
-                """)
+            let openItemRows = try eligibleOpenActionItemRows(
+                d,
+                privacy: privacy,
+                ordering: .agentPage
+            )
             let openItems = openItemRows.map {
                 ReviewOpenItem(
                     id: $0["id"],
@@ -674,19 +691,11 @@ extension Store {
     public func openActionItems(limit: Int) throws -> [ActionItem] {
         let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { database in
-            let eligibility = actionItemEligibility(privacy, itemAlias: "item")
-            let rows = try Row.fetchAll(
+            let rows = try eligibleOpenActionItemRows(
                 database,
-                sql: """
-                    SELECT id, kind, status, title_ciphertext, details_ciphertext, source_refs,
-                           detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
-                    FROM agent_action_items AS item
-                    WHERE status='open'
-                      AND (\(eligibility.condition))
-                    ORDER BY detected_at DESC, id DESC
-                    LIMIT ?
-                    """,
-                arguments: StatementArguments(eligibility.arguments + [max(0, limit)])
+                privacy: privacy,
+                ordering: .newestFirst,
+                limit: max(0, limit)
             )
             return rows.map(actionItem(from:))
         }
@@ -735,6 +744,34 @@ extension Store {
                 """,
             arguments: StatementArguments([id] + eligibility.arguments)
         ) != nil
+    }
+
+    func eligibleOpenActionItemRows(
+        _ database: Database,
+        privacy: SourceCloudEligibility,
+        ordering: OpenActionItemOrdering,
+        limit: Int? = nil
+    ) throws -> [Row] {
+        let eligibility = actionItemEligibility(privacy, itemAlias: "item")
+        let orderBy = ordering.sql.map { "ORDER BY \($0)" } ?? ""
+        let limitClause = limit.map { _ in "LIMIT ?" } ?? ""
+        var arguments = eligibility.arguments
+        if let limit {
+            arguments.append(max(0, limit))
+        }
+        return try Row.fetchAll(
+            database,
+            sql: """
+                SELECT id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                       detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
+                FROM agent_action_items AS item
+                WHERE status='open'
+                  AND (\(eligibility.condition))
+                \(orderBy)
+                \(limitClause)
+                """,
+            arguments: StatementArguments(arguments)
+        )
     }
 
     private func actionItemEligibility(

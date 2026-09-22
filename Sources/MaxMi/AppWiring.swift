@@ -384,7 +384,7 @@ final class AppWiring {
             load: { @Sendable in
                 do {
                     let nowMs = epochNowMs()
-                    let open = try activityStore.actionItems(status: "open", limit: 100)
+                    let open = try activityStore.openActionItems(limit: 100)
                     let resolved = try activityStore.actionItems(status: "resolved", limit: 50)
                     let dismissed = try activityStore.actionItems(status: "dismissed", limit: 50)
 
