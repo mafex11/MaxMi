@@ -41,6 +41,43 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(try store.actionItems(status: "open", limit: 1).first?.sourceRefs, [versionID])
     }
 
+    func testSourceAppsDerivesVersionSourceAppAndOmitsUnknownVersions() throws {
+        let editorVersionID = try seedVersion(
+            sourceApp: "Editor",
+            sourceKey: "editor:workspace",
+            content: "Draft the release note"
+        )
+        let mailVersionID = try seedVersion(
+            sourceApp: "Mail",
+            sourceKey: "mail:inbox",
+            content: "Customer deadline"
+        )
+
+        let sourceApps = try store.sourceApps(
+            forVersionIDs: [editorVersionID, mailVersionID, "missing-version"]
+        )
+
+        XCTAssertEqual(sourceApps[editorVersionID], "Editor")
+        XCTAssertEqual(sourceApps[mailVersionID], "Mail")
+        XCTAssertNil(sourceApps["missing-version"])
+        XCTAssertNil(["missing-version", editorVersionID].first.flatMap { sourceApps[$0] })
+    }
+
+    func testActionItemsExposeReminderFieldsForPanelAdapters() throws {
+        try insertActionItem(
+            id: "panel-item",
+            status: "open",
+            remindAtMs: t0 + 60_000,
+            remindedAtMs: nil
+        )
+
+        let item = try XCTUnwrap(try store.actionItems(status: "open", limit: 1).first)
+
+        XCTAssertEqual(item.id, "panel-item")
+        XCTAssertEqual(item.remindAtMs, t0 + 60_000)
+        XCTAssertNil(item.remindedAtMs)
+    }
+
     func testCompleteRejectsUnknownVersionSourceRefs() throws {
         let versionID = try seedVersion(sourceKey: "cursor:refs", content: "Review the source refs")
         let page = try XCTUnwrap(try store.claimNextAgentRun(

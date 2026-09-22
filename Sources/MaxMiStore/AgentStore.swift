@@ -625,6 +625,25 @@ extension Store {
         }
     }
 
+    public func sourceApps(forVersionIDs versionIDs: Set<String>) throws -> [String: String] {
+        guard !versionIDs.isEmpty else { return [:] }
+        return try db.dbQueue.read { database in
+            let rows = try Row.fetchAll(
+                database,
+                sql: """
+                    SELECT v.id AS version_id, t.source_app
+                    FROM versions v
+                    JOIN threads t ON t.id=v.thread_id
+                    WHERE v.id IN (\(Self.placeholders(versionIDs.count)))
+                    """,
+                arguments: StatementArguments(versionIDs.sorted())
+            )
+            return Dictionary(uniqueKeysWithValues: rows.map {
+                ($0["version_id"] as String, $0["source_app"] as String)
+            })
+        }
+    }
+
     private func actionItem(from row: Row) -> ActionItem {
         let sourceRefsJSON = row["source_refs"] as String?
         let sourceRefs = sourceRefsJSON.flatMap {
