@@ -345,24 +345,43 @@ final class TypingObserverTests: XCTestCase {
 
     // MARK: - Exit criterion 5
 
-    /// Spec 11 criterion 5, grep-asserted: typing must never come from an event tap.
-    func testNoEventTapAnywhereInSources() throws {
-        let root = URL(fileURLWithPath: #filePath)
+    func testNoEventTapOrKeystrokeCaptureOutsideOptionDoubleTapMonitor() throws {
+        let sourcesRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources")
-        let banned = ["CGEvent.tapCreate", "CGEventTapCreate", "addGlobalMonitorForEvents",
-                      "IOHIDManager"]
-        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+        let allowedMonitorFile = sourcesRoot
+            .appendingPathComponent("MaxMi/OptionDoubleTapMonitor.swift")
+            .standardizedFileURL
+        let files = FileManager.default.enumerator(at: sourcesRoot, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" } ?? []
-        XCTAssertFalse(files.isEmpty, "no Swift sources found under \(root.path)")
+        var globalMonitorFiles: [URL] = []
+        var localMonitorFiles: [URL] = []
+        let bannedEverywhere = [
+            ".keyDown", ".keyUp", "CGEvent.tapCreate", "CGEventTapCreate", "IOHIDManager",
+        ]
+
+        XCTAssertFalse(files.isEmpty, "no Swift sources found under \(sourcesRoot.path)")
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
-            for token in banned {
+            if text.contains("addGlobalMonitorForEvents") {
+                globalMonitorFiles.append(file.standardizedFileURL)
+            }
+            if text.contains("addLocalMonitorForEvents") {
+                localMonitorFiles.append(file.standardizedFileURL)
+            }
+            for token in bannedEverywhere {
                 XCTAssertFalse(text.contains(token), "\(token) found in \(file.lastPathComponent)")
             }
         }
+
+        XCTAssertEqual(globalMonitorFiles, [allowedMonitorFile])
+        XCTAssertEqual(localMonitorFiles, [allowedMonitorFile])
+        let allowedText = try String(contentsOf: allowedMonitorFile, encoding: .utf8)
+        XCTAssertEqual(allowedText.components(separatedBy: "addGlobalMonitorForEvents").count - 1, 1)
+        XCTAssertEqual(allowedText.components(separatedBy: "addLocalMonitorForEvents").count - 1, 1)
+        XCTAssertEqual(allowedText.components(separatedBy: "matching: [.flagsChanged]").count - 1, 2)
     }
 }

@@ -198,6 +198,9 @@ final class AppWiring {
     // Daily check-ins
     let dailyCheckinGenerator: DailyCheckinGenerator
     let checkinTrigger: CheckinTrigger
+    let reminderScheduler: ReminderScheduler
+    let todoPanelController: TodoPanelController
+    let optionDoubleTapMonitor: OptionDoubleTapMonitor
 
     // Agent scheduler
     let agentScheduler: AgentScheduler
@@ -319,6 +322,38 @@ final class AppWiring {
             timeZone: checkinTimeZone
         )
         agentScheduler = AgentScheduler(agent: hourlyAgent)
+
+        let todoPanelRepository = StoreTodoPanelRepository(
+            store: store,
+            timeZone: checkinTimeZone
+        )
+        let todoPanelViewModel = TodoPanelViewModel(
+            repository: todoPanelRepository,
+            now: epochNowMs
+        )
+        let todoPanelController = TodoPanelController(viewModel: todoPanelViewModel)
+        self.todoPanelController = todoPanelController
+
+        nonisolated(unsafe) let reminderStore = store
+        let notifier = UNUserNotificationCenterNotifier { [weak todoPanelController] in
+            todoPanelController?.show()
+        }
+        reminderScheduler = ReminderScheduler(
+            repository: StoreReminderRepository(store: store),
+            notifier: notifier,
+            isActivitySynthesisEnabled: {
+                do {
+                    return try reminderStore.activityConsent() == .granted
+                        && reminderStore.activityEnabled()
+                } catch {
+                    return false
+                }
+            },
+            clock: epochNowMs
+        )
+        optionDoubleTapMonitor = OptionDoubleTapMonitor { [weak todoPanelController] in
+            todoPanelController?.toggle()
+        }
 
         // Initialize activity UI
         // Store is internally serialized by GRDB; we safely capture it via nonisolated(unsafe)
@@ -1124,6 +1159,7 @@ final class AppWiring {
         installWorkspaceLifecycleObserversIfNeeded()
 
         guard PermissionGate.ensureAccessibility(menuBar: menuBar) else { return }  // re-checked by menu action
+        optionDoubleTapMonitor.start()
         guard self.observer == nil else { return }  // prevent double-start
         let observer = FocusObserver(
             recaptureIntervalForApp: { [registry] bid in
@@ -1165,8 +1201,11 @@ final class AppWiring {
                 guard let self, !self.paused else { return }
                 await self.pipeline.tick()
                 let checkinTrigger = self.checkinTrigger
+                let reminderScheduler = self.reminderScheduler
+                let nowMs = epochNowMs()
                 Task.detached {
-                    await checkinTrigger.tick(nowMs: epochNowMs())
+                    await checkinTrigger.tick(nowMs: nowMs)
+                    await reminderScheduler.tick(nowMs: nowMs)
                 }
                 // Close idle activity sessions (5 min gap)
                 _ = try? self.store.closeIdleSessions(idleGapMs: 5*60_000, nowMs: epochNowMs())
@@ -1406,6 +1445,8 @@ final class AppWiring {
         captureSummaryTimer = nil
         agentBackgroundScheduler?.invalidate()
         agentBackgroundScheduler = nil
+        optionDoubleTapMonitor.stop()
+        todoPanelController.shutdown()
         meetingPreparationTask?.cancel()
         meetingPreparationTask = nil
         observer?.stop()
