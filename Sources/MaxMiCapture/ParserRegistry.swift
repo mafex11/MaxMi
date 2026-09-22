@@ -65,7 +65,7 @@ public struct ParserRegistry: Sendable {
         // append to this ONE list; by the end of Phase D it holds the seventeen entries written
         // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
         // lane-b begin
-        let structured: [any StructuredParser] = [SlackParser(), DiscordParser()]
+        let structured: [any StructuredParser] = [SlackParser(), DiscordParser(), MessagesParser()]
         // lane-b end
         var byBundle: [String: any StructuredParser] = [:]
         var bundleClaims: [String: [any StructuredParser]] = [:]

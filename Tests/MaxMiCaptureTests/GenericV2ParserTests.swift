@@ -84,7 +84,7 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 
-    func testMessagesKeepsBubbleOrderWrappedInGenericBlocks() throws {
+    func testMessagesKeepsBubbleOrderAsATypedConversation() throws {
         let window = body([
             AXNode(role: "AXTextArea", value: "call me", title: nil, url: nil,
                    frame: CGRect(x: 300, y: 300, width: 400, height: 20), focused: false, children: []),
@@ -97,9 +97,14 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.sourceKey, "imessage:harnish")
         XCTAssertEqual(capture.contentKind, .conversation)
         XCTAssertEqual(capture.content, "hey are you free\ncall me")
-        XCTAssertEqual(try XCTUnwrap(capture.structured).kind, .generic)
-        // Same Task 9 bridge precondition as Discord.
-        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
+        guard case .conversation(let conversation) = try XCTUnwrap(capture.structured) else {
+            return XCTFail("expected .conversation")
+        }
+        XCTAssertEqual(conversation.channel, "Harnish")
+        XCTAssertEqual(conversation.messages.map(\.text), ["hey are you free", "call me"])
+        XCTAssertEqual(conversation.messages.map(\.sender), ["Harnish", "Harnish"])
+        XCTAssertEqual(conversation.messages.map(\.isUser), [false, false])
+        XCTAssertFalse(try XCTUnwrap(capture.structured).isLegacyShaped)
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 
