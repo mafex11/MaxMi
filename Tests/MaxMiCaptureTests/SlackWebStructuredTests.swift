@@ -210,7 +210,11 @@ final class SlackWebStructuredTests: XCTestCase {
                        .slack)
     }
 
-    func testAnEmptyComposerWithNoMessagesRefuses() throws {
+    func testAnUnrelatedHostNeverRoutesToSlackParser() {
+        XCTAssertFalse(ParserRegistry().structuredParser(forHost: "example.com") is SlackParser)
+    }
+
+    func testAppSlackWithAnEmptyComposerAndNoMessagesRefuses() throws {
         let parser = SlackParser()
         let composeOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
                                children: [
@@ -221,6 +225,22 @@ final class SlackWebStructuredTests: XCTestCase {
             XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "empty-compose"))
         }
         XCTAssertTrue(parser.refusesEmptyCompose(composeOnly, context: context("Acme - Slack")))
+    }
+
+    func testNativeSlackWithAnEmptyComposerAndMessagesReturnsAConversationWithoutRefusal() throws {
+        let native = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                          children: nativeWindow().children + [
+            node("AXTextArea", value: "   ", domClassList: ["ql-editor"],
+                 frame: CGRect(x: 260, y: 700, width: 900, height: 60)),
+        ])
+        let nativeContext = ParseContext(
+            app: AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
+                         windowTitle: "general - Acme - Slack")
+        )
+        let parser = SlackParser()
+
+        XCTAssertNotNil(try parser.parse(native, context: nativeContext))
+        XCTAssertFalse(parser.refusesEmptyCompose(native, context: nativeContext))
     }
 
     func testAMessageListWithNoMessagesIsNotHandledAndNotRefused() throws {

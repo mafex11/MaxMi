@@ -241,7 +241,8 @@ extension SlackParser: StructuredParser {
     /// anchored message. `parse` turns that into `ParserRefusal`; every other empty read stays
     /// nil and degrades to generic v2.
     func refusesEmptyCompose(_ snapshot: AXNode, context: ParseContext) -> Bool {
-        guard let composer = AXQuery.find("//*[domClass*=\"\(Self.composerClass)\"]", in: snapshot)
+        guard ParserRegistry.host(fromURL: context.url) == "app.slack.com",
+              let composer = AXQuery.find("//*[domClass*=\"\(Self.composerClass)\"]", in: snapshot)
         else { return false }
         return Self.draftMessage(in: snapshot) == nil
             && Self.domMessages(in: snapshot).isEmpty
