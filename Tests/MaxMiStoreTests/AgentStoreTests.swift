@@ -346,9 +346,28 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(expired?.remindedAtMs, nowMs)
     }
 
+    func testActionItemsWithSameDetectedTimeUseIDAsDescendingTiebreaker() throws {
+        try insertActionItem(id: "a-item", status: "open", remindAtMs: nil, remindedAtMs: nil)
+        try insertActionItem(id: "b-item", status: "open", remindAtMs: nil, remindedAtMs: nil)
+
+        let items = try store.actionItems(status: "open", limit: 2)
+
+        XCTAssertEqual(items.map(\.id), ["b-item", "a-item"])
+    }
+
     func testResolveAndDismissClearReminderColumns() throws {
-        try insertActionItem(id: "resolve-me", status: "open", remindAtMs: t0 + 1_000, remindedAtMs: nil)
-        try insertActionItem(id: "dismiss-me", status: "open", remindAtMs: t0 + 2_000, remindedAtMs: nil)
+        try insertActionItem(
+            id: "resolve-me",
+            status: "open",
+            remindAtMs: t0 + 1_000,
+            remindedAtMs: t0 + 500
+        )
+        try insertActionItem(
+            id: "dismiss-me",
+            status: "open",
+            remindAtMs: t0 + 2_000,
+            remindedAtMs: t0 + 500
+        )
 
         try store.resolveActionItem("resolve-me", nowMs: t0 + 3_000)
         try store.dismissActionItem("dismiss-me", nowMs: t0 + 3_000)
@@ -361,6 +380,14 @@ final class AgentStoreTests: XCTestCase {
             XCTAssertNil(try Int64.fetchOne(
                 database,
                 sql: "SELECT remind_at_ms FROM agent_action_items WHERE id='dismiss-me'"
+            ))
+            XCTAssertNil(try Int64.fetchOne(
+                database,
+                sql: "SELECT reminded_at_ms FROM agent_action_items WHERE id='resolve-me'"
+            ))
+            XCTAssertNil(try Int64.fetchOne(
+                database,
+                sql: "SELECT reminded_at_ms FROM agent_action_items WHERE id='dismiss-me'"
             ))
         }
     }

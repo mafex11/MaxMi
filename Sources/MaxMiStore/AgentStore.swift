@@ -617,7 +617,7 @@ extension Store {
                        detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
                 FROM agent_action_items
                 WHERE status=?
-                ORDER BY detected_at DESC
+                ORDER BY detected_at DESC, id DESC
                 LIMIT ?
                 """, arguments: [status, limit])
 
