@@ -27,6 +27,9 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `finder-list-golden.json` | Golden `CapturedContentEnvelope` for `finder-list.json` | `FinderParser` |
 | `finder-offset-copy.json` | Hand-authored scrubbed Finder copy-progress shape at a nonzero screen origin | `FinderParser` sidebar, listing, selection and toolbar regions |
 | `finder-offset-copy-golden.json` | Golden `CapturedContentEnvelope` for `finder-offset-copy.json` | `FinderParser` |
+| `calendar-event-golden.json` | Golden `CapturedContentEnvelope` for `calendar-event.json` | `CalendarParser` |
+| `calendar-offset-event.json` | Hand-authored scrubbed Calendar event-detail popover at a nonzero screen origin | `CalendarParser` event detail, sidebar filtering and conference metadata |
+| `calendar-offset-event-golden.json` | Golden `CapturedContentEnvelope` for `calendar-offset-event.json` | `CalendarParser` |
 <!-- lane-c end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the

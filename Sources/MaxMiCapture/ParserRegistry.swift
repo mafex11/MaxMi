@@ -70,6 +70,8 @@ public struct ParserRegistry: Sendable {
         let structured: [any StructuredParser] = [
             // lane-c begin
             FinderParser(),
+            CalendarParser(),
+            FantasticalParser(),
             // lane-c end
         ]
         var byBundle: [String: any StructuredParser] = [:]

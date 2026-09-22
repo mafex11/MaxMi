@@ -4,20 +4,105 @@ import MaxMiCore
 public struct CalendarParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        StructuredEntityExtraction.calendar(window: window, app: app, sourceApp: "Calendar", prefix: "calendar")
+        guard let unbounded = try parse(window, context: ParseContext(app: app)),
+              case .calendar(let events) = unbounded,
+              let event = events.first else { return nil }
+        let content = CaptureAccumulator.boundHard(
+            unbounded,
+            to: Self.config.offscreenPolicy.maxCharacters
+        )
+        let identity = [event.title, event.dateString, event.organizer ?? ""].joined(separator: "|")
+        return ParsedCapture(
+            sourceApp: "Calendar",
+            sourceKey: "calendar:event:\(String(ContentHash.sha256Hex(identity).prefix(24)))",
+            sourceTitle: event.title,
+            content: ContentRenderer.render(content, style: .full),
+            contentKind: .calendar,
+            parserVersion: 2,
+            accumulationPolicy: .replace,
+            offscreenPolicy: Self.config.offscreenPolicy,
+            structured: content,
+            truncated: content != unbounded
+        )
     }
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        StructuredEntityExtraction.calendarContent(window: window, app: app, sourceApp: "Calendar")?.content
+        try parse(window, context: ParseContext(app: app))
     }
 }
 
 public struct FantasticalParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        StructuredEntityExtraction.calendar(window: window, app: app, sourceApp: "Fantastical", prefix: "fantastical")
+        guard let unbounded = try parse(window, context: ParseContext(app: app)),
+              case .calendar(let events) = unbounded,
+              let event = events.first else { return nil }
+        let content = CaptureAccumulator.boundHard(
+            unbounded,
+            to: Self.config.offscreenPolicy.maxCharacters
+        )
+        let identity = [event.title, event.dateString, event.organizer ?? ""].joined(separator: "|")
+        return ParsedCapture(
+            sourceApp: "Fantastical",
+            sourceKey: "fantastical:event:\(String(ContentHash.sha256Hex(identity).prefix(24)))",
+            sourceTitle: event.title,
+            content: ContentRenderer.render(content, style: .full),
+            contentKind: .calendar,
+            parserVersion: 2,
+            accumulationPolicy: .replace,
+            offscreenPolicy: Self.config.offscreenPolicy,
+            structured: content,
+            truncated: content != unbounded
+        )
     }
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        StructuredEntityExtraction.calendarContent(window: window, app: app, sourceApp: "Fantastical")?.content
+        try parse(window, context: ParseContext(app: app))
+    }
+}
+
+/// `.calendar` events for a window. Phase A already retyped this anchor — `calendarContent`
+/// resolves the detail root, scores the fields and builds the `CalendarEvent` — so this is a thin
+/// adapter that lets a `StructuredParser` reach it, NOT a second extractor (spec §7c, ruling
+/// F15's no-duplicate-implementations rule).
+enum CalendarStructuredExtraction {
+    static func events(in window: AXNode, app: AppInfo, sourceApp: String) -> [CalendarEvent] {
+        guard let extracted = StructuredEntityExtraction.calendarContent(
+                window: window, app: app, sourceApp: sourceApp),
+              case .calendar(let events) = extracted.content else { return [] }
+        return events
+    }
+}
+
+extension CalendarParser: StructuredParser {
+    public static let config = ParserConfig(
+        app: "Calendar",
+        bundleIDs: ParserRegistry.calendarBundleIDs,
+        offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
+    )
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        let events = CalendarStructuredExtraction.events(
+            in: snapshot,
+            app: context.app,
+            sourceApp: Self.config.app
+        )
+        return events.isEmpty ? nil : .calendar(events)
+    }
+}
+
+extension FantasticalParser: StructuredParser {
+    public static let config = ParserConfig(
+        app: "Fantastical",
+        bundleIDs: ParserRegistry.fantasticalBundleIDs,
+        offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
+    )
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        let events = CalendarStructuredExtraction.events(
+            in: snapshot,
+            app: context.app,
+            sourceApp: Self.config.app
+        )
+        return events.isEmpty ? nil : .calendar(events)
     }
 }
 
@@ -157,7 +242,8 @@ enum StructuredEntityExtraction {
         let organizer = firstValue(fields, metadataHints: ["organizer", "invitee", "calendar-name", "account"])
         let hasConference = fields.contains { field in
             let value = field.value.lowercased()
-            return value.contains("zoom.us") || value.contains("meet.google.com")
+            return field.metadata.contains("conference")
+                || value.contains("zoom.us") || value.contains("meet.google.com")
                 || value.contains("teams.microsoft.com") || value.contains("join with")
         }
         // Everything the four named fields did not claim becomes the detail body, exactly as
@@ -178,21 +264,6 @@ enum StructuredEntityExtraction {
         return Extracted(content: .calendar([event]),
                          sourceKey: "event:\(shortHash(identity))",
                          sourceTitle: title)
-    }
-
-    static func calendar(window: AXNode, app: AppInfo, sourceApp: String, prefix: String) -> ParsedCapture? {
-        guard let extracted = calendarContent(window: window, app: app, sourceApp: sourceApp) else { return nil }
-        return ParsedCapture(
-            sourceApp: sourceApp,
-            sourceKey: "\(prefix):\(extracted.sourceKey)",
-            sourceTitle: extracted.sourceTitle,
-            content: ContentRenderer.render(extracted.content, style: .full),
-            contentKind: .calendar,
-            parserVersion: 2,
-            accumulationPolicy: .replace,
-            offscreenPolicy: .visibleOnly(maxCharacters: 32_000),
-            structured: extracted.content
-        )
     }
 
     static func taskContent(window: AXNode, app: AppInfo, sourceApp: String) -> Extracted? {
