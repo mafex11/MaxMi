@@ -21,5 +21,24 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `dialog-over-window.json` | Hand-authored sheet-over-window shape at a nonzero screen origin | `GenericPageExtractor` `.dialog` region and dialog-never-trimmed budgeting |
 | `dom-attributes.json` | Hand-authored web-area DOM shape at a nonzero window origin | `AXNode` decoding of `domClassList`/`domIdentifier`, `AXQuery` `domClass`/`domId` predicates |
 | `slack-composer-draft.json` | Hand-authored Slack-shaped window at a nonzero origin with a focused composer, plus a second focused text area inside the message `AXList` | `ComposerDraft` picking the composer, not the list descendant |
+| `generic-empty-golden.json` | Hand-authored deterministic `CapturedContentEnvelope` for an empty generic page | Fixture loader golden encoder/decoder |
 
-Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the minimum role/frame structure required for a regression test.
+Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
+minimum role/frame structure required for a regression test.
+
+## Recording a fixture
+
+1. Open the app and put the window you want to capture in front.
+2. `swift tools/ax-snapshot-record.swift <bundle-id> /tmp/<name>.json`
+3. **Hand-scrub `/tmp/<name>.json`**: replace every message body, file name, note body, person
+   name, URL, e-mail address and token with invented equivalents of a similar shape and length.
+   Delete subtrees the test does not need. Keep `role`, `subrole`, `frame`, `identifier`,
+   `domClassList` and `domIdentifier` intact — those are what the parser anchors on.
+4. Move it to `Tests/MaxMiCaptureTests/Fixtures/<name>.json` and add a row to the table above.
+5. Golden `CapturedContent`: print `try goldenJSON(parsed)` from the test, scrub it the same way,
+   and save it as `Fixtures/<name>-golden.json`.
+
+At least one fixture per parser must be recorded with the window at a **nonzero screen origin**
+(drag it onto a second display or away from the top-left corner first). `AXFrame` is global
+screen coordinates, and a flush-at-origin fixture cannot catch a missing window-relative
+conversion.

@@ -2,14 +2,6 @@ import XCTest
 @testable import MaxMiCapture
 
 final class AXNodeDOMAttributeTests: XCTestCase {
-    // TODO(Task 6): shared loader
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     /// Every fixture on disk, enumerated rather than listed by hand — a hand-maintained list
     /// silently stops covering fixtures that later tasks add.
     func everyFixtureName() throws -> [String] {

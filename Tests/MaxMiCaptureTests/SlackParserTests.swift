@@ -3,10 +3,6 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class SlackParserTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
     func app(_ title: String?) -> AppInfo {
         AppInfo(bundleID: "com.tinyspeck.slackmacgap", name: "Slack", windowTitle: title)
     }

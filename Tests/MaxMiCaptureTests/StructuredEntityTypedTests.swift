@@ -3,13 +3,6 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class StructuredEntityTypedTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func testCalendarEventFixtureBecomesATypedEvent() throws {
         let app = AppInfo(bundleID: "com.apple.iCal", name: "Calendar", windowTitle: "Calendar")
         let structured = try CalendarParser().parseStructured(window: try fixture("calendar-event"), app: app)

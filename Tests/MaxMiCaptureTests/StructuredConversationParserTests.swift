@@ -3,13 +3,6 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class StructuredConversationParserTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func messages(_ content: CapturedContent?) throws -> [Message] {
         guard case .conversation(let conversation) = try XCTUnwrap(content) else {
             XCTFail("expected .conversation")

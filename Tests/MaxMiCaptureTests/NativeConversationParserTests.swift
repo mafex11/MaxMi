@@ -3,11 +3,6 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class NativeConversationParserTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func testWhatsAppExtractsConversationAndAtomicMessages() throws {
         let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp")
         let capture = try XCTUnwrap(try WhatsAppParser().parse(

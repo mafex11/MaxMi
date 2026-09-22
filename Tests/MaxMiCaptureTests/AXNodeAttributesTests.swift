@@ -2,13 +2,6 @@ import XCTest
 @testable import MaxMiCapture
 
 final class AXNodeAttributesTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func testNewAttributesDecode() throws {
         let window = try fixture("ax-attributes")
         XCTAssertEqual(window.children[0].headingLevel, 3)

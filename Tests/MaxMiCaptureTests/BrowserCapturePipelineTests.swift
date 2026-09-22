@@ -3,11 +3,6 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class BrowserCapturePipelineTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func testSlackWebPreservesMessageBoundariesAndURLIdentity() throws {
         let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "app.zen-browser.zen"))
         let result = try BrowserCapturePipeline.parse(

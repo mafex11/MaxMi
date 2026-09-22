@@ -3,13 +3,6 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class GenericPageBudgetTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
               identifier: String? = nil, subrole: String? = nil, selectedText: String? = nil,
               frame: CGRect? = nil, focused: Bool = false, children: [AXNode] = []) -> AXNode {
