@@ -1,0 +1,63 @@
+{
+  "role": "AXWindow",
+  "focused": false,
+  "frame": { "x": 1440, "y": 220, "width": 1200, "height": 800 },
+  "children": [
+    {
+      "role": "AXRow",
+      "focused": false,
+      "frame": { "x": 1450, "y": 310, "width": 200, "height": 24 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "random-channel",
+          "focused": false,
+          "frame": { "x": 1450, "y": 310, "width": 180, "height": 16 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXRow",
+      "focused": false,
+      "frame": { "x": 1680, "y": 320, "width": 900, "height": 40 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Cato",
+          "focused": false,
+          "frame": { "x": 1680, "y": 320, "width": 120, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "migration is ready",
+          "focused": false,
+          "frame": { "x": 1680, "y": 338, "width": 300, "height": 16 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXRow",
+      "focused": false,
+      "frame": { "x": 1680, "y": 380, "width": 900, "height": 40 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Dara",
+          "focused": false,
+          "frame": { "x": 1680, "y": 380, "width": 120, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "release check passed",
+          "focused": false,
+          "frame": { "x": 1680, "y": 398, "width": 300, "height": 16 },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

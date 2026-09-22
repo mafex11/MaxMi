@@ -2,53 +2,33 @@ import Foundation
 import MaxMiCore
 
 /// Dedicated parser for the native Slack app. Window reached by the caller via
-/// AXReader's locator (Slack leaves AXWindows empty). Content = AXRow messages
-/// in visual order, sender-attributed; key from the window title.
+/// AXReader's locator (Slack leaves AXWindows empty). DOM-class anchors identify Slack's
+/// virtual message list; AXRow geometry remains the fallback for older Electron trees.
 public struct SlackParser: SourceParser {
     static let contentCap = 8000
     static let sidebarMaxX: CGFloat = 240   // rows left of this are sidebar/nav chrome, not messages
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        extract(window: window, app: app)?.content
+        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
+        return CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let extracted = extract(window: window, app: app) else { return nil }
+        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
+        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
         return ParsedCapture(
             sourceApp: "Slack",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(extracted.content, style: .full),
+            content: ContentRenderer.render(content, style: .full),
             contentKind: .conversation,
             parserVersion: 2,
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3),
-            structured: extracted.content,
-            truncated: extracted.truncated
+            structured: content,
+            truncated: content != unbounded
         )
-    }
-
-    private func extract(
-        window: AXNode,
-        app: AppInfo
-    ) -> (content: CapturedContent, truncated: Bool)? {
-        var messages = messages(in: window, windowX: window.frame?.origin.x ?? 0)
-        guard !messages.isEmpty else { return nil }
-        // The composer's current text, so the next summary can see what the user is writing. The
-        // accumulator keeps at most one draft per sender and never merges a draft into history.
-        if let draft = ComposerDraft.draft(window: window) { messages.append(draft) }
-        let conversation = Conversation(
-            channel: channel(fromTitle: app.windowTitle),
-            isGroup: isGroup(fromTitle: app.windowTitle),
-            messages: messages
-        )
-        // Newest-anchored HARD cap on the STRUCTURED value: the rendered text is derived from it,
-        // so capping the string afterwards would be undone by CaptureEnvelope, and one
-        // pathological message must not bloat a version unboundedly.
-        let unbounded = CapturedContent.conversation(conversation)
-        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
-        return (content, content != unbounded)
     }
 
     /// "<view> - <workspace> - Slack" -> "<view>"; else the whole title.
@@ -81,47 +61,103 @@ public struct SlackParser: SourceParser {
         }
         return "slack:\(slug(title))"
     }
+}
 
-    /// Collect AXRow messages in visual order. Within a row, the first static text is the
-    /// sender and the rest is the body.
-    func messages(in root: AXNode, windowX: CGFloat) -> [Message] {
-        var rows: [(y: CGFloat, texts: [String])] = []
-        collectRows(root, into: &rows, windowX: windowX)
-        return rows.sorted { $0.y < $1.y }.compactMap { row in
-            let texts = row.texts.filter { !$0.isEmpty }
-            guard !texts.isEmpty else { return nil }
-            let sender = texts.count >= 2 ? texts[0] : "unknown"
-            let text = texts.count >= 2 ? texts.dropFirst().joined(separator: " ") : texts[0]
+extension SlackParser: StructuredParser {
+    public static let config = ParserConfig(
+        app: "Slack",
+        bundleIDs: [ParserRegistry.slackBundleID],
+        // Slack in a browser tab gets the same anchors as the native app, and must beat the
+        // generic web page (spec §7b).
+        hosts: ["app.slack.com", ".slack.com"],
+        // Slack's Electron tree does not always sit under an AXWebArea, so the DOM class list is
+        // forced rather than gated (spec §7b, reconciliation 2).
+        attributeSet: ["AXDOMClassList"],
+        offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+        preferOverNative: true
+    )
+
+    static let messageListClass = "c-message_list"
+    static let messageItemClass = "c-virtual_list__item"
+    static let senderClass = "c-message__sender"
+    static let timestampClass = "c-timestamp"
+    static let composerClass = "ql-editor"
+
+    static func domMessages(in snapshot: AXNode) -> [Message] {
+        guard let list = AXQuery.find("//*[domClass*=\"\(messageListClass)\"]", in: snapshot)
+        else { return [] }
+        let items = AXQuery.findAll("//*[domClass*=\"\(messageItemClass)\"]", in: list)
+        return AXQuery.sortedByVisualOrder(items, relativeTo: list.frame).compactMap { item in
+            let sender = AXQuery.find("//*[domClass*=\"\(senderClass)\"]", in: item)?
+                .value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let timeString = AXQuery.find("//*[domClass*=\"\(timestampClass)\"]", in: item)?
+                .value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The body is every static text that is not the sender line and not the timestamp.
+            let body = AXQuery.collectStaticTexts(in: item)
+                .filter { $0 != sender && $0 != timeString }
+                .joined(separator: " ")
+            guard !body.isEmpty else { return nil }
+            let resolvedSender = sender?.isEmpty == false ? sender! : "unknown"
             return Message(
-                id: Message.makeID(sender: sender, timeString: nil, text: text),
-                sender: sender, text: text, timestamp: nil, timeString: nil,
-                // Slack's AX rows carry no "sent by me" marker (no bubble side, no
-                // self-authored role), so every message defaults to a peer message.
+                id: Message.makeID(sender: resolvedSender, timeString: timeString, text: body),
+                sender: resolvedSender, text: body, timestamp: nil,
+                timeString: timeString?.isEmpty == false ? timeString : nil,
                 isUser: false, isDraft: false
             )
         }
     }
 
-    private func collectRows(_ node: AXNode, into out: inout [(y: CGFloat, texts: [String])], windowX: CGFloat) {
-        if node.role == "AXRow" {
-            // Sidebar/nav rows sit in the narrow left column (window-relative x < sidebarMaxX);
-            // messages are in the main content area to their right. Exclude sidebar chrome (spec §4).
-            // AXFrame is in global screen coordinates, so subtract window origin to get window-relative x.
-            let x = node.frame?.origin.x ?? .greatestFiniteMagnitude
-            if x != .greatestFiniteMagnitude && (x - windowX) < Self.sidebarMaxX { return }
-            var texts: [(CGFloat, CGFloat, String)] = []
-            collectStaticText(node, into: &texts)
-            let ordered = texts.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }.map { $0.2 }
-            out.append((node.frame?.origin.y ?? 0, ordered))
-            return   // don't descend into nested rows twice
+    /// The composer's live text. A draft is the one message Slack's tree marks as the user's.
+    static func draftMessage(in snapshot: AXNode) -> Message? {
+        if let composer = AXQuery.find("//*[domClass*=\"\(composerClass)\"]", in: snapshot) {
+            guard composer.subrole != GenericPageExtractor.secureSubrole else { return nil }
+            let text = (composer.value ?? AXQuery.collectStaticTexts(in: composer).joined(separator: " "))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            return Message(id: Message.makeID(sender: "You", timeString: nil, text: text),
+                           sender: "You", text: text, timestamp: nil, timeString: nil,
+                           isUser: true, isDraft: true)
         }
-        for c in node.children { collectRows(c, into: &out, windowX: windowX) }
+        // Preserve the established native composer predicate when Slack has not exposed DOM
+        // attributes yet. This is reached through the same v2 path, not a separate extraction.
+        return ComposerDraft.draft(window: snapshot)
     }
 
-    private func collectStaticText(_ node: AXNode, into out: inout [(CGFloat, CGFloat, String)]) {
-        if node.role == "AXStaticText", let v = node.value, !v.isEmpty {
-            out.append((node.frame?.origin.y ?? 0, node.frame?.origin.x ?? 0, v))
-        }
-        for c in node.children { collectStaticText(c, into: &out) }
+    /// Today's x-band row heuristic, retyped. Used when Slack exposes no DOM classes at all
+    /// (older builds, and a tree captured before AXManualAccessibility fully woke).
+    static func geometryMessages(in snapshot: AXNode) -> [Message] {
+        let windowX = snapshot.frame?.minX ?? 0
+        let rows = AXQuery.findAll("//AXRow", in: snapshot)
+            .filter { row in
+                // Window-relative: AXFrame is global screen coordinates.
+                guard let x = row.frame?.minX else { return true }
+                return (x - windowX) >= sidebarMaxX
+            }
+        // Oldest first, exactly as the Phase A row walk sorted by y — `.appendItems` accumulation
+        // and the newest-anchored cap both depend on this order.
+        return AXQuery.sortedByVisualOrder(rows, relativeTo: snapshot.frame)
+            .compactMap { row -> Message? in
+                let texts = AXQuery.collectStaticTexts(in: row)
+                guard let first = texts.first else { return nil }
+                let sender = texts.count >= 2 ? first : "unknown"
+                let body = texts.count >= 2 ? texts.dropFirst().joined(separator: " ") : first
+                return Message(id: Message.makeID(sender: sender, timeString: nil, text: body),
+                               sender: sender, text: body, timestamp: nil, timeString: nil,
+                               isUser: false, isDraft: false)
+            }
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        var messages = Self.domMessages(in: snapshot)
+        if messages.isEmpty { messages = Self.geometryMessages(in: snapshot) }
+        if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
+        guard !messages.isEmpty else { return nil }
+        return .conversation(Conversation(
+            // The existing title helpers, not new ones: they are asserted directly by
+            // StructuredConversationParserTests and Task 25 refines `isGroup` from the header.
+            channel: channel(fromTitle: context.windowTitle),
+            isGroup: isGroup(fromTitle: context.windowTitle),
+            messages: messages
+        ))
     }
 }

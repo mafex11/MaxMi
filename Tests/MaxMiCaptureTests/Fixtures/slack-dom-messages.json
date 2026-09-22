@@ -1,0 +1,85 @@
+{
+  "role": "AXWindow",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1200, "height": 800 },
+  "children": [
+    {
+      "role": "AXGroup",
+      "focused": false,
+      "frame": { "x": 260, "y": 0, "width": 900, "height": 700 },
+      "domClassList": ["c-message_list"],
+      "children": [
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 260, "y": 100, "width": 900, "height": 40 },
+          "domClassList": ["c-virtual_list__item"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "Arin",
+              "focused": false,
+              "frame": { "x": 260, "y": 100, "width": 120, "height": 16 },
+              "domClassList": ["c-message__sender"],
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "09:12 AM",
+              "focused": false,
+              "frame": { "x": 700, "y": 100, "width": 100, "height": 16 },
+              "domClassList": ["c-timestamp"],
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "cache warmup finished",
+              "focused": false,
+              "frame": { "x": 260, "y": 118, "width": 300, "height": 16 },
+              "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 260, "y": 160, "width": 900, "height": 40 },
+          "domClassList": ["c-virtual_list__item"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "Bela",
+              "focused": false,
+              "frame": { "x": 260, "y": 160, "width": 120, "height": 16 },
+              "domClassList": ["c-message__sender"],
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "09:14 AM",
+              "focused": false,
+              "frame": { "x": 700, "y": 160, "width": 100, "height": 16 },
+              "domClassList": ["c-timestamp"],
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "queue is clear",
+              "focused": false,
+              "frame": { "x": 260, "y": 178, "width": 300, "height": 16 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXTextArea",
+      "value": "I will verify the report",
+      "focused": false,
+      "frame": { "x": 260, "y": 640, "width": 900, "height": 60 },
+      "domClassList": ["ql-editor"],
+      "children": []
+    }
+  ]
+}

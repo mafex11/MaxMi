@@ -22,6 +22,12 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `dom-attributes.json` | Hand-authored web-area DOM shape at a nonzero window origin | `AXNode` decoding of `domClassList`/`domIdentifier`, `AXQuery` `domClass`/`domId` predicates |
 | `slack-composer-draft.json` | Hand-authored Slack-shaped window at a nonzero origin with a focused composer, plus a second focused text area inside the message `AXList` | `ComposerDraft` picking the composer, not the list descendant |
 | `generic-empty-golden.json` | Hand-authored deterministic `CapturedContentEnvelope` for an empty generic page | Fixture loader golden encoder/decoder |
+<!-- // lane-b begin -->
+| `slack-dom-messages.json` | Hand-authored Slack DOM-class message list with an invented composer draft | `SlackParser` DOM-class message and draft anchors |
+| `slack-dom-messages-golden.json` | Golden `CapturedContentEnvelope` for `slack-dom-messages.json` | `SlackParser` DOM-class conversation output |
+| `slack-offset-no-dom.json` | Hand-authored Slack row tree at a nonzero origin with every DOM class omitted | `SlackParser` window-relative geometry fallback |
+| `slack-offset-no-dom-golden.json` | Golden `CapturedContentEnvelope` for `slack-offset-no-dom.json` | `SlackParser` geometry fallback conversation output |
+<!-- // lane-b end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
 minimum role/frame structure required for a regression test.
