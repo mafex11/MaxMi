@@ -60,7 +60,7 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.accumulationPolicy, .replace)
     }
 
-    func testDiscordKeepsItsOwnChromeFilteringWrappedInGenericBlocks() throws {
+    func testDiscordKeepsItsOwnChromeFilteringAsAConversation() throws {
         let window = body([
             text("Add Reaction", y: 10),
             text("Ana", y: 30),
@@ -73,16 +73,14 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertFalse(capture.content.contains("Add Reaction"),
                        "the app-specific chrome filter is preserved")
         XCTAssertTrue(capture.content.contains("Great work everyone!"))
-        guard case .generic(let page) = try XCTUnwrap(capture.structured) else {
-            return XCTFail("expected .generic")
+        guard case .conversation(let conversation) = try XCTUnwrap(capture.structured) else {
+            return XCTFail("expected .conversation")
         }
-        XCTAssertEqual(page.regions.map(\.kind), [.main])
-        XCTAssertEqual(page.regions[0].blocks.map(\.type),
-                       Array(repeating: BlockType.paragraph, count: page.regions[0].blocks.count))
+        XCTAssertEqual(conversation.channel, "general")
+        XCTAssertEqual(conversation.messages.map(\.text), ["Ana", "Great work everyone!"])
+        XCTAssertEqual(conversation.messages.map(\.sender), ["unknown", "unknown"])
         XCTAssertEqual(capture.content, ContentRenderer.render(capture.structured!, style: .full))
-        // Task 9's accumulation bridge keys on this pair, which is what keeps cross-window
-        // appending alive until the anchored parser lands in Phase D.
-        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
+        XCTAssertFalse(try XCTUnwrap(capture.structured).isLegacyShaped)
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 

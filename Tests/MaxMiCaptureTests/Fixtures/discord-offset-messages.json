@@ -1,0 +1,87 @@
+{
+  "role": "AXWindow",
+  "title": "#general | Acme - Discord",
+  "focused": false,
+  "frame": { "x": 1440, "y": 220, "width": 1200, "height": 800 },
+  "children": [
+    {
+      "role": "AXList",
+      "label": "Channels",
+      "focused": false,
+      "frame": { "x": 1440, "y": 292, "width": 240, "height": 680 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "random-channel",
+          "focused": false,
+          "frame": { "x": 1464, "y": 360, "width": 180, "height": 18 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXList",
+      "label": "Messages in general",
+      "focused": false,
+      "frame": { "x": 1680, "y": 292, "width": 960, "height": 680 },
+      "children": [
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 1712, "y": 348, "width": 860, "height": 42 },
+          "children": [
+            {
+              "role": "AXHeading",
+              "value": "Arin",
+              "focused": false,
+              "frame": { "x": 1712, "y": 348, "width": 120, "height": 18 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "index rebuilt",
+              "focused": false,
+              "frame": { "x": 1712, "y": 370, "width": 260, "height": 18 },
+              "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 1712, "y": 416, "width": 860, "height": 66 },
+          "children": [
+            {
+              "role": "AXHeading",
+              "value": "Bela",
+              "focused": false,
+              "frame": { "x": 1712, "y": 416, "width": 120, "height": 18 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "deploy looks green",
+              "focused": false,
+              "frame": { "x": 1712, "y": 438, "width": 260, "height": 18 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "Add Reaction",
+              "focused": false,
+              "frame": { "x": 1980, "y": 438, "width": 120, "height": 18 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "shipping now",
+              "focused": false,
+              "frame": { "x": 1712, "y": 460, "width": 260, "height": 18 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

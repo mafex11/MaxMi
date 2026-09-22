@@ -27,6 +27,9 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `slack-dom-messages-golden.json` | Golden `CapturedContentEnvelope` for `slack-dom-messages.json` | `SlackParser` DOM-class conversation output |
 | `slack-offset-no-dom.json` | Hand-authored Slack row tree at a nonzero origin with every DOM class omitted | `SlackParser` window-relative geometry fallback |
 | `slack-offset-no-dom-golden.json` | Golden `CapturedContentEnvelope` for `slack-offset-no-dom.json` | `SlackParser` geometry fallback conversation output |
+| `discord-messages.json` | Hand-authored Discord transcript list at the origin with grouped messages, reaction chrome, and a sidebar | `DiscordParser` tree-order sender attribution |
+| `discord-messages-golden.json` | Golden `CapturedContentEnvelope` for `discord-messages.json` | `DiscordParser` conversation output |
+| `discord-offset-messages.json` | Hand-authored Discord transcript list at a nonzero origin with the same semantic content | `DiscordParser` geometry-free output |
 <!-- // lane-b end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
