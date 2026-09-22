@@ -219,7 +219,7 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(items[0].id, itemID)
     }
 
-    func testSourceRefsMustBelongToPage() throws {
+    func testCreateSkipsWhenNoSourceRefsBelongToCurrentEligiblePage() throws {
         try seedVersions(2)
         let page = try XCTUnwrap(try store.claimNextAgentRun(
             maxVersions: 50, leaseMs: 60_000, nowMs: t0
@@ -235,11 +235,10 @@ final class AgentStoreTests: XCTestCase {
             )],
             nowMs: t0
         )
-        XCTAssertEqual(result.newCount, 1, "item created")
+        XCTAssertEqual(result.newCount, 0)
 
         let items = try store.actionItems(status: "open", limit: 10)
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items[0].sourceRefs, [], "invalid source refs dropped")
+        XCTAssertTrue(items.isEmpty)
     }
 
     func testUnexpiredLeaseBlocksSecondClaim() throws {
@@ -285,7 +284,7 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(page.versions.map(\.compactContent), ["Ordinary agent content"])
     }
 
-    func testCompleteRebuildExcludesSourceMadeLocalOnlyAfterClaim() throws {
+    func testCompleteSkipsCreateWhenSourceBecomesLocalOnlyAfterClaim() throws {
         let versionID = try seedVersion(
             sourceApp: "Web",
             sourceKey: "https://completion-local-only.example",
@@ -297,7 +296,7 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(page.versions.map(\.versionID), [versionID])
 
         try store.setCloudProcessing("Web", allowed: false, nowMs: t0 + 2)
-        _ = try store.completeAgentRun(
+        let result = try store.completeAgentRun(
             runID: page.runID,
             ops: [.create(
                 kind: "todo",
@@ -309,7 +308,125 @@ final class AgentStoreTests: XCTestCase {
             nowMs: t0 + 3
         )
 
-        XCTAssertEqual(try store.actionItems(status: "open", limit: 1).first?.sourceRefs, [])
+        XCTAssertEqual(result.newCount, 0)
+        XCTAssertTrue(try store.actionItems(status: "open", limit: 1).isEmpty)
+    }
+
+    func testAgentUpdateSkipsItemWhoseOnlySourceBecomesIneligible() throws {
+        let localVersionID = try seedVersion(
+            sourceApp: "Local",
+            sourceKey: "local:update",
+            content: "This source starts eligible"
+        )
+        let createPage = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50, leaseMs: 60_000, nowMs: t0
+        ))
+        _ = try store.completeAgentRun(
+            runID: createPage.runID,
+            ops: [.create(
+                kind: "todo",
+                title: "Original title",
+                details: nil,
+                sourceRefs: [localVersionID],
+                reminder: .unchanged
+            )],
+            nowMs: t0
+        )
+        let itemID = try XCTUnwrap(try store.actionItems(status: "open", limit: 1).first?.id)
+
+        try store.setCloudProcessing("Local", allowed: false, nowMs: t0 + 1)
+        _ = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://ordinary-update.example",
+            content: "An eligible source starts the next run"
+        )
+        let updatePage = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50, leaseMs: 60_000, nowMs: t0 + 2
+        ))
+        let result = try store.completeAgentRun(
+            runID: updatePage.runID,
+            ops: [.update(
+                id: itemID,
+                title: "Changed title",
+                details: nil,
+                reminder: .unchanged
+            )],
+            nowMs: t0 + 3
+        )
+
+        XCTAssertEqual(result.updatedCount, 0)
+        XCTAssertEqual(
+            try store.actionItems(status: "open", limit: 1).first?.title,
+            "Original title"
+        )
+    }
+
+    func testActionItemSurfacesFilterCurrentSourceEligibility() throws {
+        let ordinary = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://ordinary-surface.example",
+            content: "Ordinary source"
+        )
+        let localOnly = try seedVersion(
+            sourceApp: "Local",
+            sourceKey: "local:surface",
+            content: "Local source"
+        )
+        let paused = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://paused-surface.example",
+            content: "Paused source"
+        )
+        let blocked = try seedVersion(
+            sourceApp: "Web",
+            sourceKey: "https://blocked-surface.example",
+            content: "Blocked source"
+        )
+        let nowMs = t0 + 1_000
+        try insertActionItem(
+            id: "ordinary",
+            status: "open",
+            remindAtMs: nowMs,
+            remindedAtMs: nil,
+            sourceRefs: [ordinary]
+        )
+        try insertActionItem(
+            id: "mixed",
+            status: "open",
+            remindAtMs: nowMs,
+            remindedAtMs: nil,
+            sourceRefs: [localOnly, ordinary]
+        )
+        try insertActionItem(
+            id: "local-only",
+            status: "open",
+            remindAtMs: nowMs,
+            remindedAtMs: nil,
+            sourceRefs: [localOnly]
+        )
+        try insertActionItem(
+            id: "paused",
+            status: "open",
+            remindAtMs: nowMs,
+            remindedAtMs: nil,
+            sourceRefs: [paused]
+        )
+        try insertActionItem(
+            id: "blocked",
+            status: "open",
+            remindAtMs: nowMs,
+            remindedAtMs: nil,
+            sourceRefs: [blocked]
+        )
+        try store.setCloudProcessing("Local", allowed: false, nowMs: nowMs)
+        try store.setThreadPaused("https://paused-surface.example", paused: true, nowMs: nowMs)
+        _ = try store.setDomain("blocked-surface.example", blocked: true, nowMs: nowMs)
+
+        let open = try store.openActionItems(limit: 10)
+        let due = try store.dueReminders(nowMs: nowMs)
+
+        XCTAssertEqual(Set(open.map(\.id)), ["ordinary", "mixed"])
+        XCTAssertEqual(Set(due.map(\.id)), ["ordinary", "mixed"])
     }
 
     func testAgentCreateAndUpdateApplyAcceptedReminderUsingStoreSetReminderPath() throws {
@@ -365,7 +482,17 @@ final class AgentStoreTests: XCTestCase {
 
     func testDueRemindersIncludesOnlyDueUnremindedItemsInsideTwentyFourHourWindow() throws {
         let nowMs: EpochMs = 10_000_000
-        try insertActionItem(id: "due", status: "open", remindAtMs: nowMs, remindedAtMs: nil)
+        let eligibleSource = try seedVersion(
+            sourceKey: "cursor:due-reminder",
+            content: "Reminder source"
+        )
+        try insertActionItem(
+            id: "due",
+            status: "open",
+            remindAtMs: nowMs,
+            remindedAtMs: nil,
+            sourceRefs: [eligibleSource]
+        )
         try insertActionItem(id: "future", status: "open", remindAtMs: nowMs + 1, remindedAtMs: nil)
         try insertActionItem(id: "already", status: "open", remindAtMs: nowMs - 1, remindedAtMs: nowMs)
         try insertActionItem(
@@ -461,8 +588,12 @@ final class AgentStoreTests: XCTestCase {
         status: String,
         remindAtMs: EpochMs?,
         remindedAtMs: EpochMs?,
+        sourceRefs: [String] = [],
         updatedAtMs: EpochMs? = nil
     ) throws {
+        let sourceRefsJSON = sourceRefs.isEmpty
+            ? nil
+            : String(decoding: try JSONEncoder().encode(sourceRefs), as: UTF8.self)
         try db.dbQueue.write { database in
             try database.execute(
                 sql: """
@@ -473,7 +604,7 @@ final class AgentStoreTests: XCTestCase {
                     """,
                 arguments: [
                     id, "todo", status, try AESGCMFieldCipher.testCipher.encrypt("Fixture \(id)"),
-                    nil, nil, t0, updatedAtMs ?? t0, status == "resolved" ? t0 : nil,
+                    nil, sourceRefsJSON, t0, updatedAtMs ?? t0, status == "resolved" ? t0 : nil,
                     remindAtMs, remindedAtMs,
                 ]
             )

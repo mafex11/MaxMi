@@ -20,7 +20,7 @@ struct StoreReminderRepository: ReminderRepository, @unchecked Sendable {
                     ReminderItem(
                         id: $0.id,
                         title: $0.title,
-                        sourceApp: $0.sourceRefs.first.flatMap { sourceApps[$0] },
+                        sourceApp: $0.sourceRefs.lazy.compactMap { sourceApps[$0] }.first,
                         detectedAtMs: $0.detectedAtMs
                     )
                 }

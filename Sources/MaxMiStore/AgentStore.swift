@@ -215,9 +215,13 @@ extension Store {
                 case .create(let kind, let title, let details, let sourceRefs, let reminder):
                     let idemKey = "\(runID):\(i)"
                     let itemID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
+                    let validRefs = sourceRefs.filter { pageSourceSet.contains($0) }
+                    guard !validRefs.isEmpty else {
+                        logSkippedActionItemOperation("create_ineligible_source")
+                        continue
+                    }
                     let titleCipher = try cipher.encrypt(title)
                     let detailsCipher = try details.map { try cipher.encrypt($0) }
-                    let validRefs = sourceRefs.filter { pageSourceSet.contains($0) }
                     let refsJSON = try? JSONEncoder().encode(validRefs)
                     let refsStr = refsJSON.map { String(data: $0, encoding: .utf8)! }
 
@@ -252,6 +256,10 @@ extension Store {
                         SELECT status FROM agent_action_items WHERE id=?
                         """, arguments: [id]),
                           itemRow["status"] as String == "open" else {
+                        continue
+                    }
+                    guard try actionItemHasEligibleSource(d, id: id, privacy: privacy) else {
+                        logSkippedActionItemOperation("update_ineligible_source")
                         continue
                     }
 
@@ -504,8 +512,10 @@ extension Store {
     }
 
     public func dueReminders(nowMs: EpochMs) throws -> [ActionItem] {
-        try db.dbQueue.write { database in
+        let privacy = try sourceCloudEligibility()
+        return try db.dbQueue.write { database in
             let oldestEligibleMs = nowMs - ReminderWindow.maximumPastDueMs
+            let eligibility = actionItemEligibility(privacy, itemAlias: "item")
             try database.execute(
                 sql: """
                     UPDATE agent_action_items
@@ -522,17 +532,47 @@ extension Store {
                 sql: """
                     SELECT id, kind, status, title_ciphertext, details_ciphertext, source_refs,
                            detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
-                    FROM agent_action_items
+                    FROM agent_action_items AS item
                     WHERE status='open'
                       AND remind_at_ms IS NOT NULL
                       AND remind_at_ms <= ?
                       AND remind_at_ms >= ?
                       AND reminded_at_ms IS NULL
+                      AND (\(eligibility.condition))
                     ORDER BY remind_at_ms ASC, id ASC
                     """,
-                arguments: [nowMs, oldestEligibleMs]
+                arguments: StatementArguments([
+                    nowMs, oldestEligibleMs,
+                ] + eligibility.arguments)
             )
             return rows.map(actionItem(from:))
+        }
+    }
+
+    public func dueReminder(id: String, nowMs: EpochMs) throws -> ActionItem? {
+        let privacy = try sourceCloudEligibility()
+        return try db.dbQueue.read { database in
+            let oldestEligibleMs = nowMs - ReminderWindow.maximumPastDueMs
+            let eligibility = actionItemEligibility(privacy, itemAlias: "item")
+            let row = try Row.fetchOne(
+                database,
+                sql: """
+                    SELECT id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                           detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
+                    FROM agent_action_items AS item
+                    WHERE id=?
+                      AND status='open'
+                      AND remind_at_ms IS NOT NULL
+                      AND remind_at_ms <= ?
+                      AND remind_at_ms >= ?
+                      AND reminded_at_ms IS NULL
+                      AND (\(eligibility.condition))
+                    """,
+                arguments: StatementArguments([
+                    id, nowMs, oldestEligibleMs,
+                ] + eligibility.arguments)
+            )
+            return row.map(actionItem(from:))
         }
     }
 
@@ -625,9 +665,36 @@ extension Store {
         }
     }
 
+    public func openActionItems(limit: Int) throws -> [ActionItem] {
+        let privacy = try sourceCloudEligibility()
+        return try db.dbQueue.read { database in
+            let eligibility = actionItemEligibility(privacy, itemAlias: "item")
+            let rows = try Row.fetchAll(
+                database,
+                sql: """
+                    SELECT id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                           detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
+                    FROM agent_action_items AS item
+                    WHERE status='open'
+                      AND (\(eligibility.condition))
+                    ORDER BY detected_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                arguments: StatementArguments(eligibility.arguments + [max(0, limit)])
+            )
+            return rows.map(actionItem(from:))
+        }
+    }
+
     public func sourceApps(forVersionIDs versionIDs: Set<String>) throws -> [String: String] {
         guard !versionIDs.isEmpty else { return [:] }
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { database in
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
             let rows = try Row.fetchAll(
                 database,
                 sql: """
@@ -635,13 +702,70 @@ extension Store {
                     FROM versions v
                     JOIN threads t ON t.id=v.thread_id
                     WHERE v.id IN (\(Self.placeholders(versionIDs.count)))
+                      AND (\(privacySQL.condition))
                     """,
-                arguments: StatementArguments(versionIDs.sorted())
+                arguments: StatementArguments(versionIDs.sorted() + privacySQL.arguments)
             )
             return Dictionary(uniqueKeysWithValues: rows.map {
                 ($0["version_id"] as String, $0["source_app"] as String)
             })
         }
+    }
+
+    private func actionItemHasEligibleSource(
+        _ database: Database,
+        id: String,
+        privacy: SourceCloudEligibility
+    ) throws -> Bool {
+        let eligibility = actionItemEligibility(privacy, itemAlias: "item")
+        return try Int.fetchOne(
+            database,
+            sql: """
+                SELECT 1
+                FROM agent_action_items AS item
+                WHERE id=?
+                  AND (\(eligibility.condition))
+                LIMIT 1
+                """,
+            arguments: StatementArguments([id] + eligibility.arguments)
+        ) != nil
+    }
+
+    private func actionItemEligibility(
+        _ privacy: SourceCloudEligibility,
+        itemAlias: String
+    ) -> SourcePrivacySQL {
+        let privacySQL = privacy.sqlFilter(
+            sourceAppColumn: "t.source_app",
+            threadIDColumn: "t.id",
+            urlColumn: "t.source_key"
+        )
+        return SourcePrivacySQL(
+            condition: """
+                EXISTS (
+                    SELECT 1
+                    FROM json_each(
+                        CASE
+                          WHEN json_valid(\(itemAlias).source_refs) THEN \(itemAlias).source_refs
+                          ELSE '[]'
+                        END
+                    ) AS source_ref
+                    JOIN versions v ON v.id=source_ref.value
+                    JOIN threads t ON t.id=v.thread_id
+                    WHERE (\(privacySQL.condition))
+                )
+                """,
+            arguments: privacySQL.arguments
+        )
+    }
+
+    private func logSkippedActionItemOperation(_ operation: String) {
+        SafeLogger.shared.log(
+            .debug,
+            subsystem: .agent,
+            event: .actionItemOperationSkipped,
+            fields: SafeLogFields(operation: SafeLogToken(validating: operation))
+        )
     }
 
     private func actionItem(from row: Row) -> ActionItem {

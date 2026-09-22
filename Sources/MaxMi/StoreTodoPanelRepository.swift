@@ -15,7 +15,7 @@ struct StoreTodoPanelRepository: TodoPanelRepository, @unchecked Sendable {
     func openItems(limit: Int) async -> [TodoPanelItem] {
         await Task.detached(priority: .userInitiated) {
             do {
-                let items = try self.store.actionItems(status: "open", limit: limit)
+                let items = try self.store.openActionItems(limit: limit)
                 let sourceApps = try self.store.sourceApps(
                     forVersionIDs: Set(items.flatMap(\.sourceRefs))
                 )
@@ -24,7 +24,7 @@ struct StoreTodoPanelRepository: TodoPanelRepository, @unchecked Sendable {
                         id: item.id,
                         title: item.title,
                         details: item.details,
-                        sourceApp: item.sourceRefs.first.flatMap { sourceApps[$0] },
+                        sourceApp: item.sourceRefs.lazy.compactMap { sourceApps[$0] }.first,
                         detectedAtMs: item.detectedAtMs,
                         remindAtMs: item.remindAtMs,
                         remindedAtMs: item.remindedAtMs
