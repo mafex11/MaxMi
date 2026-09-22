@@ -3,7 +3,7 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class BrowserCapturePipelineTests: XCTestCase {
-    func testSlackWebPreservesMessageBoundariesAndURLIdentity() throws {
+    func testSlackWebFallsBackToAGenericPageAndKeepsURLIdentity() throws {
         let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "app.zen-browser.zen"))
         let result = try BrowserCapturePipeline.parse(
             window: try fixture("gecko-slack-chat"), windowTitle: "general - Workspace", browser: browser
@@ -12,8 +12,11 @@ final class BrowserCapturePipelineTests: XCTestCase {
         XCTAssertEqual(result.capture.sourceKey, "https://app.slack.com/client/T123/C456")
         XCTAssertEqual(result.capture.contentKind, .conversation)
         XCTAssertEqual(result.capture.accumulationPolicy, .appendItems)
-        XCTAssertEqual(result.capture.content,
-                       "(From: Alex): Morning update\n(From: Sam): Reviewing the browser parser")
+        guard case .generic = try XCTUnwrap(result.capture.structured) else {
+            return XCTFail("an unclaimed host must fall through to the generic web page")
+        }
+        XCTAssertEqual(result.capture.content, ContentRenderer.render(
+            try XCTUnwrap(result.capture.structured), style: .full))
         XCTAssertEqual(result.quality, .high)
         XCTAssertTrue(result.parserID.contains("gecko/slack/webArea/quality-high"))
     }
@@ -63,10 +66,7 @@ final class BrowserCapturePipelineTests: XCTestCase {
         )) { XCTAssertEqual($0 as? ExtractionError, .emptyContent) }
     }
 
-    /// Spec §4d: a conversation is unioned by `Message.id` (sender + time + text), so two
-    /// indistinguishable bubbles are ONE message — a web row carries no timestamp to tell
-    /// them apart.
-    func testConversationCollapsesRepeatedIdenticalMessages() {
+    func testMessageLinesCollapseRepeatedIdenticalRows() {
         func text(_ value: String, y: CGFloat) -> AXNode {
             AXNode(
                 role: "AXStaticText", value: value, title: nil, url: nil,
@@ -90,7 +90,5 @@ final class BrowserCapturePipelineTests: XCTestCase {
             WebAppCaptureParser.messageLines(in: root),
             ["Alex: yes"]
         )
-        XCTAssertEqual(WebAppCaptureParser.messages(in: root).count, 1,
-                       "the typed shape agrees with the rendered lines")
     }
 }

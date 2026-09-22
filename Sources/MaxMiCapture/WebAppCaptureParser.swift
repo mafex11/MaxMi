@@ -15,22 +15,23 @@ public enum WebAppKind: String, Sendable, CaseIterable {
 public struct WebAppParseResult: Sendable, Equatable {
     public let capture: ParsedCapture
     public let app: WebAppKind
-    public let preservedBoundaries: Bool
-    /// True when bounding the typed shape dropped content — budgeted-away page blocks, or
-    /// messages shed off the front of a conversation. Independent of `TabCapture.truncated`,
-    /// which reports the tab TEXT hitting `BrowserTabExtractor`'s own cap.
+    /// True when the metadata capture's bounded tab text dropped content. The browser pipeline
+    /// independently records truncation while bounding its selected structured shape.
     public let truncated: Bool
 }
 
-/// Routes known web applications to semantic capture profiles while retaining a
-/// URL-keyed `Web` thread. No network or DOM injection is used; content remains the
-/// visible Accessibility tree and is bounded before it reaches storage or Gemini.
+/// Classifies browser URLs while retaining a URL-keyed `Web` thread. The browser pipeline owns
+/// the structured content shape: registered host parsers claim their hosts and unclaimed pages
+/// fall through to `WebPageParser`.
 public enum WebAppCaptureParser {
     /// The browser content cap. Public because it is the default of a public parameter.
     public static let contentCap = 16_000
     static let messageRoles: Set<String> = ["AXRow", "AXListItem"]
     static let textRoles: Set<String> = ["AXStaticText", "AXHeading", "AXLink"]
 
+    /// Classifies a URL for the parser ID, `contentKind` and accumulation policy ONLY. Since
+    /// M8 Phase D the content shape comes from `ParserRegistry`'s host map (spec §7b), so a new
+    /// web app is added by registering a `StructuredParser` with a `hosts:` entry, not here.
     public static func classify(url: String) -> WebAppKind {
         guard let components = URLComponents(string: url),
               let host = components.host?.lowercased() else { return .generic }
@@ -45,11 +46,11 @@ public enum WebAppCaptureParser {
         return .generic
     }
 
-    /// `contentBudget` is the cap both shapes are bounded to. It is a parameter only so a test can
-    /// drive the budget without a 16k fixture; production always uses `contentCap`.
+    /// Produces browser identity and capture metadata only. The typed content shape is selected
+    /// by `BrowserCapturePipeline` through the host parser map.
     public static func parse(
         tab: TabCapture,
-        window: AXNode,
+        window _: AXNode,
         contentBudget: Int = contentCap
     ) throws -> WebAppParseResult {
         let app = classify(url: tab.url)
@@ -58,60 +59,10 @@ public enum WebAppCaptureParser {
         let isConversation = [.slack, .discord, .whatsapp, .teams].contains(app)
             || isLinkedInMessaging
         let isEmail = app == .gmail || app == .outlook
-
-        var typedMessages = isConversation ? messages(in: window) : []
-        // Only when there IS a conversation: a draft alone is not a chat, and the generic page
-        // path already carries the composer's text as an `authoredByUser` block.
-        if !typedMessages.isEmpty, let draft = ComposerDraft.draft(window: window) {
-            typedMessages.append(draft)
-        }
-        let structured: CapturedContent
-        let preservedBoundaries: Bool
-        let accumulation: CaptureAccumulationPolicy
-        // Whether BOUNDING dropped content, which is a separate fact from the tab text having hit
-        // the extractor's own cap. Both feed `BrowserCaptureResult.truncated`, which is what the
-        // MCP layer discloses as "context was bounded".
-        var truncated = false
-        if !typedMessages.isEmpty {
-            structured = CaptureAccumulator.bound(
-                .conversation(Conversation(
-                    channel: tab.title ?? URLComponents(string: tab.url)?.host ?? tab.url,
-                    // No group marker survives the web walk; Phase D's anchored parsers read
-                    // the participant list.
-                    isGroup: false,
-                    messages: typedMessages
-                )),
-                to: contentBudget
-            )
-            // `bound` sheds whole messages off the front, so a shorter list IS the truncation.
-            if case .conversation(let bounded) = structured {
-                truncated = bounded.messages.count < typedMessages.count
-            }
-            preservedBoundaries = true
-            accumulation = .appendItems
-        } else {
-            // Generic path: the v2 extractor over the page subtree, with the URL attached.
-            var options = GenericPageExtractor.Options()
-            options.totalBudget = contentBudget
-            options.offscreenPolicy = .accessibilityScroll(maxSteps: 3, maxCharacters: 64_000)
-            let extracted = GenericPageExtractor.extract(
-                window: pageSubtree(in: window, title: tab.title),
-                focusedElement: nil,
-                url: tab.url,
-                options: options
-            )
-            // A page with no regions renders to nothing but its URL, which would overwrite a
-            // real capture of this thread with an empty one. Same rule as
-            // `GenericV2Content.page` returning nil for a native window.
-            guard !extracted.page.regions.isEmpty else { throw ExtractionError.emptyContent }
-            structured = .generic(extracted.page)
-            truncated = extracted.truncated
-            preservedBoundaries = false
-            // Whole-page semantics (spec 4d): one extraction is the tab's current state, and a
-            // typed page is not legacy-shaped, so `.rollingText` would silently replace anyway.
-            accumulation = .replace
-        }
-
+        guard !tab.content.isEmpty else { throw ExtractionError.emptyContent }
+        let content = String(tab.content.prefix(max(0, contentBudget)))
+        let truncated = content != tab.content
+        let accumulation: CaptureAccumulationPolicy = isConversation ? .appendItems : .replace
         // Kind is NOT derived from the shape: Gmail/Outlook stay .email and every other page
         // stays .webpage (spec 12 Q3).
         let kind: CaptureContentKind = isConversation ? .conversation : (isEmail ? .email : .webpage)
@@ -119,66 +70,34 @@ public enum WebAppCaptureParser {
             sourceApp: "Web",
             sourceKey: URLKeyNormalizer.normalize(tab.url),
             sourceTitle: tab.title,
-            content: ContentRenderer.render(structured, style: .full),
+            content: content,
             contentKind: kind,
-            parserVersion: 2,
+            parserVersion: 3,
             accumulationPolicy: accumulation,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3, maxCharacters: 64_000),
-            structured: structured,
+            structured: nil,
             truncated: truncated
         )
         return WebAppParseResult(
-            capture: capture, app: app,
-            preservedBoundaries: preservedBoundaries, truncated: truncated
-        )
-    }
-
-    /// The subtree the generic path walks: the primary web area, or — when the window exposes
-    /// none — the window with its browser chrome removed. Toolbars are dropped structurally
-    /// rather than filtered out of the finished page, so the page's budget is never spent on the
-    /// address bar; this is the same exclusion `BrowserTabExtractor.visualOrderText` applies on
-    /// its own no-web-area fallback.
-    static func pageSubtree(in window: AXNode, title: String?) -> AXNode {
-        BrowserTabExtractor.primaryWebArea(in: window, windowTitle: title)
-            ?? withoutToolbars(window)
-    }
-
-    private static func withoutToolbars(_ node: AXNode) -> AXNode {
-        AXNode(
-            role: node.role, value: node.value, title: node.title, url: node.url,
-            frame: node.frame, focused: node.focused,
-            children: node.children.filter { $0.role != "AXToolbar" }.map(withoutToolbars),
-            identifier: node.identifier, label: node.label, subrole: node.subrole,
-            headingLevel: node.headingLevel, selected: node.selected,
-            placeholder: node.placeholder, selectedText: node.selectedText, hidden: node.hidden
+            capture: capture, app: app, truncated: truncated
         )
     }
 
     /// One line per visible message container: `sender: body`. Containers without a
-    /// distinct sender still remain one atomic line, which keeps append dedup stable.
+    /// distinct sender still remain one atomic line, which keeps row handling stable.
     static func messageLines(in root: AXNode) -> [String] {
         messageValues(in: root).compactMap(messageLine)
     }
 
-    /// One `Message` per visible message container, built from that container's OWN text values:
-    /// the first value becomes the sender only when it looks like a sender label
-    /// (`NativeConversationExtraction.senderLabel`, shared with the native chat parsers), and
-    /// otherwise the container is one unattributed message keeping its full text. A joined line is
-    /// never re-split on `": "` — "Note: check the doc" is a message, not a message from "Note".
-    static func messages(in root: AXNode) -> [Message] {
-        messageValues(in: root).compactMap(message(from:))
-    }
-
     /// The atomic text values of each visible message container, in visual order, with
-    /// accidental adjacent duplicate containers collapsed. `messageLines` joins them and
-    /// `messages` attributes them, so both see exactly one entry per rendered message.
+    /// accidental adjacent duplicate containers collapsed. `messageLines` joins each row into
+    /// one rendered line.
     static func messageValues(in root: AXNode) -> [[String]] {
         var rows: [(y: CGFloat, values: [String])] = []
         collectMessageContainers(root, into: &rows)
         var result: [[String]] = []
-        // Adjacent identical lines collapse. A web row carries no timestamp, so two
-        // indistinguishable bubbles share one `Message.id` and are one message under §4d's
-        // union anyway — collapsing here keeps the rendered lines saying the same thing.
+        // Adjacent identical visual rows collapse so repeated AX containers do not duplicate
+        // the rendered line.
         var previous: String?
         for values in rows.sorted(by: { $0.y < $1.y }).map(\.values) {
             guard let line = messageLine(values) else { continue }
@@ -187,22 +106,6 @@ public enum WebAppCaptureParser {
             previous = line
         }
         return result
-    }
-
-    static func message(from values: [String]) -> Message? {
-        let sender = NativeConversationExtraction.senderLabel(values)
-        let text = (sender == nil ? values : Array(values.dropFirst())).joined(separator: " ")
-        guard !text.isEmpty else { return nil }
-        let name = sender ?? "unknown"
-        return Message(
-            id: Message.makeID(sender: name, timeString: nil, text: text),
-            sender: name, text: text, timestamp: nil, timeString: nil,
-            // No outgoing signal survives this walk: a web chat's own bubbles are marked by
-            // ALIGNMENT and by DOM classes, neither of which reaches the AX values read here.
-            // Phase D's anchored per-app parsers read it.
-            isUser: false,
-            isDraft: false
-        )
     }
 
     private static func collectMessageContainers(

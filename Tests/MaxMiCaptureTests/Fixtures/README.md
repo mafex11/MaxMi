@@ -31,6 +31,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `vscode-editor-golden.json` | Expected `CapturedContent` for `vscode-editor.json` | golden comparison |
 | `cursor-offset-editor.json` | Hand-authored Cursor editor and integrated-terminal shape at a nonzero window origin | `EditorParser` origin invariance |
 | `cursor-offset-editor-golden.json` | Expected `CapturedContent` for `cursor-offset-editor.json` | golden comparison |
+| `chrome-landmarks.json` | Hand-authored Chromium documentation page with main/sidebar/navigation landmarks | `WebPageParser` generic browser page |
+| `chrome-landmarks-golden.json` | Expected `CapturedContent` for `chrome-landmarks.json` | golden comparison |
+| `safari-offset-article.json` | Hand-authored Safari article at a nonzero window origin with browser chrome retained | `WebPageParser` origin invariance and chrome exclusion |
+| `safari-offset-article-golden.json` | Expected `CapturedContent` for `safari-offset-article.json` | golden comparison |
 | <!-- // lane-a end --> |  |  |
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
