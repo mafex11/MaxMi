@@ -127,31 +127,34 @@ extension FantasticalParser: StructuredParser {
 }
 
 public struct RemindersParser: SourceParser {
+    private struct ParsedTasks {
+        let content: CapturedContent
+        let identity: TaskItem
+        let truncated: Bool
+    }
+
     public init() {}
+
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)),
-              let legacyAnchor = StructuredEntityExtraction.task(
-                window: window, app: app, sourceApp: "Reminders", prefix: "reminder"
-              ) else {
+        guard let result = try Self.v2Result(in: window, context: ParseContext(app: app)) else {
             return nil
         }
-        let content = CaptureAccumulator.boundHard(
-            unbounded,
-            to: Self.config.offscreenPolicy.maxCharacters
-        )
+        let content = result.content
+        let identity = [result.identity.title, result.identity.project ?? ""].joined(separator: "|")
         return ParsedCapture(
-            sourceApp: legacyAnchor.sourceApp,
-            sourceKey: legacyAnchor.sourceKey,
-            sourceTitle: legacyAnchor.sourceTitle,
+            sourceApp: "Reminders",
+            sourceKey: "reminder:task:\(String(ContentHash.sha256Hex(identity).prefix(24)))",
+            sourceTitle: result.identity.title,
             content: ContentRenderer.render(content, style: .full),
             contentKind: .task,
             parserVersion: 3,
             accumulationPolicy: .replace,
             offscreenPolicy: Self.config.offscreenPolicy,
             structured: content,
-            truncated: content != unbounded
+            truncated: result.truncated
         )
     }
+
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
         try parse(window, context: ParseContext(app: app))
     }
@@ -708,6 +711,11 @@ enum StructuredEntityExtraction {
 /// rows, so unlike the v1 extraction (which produced one blob for the selected reminder) this
 /// yields one `TaskItem` per row, with status read from the row's own `AXCheckBox` (spec §7c).
 enum TaskStructuredExtraction {
+    struct Extraction {
+        let items: [TaskItem]
+        let identity: TaskItem
+    }
+
     /// The same truthy set `StructuredEntityExtraction.task` already tests against.
     static let completedValues: Set<String> = ["1", "true", "yes", "checked"]
 
@@ -719,15 +727,25 @@ enum TaskStructuredExtraction {
     }
 
     static func tasks(in window: AXNode, windowTitle: String?) -> [TaskItem] {
+        extraction(in: window, windowTitle: windowTitle)?.items ?? []
+    }
+
+    /// The structured task list and the v1 bridge identity are resolved together. A selected
+    /// detail pane owns identity when present; otherwise the first visible task does.
+    static func extraction(in window: AXNode, windowTitle: String?) -> Extraction? {
         let rows = AXQuery.findAll("//AXRow", in: window)
             .filter { !AXQuery.findAll("//AXCheckBox", in: $0).isEmpty }
+        let detail = detailItem(in: window, windowTitle: windowTitle)
         if !rows.isEmpty {
-            return AXQuery.sortedByVisualOrder(rows, relativeTo: window.frame)
+            let items = AXQuery.sortedByVisualOrder(rows, relativeTo: window.frame)
                 .compactMap { item(fromRow: $0) }
+            guard let identity = detail ?? items.first else { return nil }
+            return Extraction(items: items, identity: identity)
         }
         // No rows with checkboxes: this is a single reminder's detail pane, which is the shape
         // the v1 extraction was written for. Reuse its anchor rather than returning nothing.
-        return detailItem(in: window, windowTitle: windowTitle).map { [$0] } ?? []
+        guard let detail else { return nil }
+        return Extraction(items: [detail], identity: detail)
     }
 
     /// A Reminders window is either the row list (each row has its own checkbox) or a selected
@@ -832,14 +850,32 @@ extension RemindersParser: StructuredParser {
         offscreenPolicy: .visibleOnly(maxCharacters: 32_000)
     )
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+    private static func v2Result(
+        in snapshot: AXNode,
+        context: ParseContext
+    ) throws -> ParsedTasks? {
         guard TaskStructuredExtraction.hasExpectedShape(in: snapshot) else {
             if TaskStructuredExtraction.isKnownNonContentSurface(in: snapshot) {
                 throw ParserRefusal(reason: "unmatched-reminders-window")
             }
             return nil
         }
-        let items = TaskStructuredExtraction.tasks(in: snapshot, windowTitle: context.windowTitle)
-        return items.isEmpty ? nil : .tasks(items)
+        guard let extraction = TaskStructuredExtraction.extraction(
+            in: snapshot, windowTitle: context.windowTitle
+        ) else { return nil }
+        let unbounded = CapturedContent.tasks(extraction.items)
+        let content = CaptureAccumulator.boundHard(
+            unbounded,
+            to: Self.config.offscreenPolicy.maxCharacters
+        )
+        return ParsedTasks(
+            content: content,
+            identity: extraction.identity,
+            truncated: content != unbounded
+        )
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        try Self.v2Result(in: snapshot, context: context)?.content
     }
 }

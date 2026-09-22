@@ -213,11 +213,10 @@ final class RemindersStructuredTests: XCTestCase {
         let reorderedWindow = listWithSelectedDetail(rowsReversed: true)
         let first = try XCTUnwrap(try RemindersParser().parse(window: firstWindow, app: app))
         let reordered = try XCTUnwrap(try RemindersParser().parse(window: reorderedWindow, app: app))
-        let legacy = try XCTUnwrap(StructuredEntityExtraction.task(
-            window: firstWindow, app: app, sourceApp: "Reminders", prefix: "reminder"
-        ))
-        XCTAssertEqual(first.sourceKey, legacy.sourceKey)
-        XCTAssertEqual(first.sourceTitle, legacy.sourceTitle)
+        let identity = "Prepare board packet|Leadership"
+        XCTAssertEqual(first.sourceKey,
+                       "reminder:task:\(String(ContentHash.sha256Hex(identity).prefix(24)))")
+        XCTAssertEqual(first.sourceTitle, "Prepare board packet")
         XCTAssertEqual(reordered.sourceKey, first.sourceKey)
         XCTAssertEqual(reordered.sourceTitle, first.sourceTitle)
         XCTAssertNotEqual(reordered.content, first.content,

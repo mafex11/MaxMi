@@ -3,6 +3,11 @@ import MaxMiCore
 
 /// Apple Notes documents are anchored to the stable note-body text area.
 public struct NotesParser: SourceParser, StructuredParser {
+    private struct ParsedDocument {
+        let content: CapturedContent
+        let truncated: Bool
+    }
+
     // Stored Notes documents are hard-bounded to `pageBudget`, so the scroll ceiling is the
     // same — a larger one would be unreachable.
     static let offscreen: OffscreenCapturePolicy = .accessibilityScroll(
@@ -30,8 +35,8 @@ public struct NotesParser: SourceParser, StructuredParser {
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         let context = ParseContext(app: app)
-        guard let structured = try parse(window, context: context),
-              let unbounded = unboundedDocument(window, context: context) else { return nil }
+        guard let result = Self.v2Result(in: window, context: context) else { return nil }
+        let structured = result.content
         let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "untitled"
         return ParsedCapture(sourceApp: "Notes", sourceKey: "notes:\(docSlug(title))",
                              sourceTitle: app.windowTitle,
@@ -42,7 +47,7 @@ public struct NotesParser: SourceParser, StructuredParser {
                              accumulationPolicy: .replace,
                              offscreenPolicy: Self.offscreen,
                              structured: structured,
-                             truncated: structured != unbounded)
+                             truncated: result.truncated)
     }
 
     /// The first physical body line is the note title. A blank first line defers to the window
@@ -60,11 +65,16 @@ public struct NotesParser: SourceParser, StructuredParser {
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
-        return CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+        Self.v2Result(in: snapshot, context: context)?.content
     }
 
-    private func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    private static func v2Result(in snapshot: AXNode, context: ParseContext) -> ParsedDocument? {
+        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
+        let content = CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+        return ParsedDocument(content: content, truncated: content != unbounded)
+    }
+
+    private static func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
         guard let body = AXQuery.find("//*[identifier=\"\(Self.bodyIdentifier)\"]", in: snapshot),
               !body.isSecureField,
               let raw = body.value,

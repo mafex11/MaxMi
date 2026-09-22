@@ -7,6 +7,12 @@ import MaxMiCore
 /// AXTextArea blob — no per-command structure, no message rows. The anchored parser
 /// learns one prompt shape from the buffer and splits only on lines with that shape.
 public struct TerminalParser: SourceParser {
+    private struct ParsedSession {
+        let content: CapturedContent
+        let scrollback: String
+        let truncated: Bool
+    }
+
     static let contentCap = 8000
     /// A home-or-absolute path with no prompt terminator inside it.
     static let pathBodyPattern = "(~|/Users/[^/ ]+)(/[^ \t\n:%$#>❯]+)*"
@@ -17,14 +23,12 @@ public struct TerminalParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        // One AX walk per capture: the thread key needs the RAW prompt lines, so the blob is read
-        // here and the typed session is built from that same blob.
-        guard let blob = largestTextArea(in: window), !blob.isEmpty else { return nil }
-        let result = Self.sessionResult(fromScrollback: blob, windowTitle: app.windowTitle)
+        let context = ParseContext(app: app)
+        guard let result = Self.v2Result(in: window, context: context) else { return nil }
         let session = result.content
         return ParsedCapture(
             sourceApp: app.name,                 // "Warp", "Terminal", "iTerm2"
-            sourceKey: terminalKey(app: app, content: blob),
+            sourceKey: terminalKey(app: app, content: result.scrollback),
             sourceTitle: app.windowTitle,
             content: ContentRenderer.render(session, style: .full),
             contentKind: .terminal,
@@ -34,20 +38,6 @@ public struct TerminalParser: SourceParser {
             structured: session,
             truncated: result.truncated
         )
-    }
-
-    /// Terminal scrollback lives in one big AXTextArea. Return the LONGEST text-area value
-    /// (Warp = one; some emulators expose a couple — take the richest).
-    func largestTextArea(in root: AXNode) -> String? {
-        var best: String?
-        func walk(_ n: AXNode) {
-            if n.role == "AXTextArea", let v = n.value, !v.isEmpty {
-                if best == nil || v.count > best!.count { best = v }
-            }
-            for c in n.children { walk(c) }
-        }
-        walk(root)
-        return best
     }
 
     /// Option B: group terminal activity by working directory / project, so recall is
@@ -239,11 +229,18 @@ extension TerminalParser: StructuredParser {
         return (content, content != unbounded)
     }
 
+    /// The v2 extraction outcome is also the v1 bridge's only source of content, truncation and
+    /// raw prompt text for identity. This keeps the terminal snapshot to one tree walk.
+    private static func v2Result(in snapshot: AXNode, context: ParseContext) -> ParsedSession? {
+        guard let blob = AXQuery.findAll("//AXTextArea", in: snapshot)
+            .compactMap(\.value)
+            .filter({ !$0.isEmpty })
+            .max(by: { $0.count < $1.count }) else { return nil }
+        let result = sessionResult(fromScrollback: blob, windowTitle: context.windowTitle)
+        return ParsedSession(content: result.content, scrollback: blob, truncated: result.truncated)
+    }
+
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        let areas = AXQuery.findAll("//AXTextArea", in: snapshot)
-        // Warp exposes one; some emulators expose several — take the richest.
-        guard let blob = areas.compactMap(\.value).filter({ !$0.isEmpty })
-                .max(by: { $0.count < $1.count }) else { return nil }
-        return Self.session(fromScrollback: blob, windowTitle: context.windowTitle)
+        Self.v2Result(in: snapshot, context: context)?.content
     }
 }

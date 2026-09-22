@@ -3,6 +3,11 @@ import MaxMiCore
 
 /// Native Notion documents are anchored to the DOM class of their main page frame.
 public struct NotionParser: SourceParser {
+    private struct ParsedDocument {
+        let content: CapturedContent
+        let truncated: Bool
+    }
+
     // Whole-page `.replace` accumulation bounds ONE capture to `pageBudget`, so the scroll
     // ceiling is `pageBudget` too — a larger one would be unreachable.
     static let offscreen: OffscreenCapturePolicy = .accessibilityScroll(
@@ -15,8 +20,8 @@ public struct NotionParser: SourceParser {
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         let context = ParseContext(app: app)
-        guard let structured = try parse(window, context: context),
-              let unbounded = unboundedDocument(window, context: context) else { return nil }
+        guard let result = Self.v2Result(in: window, context: context) else { return nil }
+        let structured = result.content
         let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "untitled"
         return ParsedCapture(sourceApp: "Notion", sourceKey: "notion:\(docSlug(title))",
                              sourceTitle: app.windowTitle,
@@ -25,7 +30,7 @@ public struct NotionParser: SourceParser {
                              accumulationPolicy: .replace,
                              offscreenPolicy: Self.offscreen,
                              structured: structured,
-                             truncated: structured != unbounded)
+                             truncated: result.truncated)
     }
 }
 
@@ -99,11 +104,16 @@ extension NotionParser: StructuredParser {
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
-        return CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+        Self.v2Result(in: snapshot, context: context)?.content
     }
 
-    func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    private static func v2Result(in snapshot: AXNode, context: ParseContext) -> ParsedDocument? {
+        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
+        let content = CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+        return ParsedDocument(content: content, truncated: content != unbounded)
+    }
+
+    private static func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
         guard let root = Self.pageRoot(in: snapshot) else { return nil }
         let title = Self.pageTitle(in: snapshot, windowTitle: context.windowTitle)
         let blocks = Self.blocks(under: root).filter { $0.text != title }

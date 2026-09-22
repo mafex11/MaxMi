@@ -3,6 +3,11 @@ import MaxMiCore
 
 /// Native Obsidian app. Title "<note> - <vault> - Obsidian <ver>" -> obsidian:<vault>/<note>.
 public struct ObsidianParser: SourceParser {
+    private struct ParsedDocument {
+        let content: CapturedContent
+        let truncated: Bool
+    }
+
     // Whole-page `.replace` accumulation bounds ONE capture to `pageBudget`, so the scroll
     // ceiling is `pageBudget` too — a larger one would be unreachable.
     static let offscreen: OffscreenCapturePolicy = .accessibilityScroll(
@@ -15,8 +20,8 @@ public struct ObsidianParser: SourceParser {
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         let context = ParseContext(app: app)
-        guard let structured = try parse(window, context: context),
-              let unbounded = unboundedDocument(window, context: context) else { return nil }
+        guard let result = Self.v2Result(in: window, context: context) else { return nil }
+        let structured = result.content
         return ParsedCapture(sourceApp: "Obsidian", sourceKey: key(fromTitle: app.windowTitle),
                              sourceTitle: app.windowTitle,
                              content: ContentRenderer.render(structured, style: .full),
@@ -24,7 +29,7 @@ public struct ObsidianParser: SourceParser {
                              accumulationPolicy: .replace,
                              offscreenPolicy: Self.offscreen,
                              structured: structured,
-                             truncated: structured != unbounded)
+                             truncated: result.truncated)
     }
     func key(fromTitle title: String?) -> String {
         guard let title, !title.isEmpty else { return "obsidian:unknown" }
@@ -71,11 +76,16 @@ extension ObsidianParser: StructuredParser {
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
-        return CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+        Self.v2Result(in: snapshot, context: context)?.content
     }
 
-    func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
+    private static func v2Result(in snapshot: AXNode, context: ParseContext) -> ParsedDocument? {
+        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
+        let content = CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+        return ParsedDocument(content: content, truncated: content != unbounded)
+    }
+
+    private static func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
         guard let pane = Self.paneRoot(in: snapshot) else { return nil }
         let texts = AXQuery.all(in: pane) {
             ($0.role == "AXHeading" || $0.role == "AXStaticText")
