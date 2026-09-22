@@ -85,7 +85,13 @@ public struct ParserRegistry: Sendable {
         structured.append(contentsOf: [DiscordParser(), MessagesParser(), WhatsAppParser(), LinkedInMessagingParser(), TeamsWebParser()] as [any StructuredParser])
         // lane-b end
         // lane-c begin
-        structured.append(contentsOf: [FinderParser(), CalendarParser(), FantasticalParser(), RemindersParser()] as [any StructuredParser])
+        structured.append(contentsOf: [
+            FinderParser(),
+            CalendarParser(),
+            FantasticalParser(),
+            RemindersParser(),
+            OutlookWebParser(),
+        ] as [any StructuredParser])
         // lane-c end
         var byBundle: [String: any StructuredParser] = [:]
         var bundleClaims: [String: [any StructuredParser]] = [:]

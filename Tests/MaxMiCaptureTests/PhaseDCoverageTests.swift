@@ -38,6 +38,8 @@ final class PhaseDCoverageTests: XCTestCase {
                                      "linkedin-offset-messaging-golden")],
         "TeamsWebParser": [("teams-web-chat", "teams-web-chat-golden"),
                            ("teams-web-offset-chat", "teams-web-offset-chat-golden")],
+        "OutlookWebParser": [("outlook-web-reading", "outlook-web-reading-golden"),
+                              ("outlook-web-offset-list", "outlook-web-offset-list-golden")],
         "FinderParser": [("finder-list", "finder-list-golden"),
                          ("finder-offset-copy", "finder-offset-copy-golden")],
         "CalendarParser": [("calendar-event", "calendar-event-golden"),
@@ -65,6 +67,9 @@ final class PhaseDCoverageTests: XCTestCase {
         "SlackParser": ["app.slack.com"],
         "LinkedInMessagingParser": ["www.linkedin.com", "linkedin.com"],
         "TeamsWebParser": ["teams.microsoft.com", "teams.cloud.microsoft"],
+        // lane-c begin
+        "OutlookWebParser": ["outlook.office.com", "outlook.live.com"],
+        // lane-c end
     ]
 
     func testTheRegistrationListIsExactlyTheThirteenBundleIDParsers() {

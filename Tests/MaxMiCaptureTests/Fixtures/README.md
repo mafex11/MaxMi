@@ -96,6 +96,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `reminder-task-golden.json` | Golden `CapturedContentEnvelope` for `reminder-task.json` | `RemindersParser` detail fallback |
 | `reminders-offset-list.json` | Hand-authored scrubbed Reminders list at a nonzero screen origin, with open/completed row checkboxes, due date and sidebar chrome | `RemindersParser` row status, ordering and chrome filtering |
 | `reminders-offset-list-golden.json` | Golden `CapturedContentEnvelope` for `reminders-offset-list.json` | `RemindersParser` |
+| `outlook-web-reading.json` | Hand-authored scrubbed Outlook web reading pane | `OutlookWebParser` cards from the From/Sent description and from header texts |
+| `outlook-web-reading-golden.json` | Golden `CapturedContent` for the above | `OutlookWebParser` |
+| `outlook-web-offset-list.json` | Hand-authored scrubbed Outlook web message list at a nonzero screen origin | `OutlookWebParser` generic page of table rows |
+| `outlook-web-offset-list-golden.json` | Golden `CapturedContent` for the above | `OutlookWebParser` |
 <!-- lane-c end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
