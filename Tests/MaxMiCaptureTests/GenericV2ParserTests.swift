@@ -60,7 +60,7 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.accumulationPolicy, .replace)
     }
 
-    func testDiscordKeepsItsOwnChromeFilteringAsAConversation() throws {
+    func testDiscordWithoutATranscriptAnchorFallsThroughToGenericV2() throws {
         let window = body([
             text("Add Reaction", y: 10),
             text("Ana", y: 30),
@@ -68,20 +68,19 @@ final class GenericV2ParserTests: XCTestCase {
         ], title: "#general | Acme - Discord")
         let app = AppInfo(bundleID: ParserRegistry.discordBundleID, name: "Discord",
                           windowTitle: "#general | Acme - Discord")
-        let capture = try XCTUnwrap(try DiscordParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.contentKind, .conversation)
-        XCTAssertFalse(capture.content.contains("Add Reaction"),
-                       "the app-specific chrome filter is preserved")
-        XCTAssertTrue(capture.content.contains("Great work everyone!"))
-        guard case .conversation(let conversation) = try XCTUnwrap(capture.structured) else {
-            return XCTFail("expected .conversation")
+        let result = CaptureDispatch.parseDetailed(window: window, app: app, registry: ParserRegistry())
+        guard case .parsedByFallback(let capture, let failedParser) = result else {
+            return XCTFail("expected the generic fallback, got \(result)")
         }
-        XCTAssertEqual(conversation.channel, "general")
-        XCTAssertEqual(conversation.messages.map(\.text), ["Ana", "Great work everyone!"])
-        XCTAssertEqual(conversation.messages.map(\.sender), ["unknown", "unknown"])
+        XCTAssertEqual(failedParser, "DiscordParser")
+        XCTAssertEqual(capture.contentKind, .generic)
+        XCTAssertTrue(capture.content.contains("Add Reaction"))
+        XCTAssertTrue(capture.content.contains("Great work everyone!"))
+        guard case .generic = try XCTUnwrap(capture.structured) else {
+            return XCTFail("expected .generic")
+        }
         XCTAssertEqual(capture.content, ContentRenderer.render(capture.structured!, style: .full))
-        XCTAssertFalse(try XCTUnwrap(capture.structured).isLegacyShaped)
-        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
+        XCTAssertEqual(capture.accumulationPolicy, .replace)
     }
 
     func testMessagesKeepsBubbleOrderAsATypedConversation() throws {

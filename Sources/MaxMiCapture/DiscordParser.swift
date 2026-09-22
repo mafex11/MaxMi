@@ -12,12 +12,11 @@ public struct DiscordParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
-        return CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        try parse(window, context: ParseContext(app: app))
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
+        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
         let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
         return ParsedCapture(
             sourceApp: "Discord",
@@ -66,6 +65,12 @@ extension DiscordParser: StructuredParser {
 
     static let messageListMarker = "Messages in"
 
+    private struct TextNode {
+        let path: [Int]
+        let role: String
+        let value: String
+    }
+
     /// "#<channel> | <server> - Discord" -> "<channel>".
     static func channelName(fromTitle title: String?) -> String {
         guard let title, !title.isEmpty else { return "unknown" }
@@ -93,14 +98,22 @@ extension DiscordParser: StructuredParser {
         var result: [Message] = []
         var lastSender: String?
         for group in list.children {
-            let heading = AXQuery.findAll("//AXHeading", in: group)
-                .compactMap { ($0.value ?? $0.title)?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .first { !$0.isEmpty }
-            if let heading { lastSender = heading }
-            let sender = heading ?? lastSender ?? "unknown"
-            let bodies = staticTextsInTreeOrder(group)
-                .filter { $0 != heading && !Self.chrome.contains($0) && $0.count > 1 }
-            for body in bodies {
+            let values = textNodesInTreeOrder(group)
+            let heading = values.first { $0.role == "AXHeading" }
+            let bodies = values.filter {
+                $0.role == "AXStaticText"
+                    && $0.path != heading?.path
+                    && !Self.chrome.contains($0.value)
+                    && $0.value.count > 1
+            }
+            let headingSender = heading.flatMap { heading in
+                NativeConversationExtraction.senderLabel(
+                    [heading.value] + bodies.prefix(1).map(\.value)
+                )
+            }
+            if let headingSender { lastSender = headingSender }
+            let sender = headingSender ?? lastSender ?? "unknown"
+            for body in bodies.map(\.value) {
                 result.append(Message(
                     id: Message.makeID(sender: sender, timeString: nil, text: body),
                     sender: sender,
@@ -115,32 +128,28 @@ extension DiscordParser: StructuredParser {
         return result
     }
 
-    static func staticTextsInTreeOrder(_ node: AXNode) -> [String] {
-        var result: [String] = []
-        func visit(_ current: AXNode) {
+    private static func textNodesInTreeOrder(_ node: AXNode) -> [TextNode] {
+        var result: [TextNode] = []
+        func visit(_ current: AXNode, path: [Int]) {
             guard current.subrole != GenericPageExtractor.secureSubrole,
                   current.role != "AXSecureTextField"
             else { return }
-            if current.role == "AXStaticText",
-               let value = current.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if ["AXStaticText", "AXHeading"].contains(current.role),
+               let value = (current.value ?? current.title)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !value.isEmpty {
-                result.append(value)
+                result.append(TextNode(path: path, role: current.role, value: value))
             }
-            for child in current.children { visit(child) }
+            for (index, child) in current.children.enumerated() {
+                visit(child, path: path + [index])
+            }
         }
-        visit(node)
+        visit(node, path: [])
         return result
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        // The list anchor structurally excludes Discord's channel sidebar. Keep the legacy
-        // whole-tree fallback in this same v2 path for older AX snapshots that exposed only
-        // message static text; it preserves existing native capture behaviour.
-        let messages = if let list = Self.messageList(in: snapshot) {
-            Self.messages(in: list)
-        } else {
-            Self.messages(in: snapshot)
-        }
+        guard let list = Self.messageList(in: snapshot) else { return nil }
+        let messages = Self.messages(in: list)
         guard !messages.isEmpty else { return nil }
         return .conversation(Conversation(
             channel: Self.channelName(fromTitle: context.windowTitle),
