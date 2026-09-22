@@ -171,7 +171,7 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: archivesURL
         )
-        XCTAssertEqual(result.migrationIdentifier, "v13")
+        XCTAssertEqual(result.migrationIdentifier, "v14")
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.preservedDatabaseURL.path))
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
@@ -246,14 +246,14 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: root.appendingPathComponent("Backups", isDirectory: true)
         )
-        XCTAssertEqual(result.migrationIdentifier, "v13")
+        XCTAssertEqual(result.migrationIdentifier, "v14")
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
         defer { try? restored.dbQueue.close() }
         try restored.dbQueue.read { database in
             XCTAssertEqual(
                 try String.fetchOne(database, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v13"
+                "v14"
             )
             let ciphertext = try String.fetchOne(database, sql: "SELECT content FROM versions")
             XCTAssertTrue(ciphertext?.hasPrefix("enc:v1:") == true)

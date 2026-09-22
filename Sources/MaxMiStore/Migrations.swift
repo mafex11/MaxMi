@@ -3,7 +3,7 @@ import GRDB
 import MaxMiCore
 
 enum Migrations {
-    static let currentIdentifier = "v13"
+    static let currentIdentifier = "v14"
 
     static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
@@ -364,6 +364,14 @@ enum Migrations {
               prompt_version            TEXT NOT NULL
             );
             """)
+        }
+        m.registerMigration("v14") { db in
+            try db.execute(sql: """
+                ALTER TABLE agent_action_items ADD COLUMN remind_at_ms INTEGER NULL;
+                ALTER TABLE agent_action_items ADD COLUMN reminded_at_ms INTEGER NULL;
+                CREATE INDEX idx_items_status_remind_at_ms
+                  ON agent_action_items(status, remind_at_ms);
+                """)
         }
         return m
     }
