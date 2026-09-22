@@ -312,7 +312,8 @@ extension Store {
                     let evidenceCipher = try cipher.encrypt(evidence)
                     try d.execute(sql: """
                         UPDATE agent_action_items
-                        SET status='resolved', resolution_evidence_ciphertext=?, resolved_at=?, updated_at=?
+                        SET status='resolved', resolution_evidence_ciphertext=?, resolved_at=?, updated_at=?,
+                            remind_at_ms=NULL, reminded_at_ms=NULL
                         WHERE id=?
                         """, arguments: [evidenceCipher, nowMs, nowMs, id])
 

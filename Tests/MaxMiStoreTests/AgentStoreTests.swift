@@ -532,9 +532,25 @@ final class AgentStoreTests: XCTestCase {
             remindAtMs: t0 + 2_000,
             remindedAtMs: t0 + 500
         )
+        try insertActionItem(
+            id: "agent-resolve-me",
+            status: "open",
+            remindAtMs: t0 + 3_000,
+            remindedAtMs: t0 + 500
+        )
 
         try store.resolveActionItem("resolve-me", nowMs: t0 + 3_000)
         try store.dismissActionItem("dismiss-me", nowMs: t0 + 3_000)
+        _ = try seedVersion(sourceKey: "cursor:agent-resolve", content: "Resolve this item")
+        let page = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50, leaseMs: 60_000, nowMs: t0 + 3_000
+        ))
+        let result = try store.completeAgentRun(
+            runID: page.runID,
+            ops: [.resolve(id: "agent-resolve-me", evidence: "Completed")],
+            nowMs: t0 + 3_000
+        )
+        XCTAssertEqual(result.resolvedCount, 1)
 
         try db.dbQueue.read { database in
             XCTAssertNil(try Int64.fetchOne(
@@ -552,6 +568,14 @@ final class AgentStoreTests: XCTestCase {
             XCTAssertNil(try Int64.fetchOne(
                 database,
                 sql: "SELECT reminded_at_ms FROM agent_action_items WHERE id='dismiss-me'"
+            ))
+            XCTAssertNil(try Int64.fetchOne(
+                database,
+                sql: "SELECT remind_at_ms FROM agent_action_items WHERE id='agent-resolve-me'"
+            ))
+            XCTAssertNil(try Int64.fetchOne(
+                database,
+                sql: "SELECT reminded_at_ms FROM agent_action_items WHERE id='agent-resolve-me'"
             ))
         }
     }
