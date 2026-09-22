@@ -132,7 +132,7 @@ final class StructuredEntityTypedTests: XCTestCase {
         }
     }
 
-    func testUnmatchedCalendarWindowRefusesWhileRemindersStillReturnsNil() throws {
+    func testUnmatchedCalendarAndRemindersWindowsRefuse() throws {
         let window = AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
                             frame: CGRect(x: 0, y: 0, width: 800, height: 600), focused: false,
                             children: [])
@@ -140,6 +140,8 @@ final class StructuredEntityTypedTests: XCTestCase {
         XCTAssertThrowsError(try CalendarParser().parseStructured(window: window, app: app)) {
             XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-calendar-window"))
         }
-        XCTAssertNil(try RemindersParser().parseStructured(window: window, app: app))
+        XCTAssertThrowsError(try RemindersParser().parseStructured(window: window, app: app)) {
+            XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-reminders-window"))
+        }
     }
 }

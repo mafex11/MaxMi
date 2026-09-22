@@ -128,11 +128,24 @@ final class RemindersStructuredTests: XCTestCase {
         XCTAssertEqual(items[0].title, "Submit project notes")
     }
 
-    func testNothingUsableIsNotHandled() throws {
+    func testUnsupportedShapesAreRefused() {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1100, height: 760),
                         children: [node("AXGroup", identifier: "reminders-sidebar",
                                         frame: CGRect(x: 0, y: 0, width: 240, height: 760))])
-        XCTAssertNil(try RemindersParser().parse(bare, context: context("Reminders")))
+        let toolbarOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1100, height: 760),
+                               children: [
+                                node("AXToolbar", frame: CGRect(x: 0, y: 0, width: 1100, height: 40),
+                                     children: [
+                                        node("AXButton", value: "Add Reminder",
+                                             frame: CGRect(x: 20, y: 10, width: 120, height: 20)),
+                                     ]),
+                               ])
+        for window in [bare, toolbarOnly] {
+            XCTAssertThrowsError(try RemindersParser().parse(window, context: context("Reminders"))) {
+                XCTAssertEqual($0 as? ParserRefusal,
+                               ParserRefusal(reason: "unmatched-reminders-window"))
+            }
+        }
     }
 
     func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
@@ -159,5 +172,48 @@ final class RemindersStructuredTests: XCTestCase {
         assertGolden(try XCTUnwrap(RemindersParser().parse(try fixture("reminders-offset-list"),
                                                           context: context("Reminders"))),
                      matches: "reminders-offset-list-golden")
+    }
+
+    func testV1BridgeKeepsTheLegacyDetailIdentityWhenRowsReorder() throws {
+        func listWithSelectedDetail(rowsReversed: Bool) -> AXNode {
+            let rows = [
+                row("File travel receipts", checkbox: "0", due: nil, y: 180, x: 300),
+                row("Review launch checklist", checkbox: "1", due: nil, y: 240, x: 300),
+            ]
+            let arrangedRows = rowsReversed ? [
+                row("File travel receipts", checkbox: "0", due: nil, y: 240, x: 300),
+                row("Review launch checklist", checkbox: "1", due: nil, y: 180, x: 300),
+            ] : rows
+            return node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1100, height: 760),
+                        children: [
+                // This is the existing v1 anchor. It intentionally precedes the row list in
+                // tree order; its selected reminder identity must own the bridge key.
+                node("AXGroup", identifier: "reminder-detail",
+                     frame: CGRect(x: 720, y: 80, width: 350, height: 500), children: [
+                    node("AXHeading", value: "Prepare board packet", identifier: "task-title",
+                         frame: CGRect(x: 740, y: 120, width: 280, height: 20)),
+                    node("AXStaticText", value: "Leadership", identifier: "list-name",
+                         frame: CGRect(x: 740, y: 150, width: 180, height: 20)),
+                ]),
+                node("AXTable", identifier: "reminder-list",
+                     frame: CGRect(x: 280, y: 100, width: 400, height: 500), children: arrangedRows),
+            ])
+        }
+
+        let app = AppInfo(bundleID: "com.apple.reminders", name: "Reminders",
+                          windowTitle: "Reminders")
+        let firstWindow = listWithSelectedDetail(rowsReversed: false)
+        let reorderedWindow = listWithSelectedDetail(rowsReversed: true)
+        let first = try XCTUnwrap(try RemindersParser().parse(window: firstWindow, app: app))
+        let reordered = try XCTUnwrap(try RemindersParser().parse(window: reorderedWindow, app: app))
+        let legacy = try XCTUnwrap(StructuredEntityExtraction.task(
+            window: firstWindow, app: app, sourceApp: "Reminders", prefix: "reminder"
+        ))
+        XCTAssertEqual(first.sourceKey, legacy.sourceKey)
+        XCTAssertEqual(first.sourceTitle, legacy.sourceTitle)
+        XCTAssertEqual(reordered.sourceKey, first.sourceKey)
+        XCTAssertEqual(reordered.sourceTitle, first.sourceTitle)
+        XCTAssertNotEqual(reordered.content, first.content,
+                          "the row-aware content still follows visual row order")
     }
 }

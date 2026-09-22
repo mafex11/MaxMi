@@ -114,17 +114,19 @@ public struct RemindersParser: SourceParser {
     public init() {}
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
         guard let unbounded = try parse(window, context: ParseContext(app: app)),
-              case .tasks(let items) = unbounded,
-              let item = items.first else { return nil }
+              let legacyAnchor = StructuredEntityExtraction.task(
+                window: window, app: app, sourceApp: "Reminders", prefix: "reminder"
+              ) else {
+            return nil
+        }
         let content = CaptureAccumulator.boundHard(
             unbounded,
             to: Self.config.offscreenPolicy.maxCharacters
         )
-        let identity = [item.title, item.project ?? ""].joined(separator: "|")
         return ParsedCapture(
-            sourceApp: "Reminders",
-            sourceKey: "reminder:task:\(String(ContentHash.sha256Hex(identity).prefix(24)))",
-            sourceTitle: item.title,
+            sourceApp: legacyAnchor.sourceApp,
+            sourceKey: legacyAnchor.sourceKey,
+            sourceTitle: legacyAnchor.sourceTitle,
             content: ContentRenderer.render(content, style: .full),
             contentKind: .task,
             parserVersion: 3,
@@ -712,6 +714,15 @@ enum TaskStructuredExtraction {
         return detailItem(in: window, windowTitle: windowTitle).map { [$0] } ?? []
     }
 
+    /// A Reminders window is either the row list (each row has its own checkbox) or a selected
+    /// reminder detail surface. Toolbar/sidebar-only windows must refuse rather than becoming a
+    /// generic capture of unrelated application chrome.
+    static func hasExpectedShape(in window: AXNode) -> Bool {
+        let hasRows = AXQuery.findAll("//AXRow", in: window)
+            .contains { !AXQuery.findAll("//AXCheckBox", in: $0).isEmpty }
+        return hasRows || reminderDetailRoot(in: window) != nil
+    }
+
     /// Everything the named fields did not claim, as the notes body. `AXCheckBox` is excluded
     /// because it is in `StructuredEntityExtraction.readableRoles` — without this, a row's
     /// checkbox value ("0") is rendered as a task note (ruling F23). One implementation, used by
@@ -745,9 +756,7 @@ enum TaskStructuredExtraction {
     }
 
     static func detailItem(in window: AXNode, windowTitle: String?) -> TaskItem? {
-        let root = StructuredEntityExtraction.preferredDetailRoot(
-            in: window, hints: ["task", "reminder", "detail"]
-        )
+        guard let root = reminderDetailRoot(in: window) else { return nil }
         let fields = StructuredEntityExtraction.orderedFields(in: root)
         guard !fields.isEmpty else { return nil }
         let title = StructuredEntityExtraction.firstValue(
@@ -770,6 +779,28 @@ enum TaskStructuredExtraction {
                         project: project, tags: [],
                         notes: notes(from: fields, excluding: [title, dueString, project]))
     }
+
+    private static func reminderDetailRoot(in root: AXNode) -> AXNode? {
+        if isReminderDetailSurface(root) { return root }
+        for child in root.children {
+            if let detail = reminderDetailRoot(in: child) { return detail }
+        }
+        return nil
+    }
+
+    private static func isReminderDetailSurface(_ node: AXNode) -> Bool {
+        let metadata = [node.identifier, node.label, node.title]
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        let isSurface = ["AXSheet", "AXPopover", "AXDialog"].contains(node.role)
+            || ["task", "reminder", "detail"].contains { metadata.contains($0) }
+        guard isSurface else { return false }
+        return StructuredEntityExtraction.orderedFields(in: node).contains { field in
+            ["title", "name", "task-title", "reminder-title", "due", "date", "time",
+             "list", "project", "section", "completed"].contains {
+                field.metadata.contains($0)
+            } || (field.role == "AXHeading" && !StructuredEntityExtraction.isChrome(field.value))
+        }
+    }
 }
 
 extension RemindersParser: StructuredParser {
@@ -780,6 +811,9 @@ extension RemindersParser: StructuredParser {
     )
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        guard TaskStructuredExtraction.hasExpectedShape(in: snapshot) else {
+            throw ParserRefusal(reason: "unmatched-reminders-window")
+        }
         let items = TaskStructuredExtraction.tasks(in: snapshot, windowTitle: context.windowTitle)
         return items.isEmpty ? nil : .tasks(items)
     }
