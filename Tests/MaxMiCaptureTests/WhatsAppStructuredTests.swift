@@ -143,6 +143,32 @@ final class WhatsAppStructuredTests: XCTestCase {
         }
     }
 
+    func testV2PathHardBoundsAnOversizeConversationToEightThousandCharacters() throws {
+        let oversized = node(
+            "AXWindow",
+            frame: CGRect(x: 0, y: 0, width: 1000, height: 700),
+            children: [
+                node("AXHeading", value: "Priya Vantar", label: "conversation title",
+                     frame: CGRect(x: 340, y: 20, width: 200, height: 22)),
+                bubble(String(repeating: "whatsapp body ", count: 1_000),
+                       time: "16:02", x: 340, y: 100),
+            ]
+        )
+        let parser = WhatsAppParser()
+        let structured = try XCTUnwrap(parser.parse(oversized, context: context("WhatsApp")))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(structured, style: .full).count,
+            NativeConversationExtraction.contentCap
+        )
+
+        let capture = try XCTUnwrap(parser.parse(
+            window: oversized,
+            app: AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp")
+        ))
+        XCTAssertLessThanOrEqual(capture.content.count, NativeConversationExtraction.contentCap)
+        XCTAssertTrue(capture.truncated)
+    }
+
     func testWhatsAppFixtureMatchesItsGolden() throws {
         assertGolden(try XCTUnwrap(WhatsAppParser().parse(try fixture("whatsapp-bubbles"),
                                                         context: context("WhatsApp"))),

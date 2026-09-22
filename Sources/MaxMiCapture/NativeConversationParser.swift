@@ -2,6 +2,11 @@ import Foundation
 import MaxMiCore
 
 public struct WhatsAppParser: SourceParser {
+    private struct BoundedContent {
+        let content: CapturedContent
+        let truncated: Bool
+    }
+
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
@@ -9,8 +14,10 @@ public struct WhatsAppParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
-        let content = CaptureAccumulator.boundHard(unbounded, to: NativeConversationExtraction.contentCap)
+        guard let bounded = try Self.boundedContent(
+            window, context: ParseContext(app: app)
+        ) else { return nil }
+        let content = bounded.content
         guard case .conversation(let conversation) = content else { return nil }
         return ParsedCapture(
             sourceApp: "WhatsApp",
@@ -22,7 +29,7 @@ public struct WhatsAppParser: SourceParser {
             accumulationPolicy: .appendItems,
             offscreenPolicy: Self.config.offscreenPolicy,
             structured: content,
-            truncated: content != unbounded
+            truncated: bounded.truncated
         )
     }
 }
@@ -50,7 +57,7 @@ public struct TeamsParser: SourceParser {
 }
 
 enum NativeConversationExtraction {
-    static let contentCap = 16_000
+    static let contentCap = 8_000
     static let messageRoles: Set<String> = ["AXRow", "AXListItem"]
     static let textRoles: Set<String> = ["AXStaticText", "AXTextArea", "AXHeading"]
     static let semanticLabelRoles: Set<String> = ["AXButton", "AXLink"]
@@ -497,7 +504,10 @@ extension WhatsAppParser: StructuredParser {
         )
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+    private static func boundedContent(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) throws -> BoundedContent? {
         let cells = AXQuery.findAll("//*[identifier=\"\(Self.bubbleCellIdentifier)\"]", in: snapshot)
         guard !cells.isEmpty else { return nil }
         // Without a confirmed chat header there is no thread to attribute these bubbles to, and a
@@ -520,11 +530,19 @@ extension WhatsAppParser: StructuredParser {
                     sender: sender, text: bubble.text, timestamp: nil,
                     timeString: bubble.timeString, isUser: isUser, isDraft: false
                 )
-            }
+        }
         guard !messages.isEmpty else {
             throw ParserRefusal(reason: "no-conversation-content")
         }
         let isGroup = Set(messages.filter { !$0.isUser }.map(\.sender)).count > 1
-        return .conversation(Conversation(channel: channel, isGroup: isGroup, messages: messages))
+        let unbounded = CapturedContent.conversation(
+            Conversation(channel: channel, isGroup: isGroup, messages: messages)
+        )
+        let content = CaptureAccumulator.boundHard(unbounded, to: NativeConversationExtraction.contentCap)
+        return BoundedContent(content: content, truncated: content != unbounded)
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        try Self.boundedContent(snapshot, context: context)?.content
     }
 }
