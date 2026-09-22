@@ -3,14 +3,32 @@ import GRDB
 import MaxMiActivity
 import MaxMiCore
 
+public enum ReminderWindow {
+    public static let maximumPastDueMs: EpochMs = 24 * 60 * 60 * 1_000
+}
+
 public struct ActionItem: Sendable {
     public let id, kind, status, title: String
     public let details: String?
     public let sourceRefs: [String]
     public let detectedAtMs, updatedAtMs: EpochMs
     public let resolvedAtMs: EpochMs?
+    public let remindAtMs: EpochMs?
+    public let remindedAtMs: EpochMs?
 
-    public init(id: String, kind: String, status: String, title: String, details: String?, sourceRefs: [String], detectedAtMs: EpochMs, updatedAtMs: EpochMs, resolvedAtMs: EpochMs?) {
+    public init(
+        id: String,
+        kind: String,
+        status: String,
+        title: String,
+        details: String?,
+        sourceRefs: [String],
+        detectedAtMs: EpochMs,
+        updatedAtMs: EpochMs,
+        resolvedAtMs: EpochMs?,
+        remindAtMs: EpochMs?,
+        remindedAtMs: EpochMs?
+    ) {
         self.id = id
         self.kind = kind
         self.status = status
@@ -20,6 +38,8 @@ public struct ActionItem: Sendable {
         self.detectedAtMs = detectedAtMs
         self.updatedAtMs = updatedAtMs
         self.resolvedAtMs = resolvedAtMs
+        self.remindAtMs = remindAtMs
+        self.remindedAtMs = remindedAtMs
     }
 }
 
@@ -53,12 +73,6 @@ public struct AgentPage: Sendable {
         self.fromMs = fromMs
         self.toMs = toMs
     }
-}
-
-public enum AgentOp: Sendable {
-    case create(kind: String, title: String, details: String?, sourceRefs: [String])
-    case update(id: String, title: String?, details: String?)
-    case resolve(id: String, evidence: String)
 }
 
 public struct AgentRunResult: Sendable {
@@ -146,7 +160,11 @@ extension Store {
         }
     }
 
-    public func completeAgentRun(runID: String, ops: [AgentOp], nowMs: EpochMs) throws -> AgentRunResult {
+    public func completeAgentRun(
+        runID: String,
+        ops: [ValidatedAgentOp],
+        nowMs: EpochMs
+    ) throws -> AgentRunResult {
         let privacy = try sourceCloudEligibility()
         return try db.dbQueue.write { d in
             guard let runRow = try Row.fetchOne(d, sql: """
@@ -194,7 +212,7 @@ extension Store {
 
             for (i, op) in ops.enumerated() {
                 switch op {
-                case .create(let kind, let title, let details, let sourceRefs):
+                case .create(let kind, let title, let details, let sourceRefs, let reminder):
                     let idemKey = "\(runID):\(i)"
                     let itemID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
                     let titleCipher = try cipher.encrypt(title)
@@ -217,6 +235,9 @@ extension Store {
                     }
 
                     if d.changesCount > 0 {
+                        if case .set(let remindAtMs) = reminder {
+                            try setReminder(d, id: itemID, remindAtMs: remindAtMs, nowMs: nowMs)
+                        }
                         newCount += 1
                         newIDs.append(itemID)
                         let eventID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
@@ -226,7 +247,7 @@ extension Store {
                             """, arguments: [eventID, itemID, "created", runID, nowMs])
                     }
 
-                case .update(let id, let title, let details):
+                case .update(let id, let title, let details, let reminder):
                     guard let itemRow = try Row.fetchOne(d, sql: """
                         SELECT status FROM agent_action_items WHERE id=?
                         """, arguments: [id]),
@@ -258,16 +279,19 @@ extension Store {
                             WHERE id=?
                             """, arguments: StatementArguments(args))
 
-                        if d.changesCount > 0 {
-                            updatedCount += 1
-                            updatedIDs.append(id)
-                            let eventID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
-                            try d.execute(sql: """
-                                INSERT INTO agent_action_item_events (id, item_id, event, run_id, at)
-                                VALUES (?,?,?,?,?)
-                                """, arguments: [eventID, id, "updated", runID, nowMs])
-                        }
                     }
+
+                    if case .set(let remindAtMs) = reminder {
+                        try setReminder(d, id: id, remindAtMs: remindAtMs, nowMs: nowMs)
+                    }
+
+                    updatedCount += 1
+                    updatedIDs.append(id)
+                    let eventID = Ident.uuidv7(nowMs: nowMs + EpochMs(i))
+                    try d.execute(sql: """
+                        INSERT INTO agent_action_item_events (id, item_id, event, run_id, at)
+                        VALUES (?,?,?,?,?)
+                        """, arguments: [eventID, id, "updated", runID, nowMs])
 
                 case .resolve(let id, let evidence):
                     guard let itemRow = try Row.fetchOne(d, sql: """
@@ -479,11 +503,81 @@ extension Store {
         }
     }
 
+    public func dueReminders(nowMs: EpochMs) throws -> [ActionItem] {
+        try db.dbQueue.write { database in
+            let oldestEligibleMs = nowMs - ReminderWindow.maximumPastDueMs
+            try database.execute(
+                sql: """
+                    UPDATE agent_action_items
+                    SET reminded_at_ms=?, updated_at=?
+                    WHERE status='open'
+                      AND remind_at_ms IS NOT NULL
+                      AND remind_at_ms < ?
+                      AND reminded_at_ms IS NULL
+                    """,
+                arguments: [nowMs, nowMs, oldestEligibleMs]
+            )
+            let rows = try Row.fetchAll(
+                database,
+                sql: """
+                    SELECT id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                           detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
+                    FROM agent_action_items
+                    WHERE status='open'
+                      AND remind_at_ms IS NOT NULL
+                      AND remind_at_ms <= ?
+                      AND remind_at_ms >= ?
+                      AND reminded_at_ms IS NULL
+                    ORDER BY remind_at_ms ASC, id ASC
+                    """,
+                arguments: [nowMs, oldestEligibleMs]
+            )
+            return rows.map(actionItem(from:))
+        }
+    }
+
+    public func markReminded(_ id: String, nowMs: EpochMs) throws {
+        try db.dbQueue.write { database in
+            try database.execute(
+                sql: """
+                    UPDATE agent_action_items
+                    SET reminded_at_ms=?, updated_at=?
+                    WHERE id=? AND status='open'
+                      AND remind_at_ms IS NOT NULL AND reminded_at_ms IS NULL
+                    """,
+                arguments: [nowMs, nowMs, id]
+            )
+        }
+    }
+
+    public func setReminder(_ id: String, remindAtMs: EpochMs?) throws {
+        try db.dbQueue.write { database in
+            try setReminder(database, id: id, remindAtMs: remindAtMs, nowMs: epochNowMs())
+        }
+    }
+
+    private func setReminder(
+        _ database: Database,
+        id: String,
+        remindAtMs: EpochMs?,
+        nowMs: EpochMs
+    ) throws {
+        try database.execute(
+            sql: """
+                UPDATE agent_action_items
+                SET remind_at_ms=?, reminded_at_ms=NULL, updated_at=?
+                WHERE id=? AND status='open'
+                """,
+            arguments: [remindAtMs, nowMs, id]
+        )
+    }
+
     public func resolveActionItem(_ id: String, nowMs: EpochMs) throws {
         try db.dbQueue.write { d in
             try d.execute(sql: """
                 UPDATE agent_action_items
-                SET status='resolved', resolved_at=?, updated_at=?
+                SET status='resolved', resolved_at=?, updated_at=?,
+                    remind_at_ms=NULL, reminded_at_ms=NULL
                 WHERE id=? AND status='open'
                 """, arguments: [nowMs, nowMs, id])
 
@@ -501,7 +595,8 @@ extension Store {
         try db.dbQueue.write { d in
             try d.execute(sql: """
                 UPDATE agent_action_items
-                SET status='dismissed', updated_at=?
+                SET status='dismissed', updated_at=?,
+                    remind_at_ms=NULL, reminded_at_ms=NULL
                 WHERE id=? AND status='open'
                 """, arguments: [nowMs, id])
 
@@ -519,32 +614,35 @@ extension Store {
         try db.dbQueue.read { d in
             let rows = try Row.fetchAll(d, sql: """
                 SELECT id, kind, status, title_ciphertext, details_ciphertext, source_refs,
-                       detected_at, updated_at, resolved_at
+                       detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
                 FROM agent_action_items
                 WHERE status=?
                 ORDER BY detected_at DESC
                 LIMIT ?
                 """, arguments: [status, limit])
 
-            return rows.map { row in
-                let title = decryptOrMarker(row["title_ciphertext"])
-                let details: String? = (row["details_ciphertext"] as String?).map(decryptOrMarker)
-                let sourceRefsJSON = row["source_refs"] as String?
-                let sourceRefs = sourceRefsJSON.flatMap { try? JSONDecoder().decode([String].self, from: Data($0.utf8)) } ?? []
-
-                return ActionItem(
-                    id: row["id"],
-                    kind: row["kind"],
-                    status: row["status"],
-                    title: title,
-                    details: details,
-                    sourceRefs: sourceRefs,
-                    detectedAtMs: row["detected_at"],
-                    updatedAtMs: row["updated_at"],
-                    resolvedAtMs: row["resolved_at"]
-                )
-            }
+            return rows.map(actionItem(from:))
         }
+    }
+
+    private func actionItem(from row: Row) -> ActionItem {
+        let sourceRefsJSON = row["source_refs"] as String?
+        let sourceRefs = sourceRefsJSON.flatMap {
+            try? JSONDecoder().decode([String].self, from: Data($0.utf8))
+        } ?? []
+        return ActionItem(
+            id: row["id"],
+            kind: row["kind"],
+            status: row["status"],
+            title: decryptOrMarker(row["title_ciphertext"]),
+            details: (row["details_ciphertext"] as String?).map(decryptOrMarker),
+            sourceRefs: sourceRefs,
+            detectedAtMs: row["detected_at"],
+            updatedAtMs: row["updated_at"],
+            resolvedAtMs: row["resolved_at"],
+            remindAtMs: row["remind_at_ms"],
+            remindedAtMs: row["reminded_at_ms"]
+        )
     }
 
     public func lastAgentRunStartedAt() throws -> EpochMs? {

@@ -12,7 +12,7 @@ final class MigrationV12Tests: XCTestCase {
         store = Store(db: db, cipher: AESGCMFieldCipher.testCipher)
     }
 
-    func testContextEmbeddingsMigrationUsesVec0AndFullHeadIsV13() throws {
+    func testContextEmbeddingsMigrationUsesVec0AndFullHeadIsV14() throws {
         let db = try MaxMiDatabase.inMemory()
         try db.dbQueue.write { d in
             XCTAssertTrue(try d.tableExists("context_embeddings"))
@@ -24,9 +24,9 @@ final class MigrationV12Tests: XCTestCase {
                 arguments: ["v1", blob]
             )
         }
-        XCTAssertEqual(Migrations.currentIdentifier, "v13")
-        XCTAssertTrue(Set(Migrations.migrator.migrations).isSuperset(of: ["v12", "v13"]))
-        XCTAssertEqual(Array(Migrations.migrator.migrations.suffix(2)), ["v12", "v13"])
+        XCTAssertEqual(Migrations.currentIdentifier, "v14")
+        XCTAssertTrue(Set(Migrations.migrator.migrations).isSuperset(of: ["v12", "v13", "v14"]))
+        XCTAssertEqual(Array(Migrations.migrator.migrations.suffix(3)), ["v12", "v13", "v14"])
         let marker = try db.dbQueue.read { d in
             try String.fetchOne(
                 d,

@@ -13,9 +13,9 @@ final class MigrationV13Tests: XCTestCase {
             ]))
             XCTAssertEqual(
                 try String.fetchOne(d, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v13"
+                "v14"
             )
         }
-        XCTAssertEqual(Migrations.currentIdentifier, "v13")
+        XCTAssertEqual(Migrations.currentIdentifier, "v14")
     }
 }

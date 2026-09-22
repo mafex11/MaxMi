@@ -29,7 +29,13 @@ final class AgentStoreTests: XCTestCase {
         XCTAssertEqual(page.versions.first?.compactContent, "Implement raw embeddings")
         _ = try store.completeAgentRun(
             runID: page.runID,
-            ops: [.create(kind: "todo", title: "Review embedding", details: nil, sourceRefs: [versionID])],
+            ops: [.create(
+                kind: "todo",
+                title: "Review embedding",
+                details: nil,
+                sourceRefs: [versionID],
+                reminder: .unchanged
+            )],
             nowMs: t0 + 2
         )
         XCTAssertEqual(try store.actionItems(status: "open", limit: 1).first?.sourceRefs, [versionID])
@@ -47,7 +53,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Keep only known refs",
                 details: nil,
-                sourceRefs: [versionID, "unknown-version-id"]
+                sourceRefs: [versionID, "unknown-version-id"],
+                reminder: .unchanged
             )],
             nowMs: t0 + 2
         )
@@ -100,7 +107,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Reply",
                 details: "Send the update",
-                sourceRefs: page.versions.map(\.versionID)
+                sourceRefs: page.versions.map(\.versionID),
+                reminder: .unchanged
             )],
             nowMs: t0
         )
@@ -119,7 +127,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Reply",
                 details: nil,
-                sourceRefs: page.versions.map(\.versionID)
+                sourceRefs: page.versions.map(\.versionID),
+                reminder: .unchanged
             )],
             nowMs: t0 + 1
         )
@@ -149,7 +158,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Task",
                 details: nil,
-                sourceRefs: firstPage.versions.map(\.versionID)
+                sourceRefs: firstPage.versions.map(\.versionID),
+                reminder: .unchanged
             )],
             nowMs: t0
         )
@@ -183,7 +193,8 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Task",
                 details: nil,
-                sourceRefs: ["invalid-version-id-1", "invalid-version-id-2"]
+                sourceRefs: ["invalid-version-id-1", "invalid-version-id-2"],
+                reminder: .unchanged
             )],
             nowMs: t0
         )
@@ -255,12 +266,154 @@ final class AgentStoreTests: XCTestCase {
                 kind: "todo",
                 title: "Do not retain the newly local source",
                 details: nil,
-                sourceRefs: [versionID]
+                sourceRefs: [versionID],
+                reminder: .unchanged
             )],
             nowMs: t0 + 3
         )
 
         XCTAssertEqual(try store.actionItems(status: "open", limit: 1).first?.sourceRefs, [])
+    }
+
+    func testAgentCreateAndUpdateApplyAcceptedReminderUsingStoreSetReminderPath() throws {
+        let versionID = try seedVersion(
+            sourceKey: "cursor:reminder",
+            content: "Deadline is today at 15:00."
+        )
+        let page = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50,
+            leaseMs: 60_000,
+            nowMs: t0
+        ))
+
+        _ = try store.completeAgentRun(
+            runID: page.runID,
+            ops: [
+                .create(
+                    kind: "todo",
+                    title: "Send draft",
+                    details: nil,
+                    sourceRefs: [versionID],
+                    reminder: .set(t0 + 3_600_000)
+                ),
+            ],
+            nowMs: t0
+        )
+        let itemID = try XCTUnwrap(try store.actionItems(status: "open", limit: 1).first?.id)
+
+        try seedVersions(1)
+        let updatePage = try XCTUnwrap(try store.claimNextAgentRun(
+            maxVersions: 50,
+            leaseMs: 60_000,
+            nowMs: t0 + 1
+        ))
+        _ = try store.completeAgentRun(
+            runID: updatePage.runID,
+            ops: [
+                .update(
+                    id: itemID,
+                    title: nil,
+                    details: nil,
+                    reminder: .set(t0 + 7_200_000)
+                ),
+            ],
+            nowMs: t0 + 1
+        )
+
+        XCTAssertEqual(
+            try store.actionItems(status: "open", limit: 1).first?.remindAtMs,
+            t0 + 7_200_000
+        )
+    }
+
+    func testDueRemindersIncludesOnlyDueUnremindedItemsInsideTwentyFourHourWindow() throws {
+        let nowMs: EpochMs = 10_000_000
+        try insertActionItem(id: "due", status: "open", remindAtMs: nowMs, remindedAtMs: nil)
+        try insertActionItem(id: "future", status: "open", remindAtMs: nowMs + 1, remindedAtMs: nil)
+        try insertActionItem(id: "already", status: "open", remindAtMs: nowMs - 1, remindedAtMs: nowMs)
+        try insertActionItem(
+            id: "expired",
+            status: "open",
+            remindAtMs: nowMs - ReminderWindow.maximumPastDueMs - 1,
+            remindedAtMs: nil
+        )
+
+        let due = try store.dueReminders(nowMs: nowMs)
+        let expired = try store.actionItems(status: "open", limit: 10)
+            .first { $0.id == "expired" }
+
+        XCTAssertEqual(due.map(\.id), ["due"])
+        XCTAssertEqual(expired?.remindedAtMs, nowMs)
+    }
+
+    func testResolveAndDismissClearReminderColumns() throws {
+        try insertActionItem(id: "resolve-me", status: "open", remindAtMs: t0 + 1_000, remindedAtMs: nil)
+        try insertActionItem(id: "dismiss-me", status: "open", remindAtMs: t0 + 2_000, remindedAtMs: nil)
+
+        try store.resolveActionItem("resolve-me", nowMs: t0 + 3_000)
+        try store.dismissActionItem("dismiss-me", nowMs: t0 + 3_000)
+
+        try db.dbQueue.read { database in
+            XCTAssertNil(try Int64.fetchOne(
+                database,
+                sql: "SELECT remind_at_ms FROM agent_action_items WHERE id='resolve-me'"
+            ))
+            XCTAssertNil(try Int64.fetchOne(
+                database,
+                sql: "SELECT remind_at_ms FROM agent_action_items WHERE id='dismiss-me'"
+            ))
+        }
+    }
+
+    func testDeleteAllAndPruneRemoveActionRowsThatContainReminderColumns() throws {
+        try insertActionItem(
+            id: "old-resolved",
+            status: "resolved",
+            remindAtMs: t0,
+            remindedAtMs: t0,
+            updatedAtMs: t0
+        )
+        _ = try store.pruneMemory(olderThan: t0 + 1)
+
+        let prunedCount = try db.dbQueue.read { database in
+            try Int.fetchOne(
+                database,
+                sql: "SELECT count(*) FROM agent_action_items WHERE id='old-resolved'"
+            )
+        }
+        XCTAssertEqual(prunedCount, 0)
+
+        try insertActionItem(id: "delete-me", status: "open", remindAtMs: t0 + 2, remindedAtMs: nil)
+        _ = try store.deleteAllMemory()
+
+        let remainingCount = try db.dbQueue.read { database in
+            try Int.fetchOne(database, sql: "SELECT count(*) FROM agent_action_items")
+        }
+        XCTAssertEqual(remainingCount, 0)
+    }
+
+    private func insertActionItem(
+        id: String,
+        status: String,
+        remindAtMs: EpochMs?,
+        remindedAtMs: EpochMs?,
+        updatedAtMs: EpochMs? = nil
+    ) throws {
+        try db.dbQueue.write { database in
+            try database.execute(
+                sql: """
+                    INSERT INTO agent_action_items (
+                        id, kind, status, title_ciphertext, details_ciphertext, source_refs,
+                        detected_at, updated_at, resolved_at, remind_at_ms, reminded_at_ms
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                arguments: [
+                    id, "todo", status, try AESGCMFieldCipher.testCipher.encrypt("Fixture \(id)"),
+                    nil, nil, t0, updatedAtMs ?? t0, status == "resolved" ? t0 : nil,
+                    remindAtMs, remindedAtMs,
+                ]
+            )
+        }
     }
 
     private func seedVersions(_ count: Int) throws {

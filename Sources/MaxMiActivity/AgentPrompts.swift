@@ -57,7 +57,10 @@ public enum AgentPrompts {
     }
 
     public static func hourlyReview(input: AgentReviewInput) -> String {
-        let nonce = UUID().uuidString
+        hourlyReview(input: input, nonce: UUID().uuidString)
+    }
+
+    static func hourlyReview(input: AgentReviewInput, nonce: String) -> String {
         let beginFence = "===BEGIN_UNTRUSTED_DATA_\(nonce)==="
         let endFence = "===END_UNTRUSTED_DATA_\(nonce)==="
         let bounded = HourlyAgent.boundedInput(
@@ -100,6 +103,8 @@ public enum AgentPrompts {
         - create: {"op":"create","kind":"todo","title":"...","details":"...","sourceRefs":["version_id"]}
         - update: {"op":"update","id":"item_id","title":"...","details":"..."}
         - resolve: {"op":"resolve","id":"item_id","evidence":"explicit evidence from the versions or timeline"}
+
+        Set `remind_at` only when the evidence states a concrete time or deadline for the item; otherwise omit it.
 
         \(beginFence)
 
