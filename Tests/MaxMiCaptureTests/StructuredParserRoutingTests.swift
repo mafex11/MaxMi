@@ -26,6 +26,39 @@ struct StubRefusingParser: StructuredParser {
     }
 }
 
+struct StubClassAttributeParser: StructuredParser {
+    static let config = ParserConfig(
+        app: "StubClassAttributes",
+        bundleIDs: ["com.example.shared"],
+        attributeSet: ["AXDOMClassList"]
+    )
+    func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? { nil }
+}
+
+struct StubIdentifierAttributeParser: StructuredParser {
+    static let config = ParserConfig(
+        app: "StubIdentifierAttributes",
+        bundleIDs: ["com.example.shared"],
+        attributeSet: ["AXDOMIdentifier"]
+    )
+    func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? { nil }
+}
+
+/// Models a native v2 parser's `SourceParser` bridge. A refusal must travel through
+/// `CaptureDispatch.parseDetailed` as no content rather than being degraded to generic content.
+struct StubRefusingStructuredBridge: SourceParser, StructuredParser {
+    static let config = ParserConfig(app: "StubRefusingBridge", bundleIDs: ["com.example.bridge"])
+
+    func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        throw ParserRefusal(reason: "no-content")
+    }
+
+    func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        _ = try parse(window, context: ParseContext(app: app))
+        return nil
+    }
+}
+
 final class StructuredParserRoutingTests: XCTestCase {
     func window(_ text: String = "body") -> AXNode {
         AXNode(role: "AXWindow", value: nil, title: "W", url: nil,
@@ -138,6 +171,19 @@ final class StructuredParserRoutingTests: XCTestCase {
                       "only names AXReader honours may be forced")
     }
 
+    func testForcedAttributesUnionEveryParserClaimingTheSameBundleID() {
+        let registry = ParserRegistry(
+            structuredParsers: [StubClassAttributeParser(), StubIdentifierAttributeParser()],
+            hostParsers: []
+        )
+
+        XCTAssertEqual(
+            registry.forcedAttributes(for: "com.example.shared"),
+            ["AXDOMClassList", "AXDOMIdentifier"],
+            "the AX snapshot must satisfy every parser that claims this bundle"
+        )
+    }
+
     func testTheRealRegistryExposesItsStructuredHosts() {
         // Every host entry must be lowercase, or the lookup can never hit it.
         for host in ParserRegistry().registeredStructuredHosts {
@@ -157,6 +203,20 @@ final class StructuredParserRoutingTests: XCTestCase {
         XCTAssertEqual(content, .document(Document(title: "native", blocks: [],
                                                    author: .unknown, url: nil)))
         XCTAssertEqual(parserName, "StubNativeParser")
+    }
+
+    func testStructuredParserRefusalReachesNativeDispatchAsNoContent() {
+        let registry = ParserRegistry(parsers: [
+            "com.example.bridge": StubRefusingStructuredBridge(),
+        ])
+        let result = CaptureDispatch.parseDetailed(
+            window: window(),
+            app: AppInfo(bundleID: "com.example.bridge", name: "Bridge", windowTitle: "W"),
+            registry: registry
+        )
+
+        XCTAssertEqual(result, .noContent,
+                       "AppWiring records this as .skipped(.parserNoContent), never a fallback")
     }
 
     func testAParserReturningNilFallsThroughToGenericPageExtractorAndNamesItself() throws {

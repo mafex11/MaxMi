@@ -33,8 +33,9 @@ public extension ParserRegistry {
     }
 
     func forcedAttributes(for bundleID: String) -> Set<String> {
-        guard let parser = structuredParsers[bundleID] else { return [] }
-        return Set(type(of: parser).config.attributeSet)
+        Set((structuredParserClaims[bundleID] ?? []).flatMap {
+            type(of: $0).config.attributeSet
+        })
     }
 
     var registeredStructuredHosts: [String] { hostParsers.keys.sorted() }

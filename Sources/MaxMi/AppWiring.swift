@@ -1925,6 +1925,20 @@ final class AppWiring {
                     startedAtMs: startedAtMs
                 )
             }
+        } catch let refusal as ParserRefusal {
+            // A refusing structured parser has explicitly said this window must not be stored.
+            // It is a normal skip, never a generic failure or a fallback capture.
+            SafeLogger.shared.log(
+                .info, subsystem: .capture, event: .parserRefused,
+                fields: SafeLogFields(
+                    parserID: SafeLogToken(validating: effectiveParserName),
+                    outcome: SafeLogToken(validating: refusal.reason)
+                )
+            )
+            recordCaptureHealth(
+                app: appInfo, trigger: trigger, parser: effectiveParserName,
+                outcome: .skipped(.parserNoContent), startedAtMs: startedAtMs
+            )
         } catch ExtractionError.addressFieldFocused {
             recordCaptureHealth(
                 app: appInfo, trigger: trigger, parser: effectiveParserName,

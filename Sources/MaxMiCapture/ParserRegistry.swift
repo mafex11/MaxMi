@@ -31,6 +31,9 @@ public struct ParserRegistry: Sendable {
                                            "com.apple.Terminal", "com.googlecode.iterm2"]
     private let parsers: [String: any SourceParser]
     let structuredParsers: [String: any StructuredParser]
+    /// All parsers claiming a bundle ID. `structuredParsers` keeps the selected parser for
+    /// routing; this preserves every declaration needed while the AX snapshot is being read.
+    let structuredParserClaims: [String: [any StructuredParser]]
     let hostParsers: [String: any StructuredParser]
 
     public init() {
@@ -63,13 +66,18 @@ public struct ParserRegistry: Sendable {
         // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
         let structured: [any StructuredParser] = []
         var byBundle: [String: any StructuredParser] = [:]
+        var bundleClaims: [String: [any StructuredParser]] = [:]
         var byHost: [String: any StructuredParser] = [:]
         for parser in structured {
             let config = type(of: parser).config
-            for bundleID in config.bundleIDs { byBundle[bundleID] = parser }
+            for bundleID in config.bundleIDs {
+                byBundle[bundleID] = parser
+                bundleClaims[bundleID, default: []].append(parser)
+            }
             for host in config.hosts { byHost[host.lowercased()] = parser }
         }
         structuredParsers = byBundle
+        structuredParserClaims = bundleClaims
         hostParsers = byHost
         parsers = p
     }
@@ -81,6 +89,7 @@ public struct ParserRegistry: Sendable {
         self.parsers = parsers
         // A seam registry exercises the v1 dispatch branches only; it registers no v2 parser.
         self.structuredParsers = [:]
+        self.structuredParserClaims = [:]
         self.hostParsers = [:]
     }
 
@@ -89,14 +98,19 @@ public struct ParserRegistry: Sendable {
     init(structuredParsers: [any StructuredParser], hostParsers: [any StructuredParser]) {
         parsers = [:]
         var byBundle: [String: any StructuredParser] = [:]
+        var bundleClaims: [String: [any StructuredParser]] = [:]
         var byHost: [String: any StructuredParser] = [:]
         for parser in structuredParsers {
-            for bundleID in type(of: parser).config.bundleIDs { byBundle[bundleID] = parser }
+            for bundleID in type(of: parser).config.bundleIDs {
+                byBundle[bundleID] = parser
+                bundleClaims[bundleID, default: []].append(parser)
+            }
         }
         for parser in hostParsers {
             for host in type(of: parser).config.hosts { byHost[host.lowercased()] = parser }
         }
         self.structuredParsers = byBundle
+        self.structuredParserClaims = bundleClaims
         self.hostParsers = byHost
     }
 
