@@ -3,11 +3,12 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class TeamsWebParserTests: XCTestCase {
-    func node(_ role: String, value: String? = nil, label: String? = nil,
+    func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
               identifier: String? = nil, domClassList: [String]? = nil,
               domIdentifier: String? = nil, placeholder: String? = nil,
-              subrole: String? = nil, frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
-        AXNode(role: role, value: value, title: nil, url: nil,
+              subrole: String? = nil, url: String? = nil, frame: CGRect? = nil,
+              children: [AXNode] = []) -> AXNode {
+        AXNode(role: role, value: value, title: title, url: url,
                frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
                children: children, identifier: identifier, label: label, subrole: subrole,
                headingLevel: nil, selected: false, placeholder: placeholder, selectedText: nil,
@@ -69,6 +70,16 @@ final class TeamsWebParserTests: XCTestCase {
                                   windowTitle: title), url: url)
     }
 
+    func browserWindow(url: String) -> AXNode {
+        node("AXWindow", title: "Browser tab",
+             frame: CGRect(x: 0, y: 0, width: 1200, height: 800), children: [
+            node("AXWebArea", title: "Fallback page", url: url,
+                 frame: CGRect(x: 0, y: 40, width: 1200, height: 760), children: [
+                text("Readable fallback page.", nil, y: 80, x: 20),
+            ]),
+        ])
+    }
+
     func conversation(_ content: CapturedContent?) throws -> Conversation {
         guard case .conversation(let c) = try XCTUnwrap(content) else {
             throw XCTSkip("expected .conversation, got \(String(describing: content))")
@@ -96,19 +107,43 @@ final class TeamsWebParserTests: XCTestCase {
         XCTAssertEqual(WebAppCaptureParser.classify(url: "https://example.com/"), .generic)
     }
 
-    func testKeyDerivationIsUnchangedForEveryWebHostInThisPhase() {
-        // §14b keeps every existing thread key stable. These five are asserted together so a
-        // future normalizer edit cannot silently fork one host's threads.
-        for url in [
-            "https://mail.google.com/mail/u/0/#inbox/FMfcgzQbfWxyz",
-            "https://www.linkedin.com/messaging/thread/2-abc123def==",
-            "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00&exvsurl=1",
-            "https://app.slack.com/client/T01/C02/thread/C02-1234",
-            "https://teams.cloud.microsoft/v2/#/conversations/19:abc?ctx=chat",
-        ] {
-            XCTAssertEqual(URLKeyNormalizer.normalize(url), URLKeyNormalizer.normalize(url),
-                           "normalize must stay deterministic for \(url)")
+    func testKeyDerivationIsUnchangedForEveryWebHostInThisPhase() throws {
+        // §14b keeps every existing thread key stable. `BrowserCapturePipeline` is where a
+        // registered host parser's capture gets its source key, so drive each registered parser
+        // through its host route and compare that key to the explicitly recorded pre-Phase-D key.
+        let cases: [(host: String, parser: String, url: String, prePhaseDKey: String)] = [
+            ("mail.google.com", "GmailParser",
+             "https://mail.google.com/mail/u/0/#inbox/FMfcgzQbfWxyz",
+             "https://mail.google.com/mail/u/0/#inbox/FMfcgzQbfWxyz"),
+            ("www.linkedin.com", "LinkedInMessagingParser",
+             "https://www.linkedin.com/messaging/thread/2-abc123def==",
+             "https://www.linkedin.com/messaging/thread/2-abc123def=="),
+            ("outlook.office.com", "OutlookWebParser",
+             "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00&exvsurl=1",
+             "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00"),
+            ("app.slack.com", "SlackParser",
+             "https://app.slack.com/client/T01/C02/thread/C02-1234",
+             "https://app.slack.com/client/T01/C02"),
+            ("teams.microsoft.com", "TeamsWebParser",
+             "https://teams.microsoft.com/v2/#/conversations/19:abc?ctx=chat",
+             "https://teams.microsoft.com/v2/#/conversations/19:abc?ctx=chat"),
+        ]
+        let registry = ParserRegistry()
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+
+        for item in cases {
+            XCTAssertNotNil(registry.structuredParser(forHost: item.host), item.host)
+            let result = try BrowserCapturePipeline.parse(
+                window: browserWindow(url: item.url), windowTitle: "Fallback page", browser: browser
+            )
+            let keyFromRegisteredParser = result.capture.sourceKey
+            let prePhaseDKey = item.prePhaseDKey
+            XCTAssertTrue(result.parserID.contains("fallback/\(item.parser)"), item.host)
+            XCTAssertEqual(keyFromRegisteredParser, prePhaseDKey, item.host)
         }
+    }
+
+    func testTeamsCloudMicrosoftKeepsItsExistingGenericKeyDerivation() {
         XCTAssertEqual(URLKeyNormalizer.normalize("https://teams.microsoft.com/v2/#/x?ctx=chat"),
                        "https://teams.microsoft.com/v2/#/x?ctx=chat",
                        "teams.microsoft.com preserves fragment content unchanged")
