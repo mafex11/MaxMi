@@ -51,7 +51,8 @@ final class RemindersStructuredTests: XCTestCase {
 
     func tasks(_ content: CapturedContent?) throws -> [TaskItem] {
         guard case .tasks(let items) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .tasks, got \(String(describing: content))")
+            XCTFail("expected .tasks, got \(String(describing: content))")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return items
     }

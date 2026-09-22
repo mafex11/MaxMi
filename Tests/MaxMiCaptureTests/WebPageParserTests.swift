@@ -47,7 +47,8 @@ final class WebPageParserTests: XCTestCase {
 
     func page(_ content: CapturedContent) throws -> GenericPage {
         guard case .generic(let page) = content else {
-            throw XCTSkip("expected .generic, got \(content)")
+            XCTFail("expected .generic, got \(content)")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return page
     }

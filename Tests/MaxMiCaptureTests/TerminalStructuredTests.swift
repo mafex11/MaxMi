@@ -21,7 +21,8 @@ final class TerminalStructuredTests: XCTestCase {
 
     func session(_ content: CapturedContent?) throws -> TerminalSession {
         guard case .terminal(let session) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected a .terminal shape, got \(String(describing: content))")
+            XCTFail("expected a .terminal shape, got \(String(describing: content))")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return session
     }

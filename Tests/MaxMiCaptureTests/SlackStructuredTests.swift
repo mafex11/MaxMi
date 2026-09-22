@@ -54,7 +54,8 @@ final class SlackStructuredTests: XCTestCase {
 
     func conversation(_ content: CapturedContent?) throws -> Conversation {
         guard case .conversation(let c) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .conversation, got \(String(describing: content))")
+            XCTFail("expected .conversation, got \(String(describing: content))")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return c
     }

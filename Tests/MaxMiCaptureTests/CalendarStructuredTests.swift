@@ -61,7 +61,8 @@ final class CalendarStructuredTests: XCTestCase {
 
     func events(_ content: CapturedContent?) throws -> [CalendarEvent] {
         guard case .calendar(let events) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .calendar, got \(String(describing: content))")
+            XCTFail("expected .calendar, got \(String(describing: content))")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return events
     }

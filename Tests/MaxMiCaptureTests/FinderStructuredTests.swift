@@ -67,7 +67,8 @@ final class FinderStructuredTests: XCTestCase {
 
     func page(_ content: CapturedContent?) throws -> GenericPage {
         guard case .generic(let page) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .generic, got \(String(describing: content))")
+            XCTFail("expected .generic, got \(String(describing: content))")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return page
     }

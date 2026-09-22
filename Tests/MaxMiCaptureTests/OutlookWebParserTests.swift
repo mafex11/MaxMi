@@ -115,14 +115,16 @@ final class OutlookWebParserTests: XCTestCase {
 
     func conversation(_ content: CapturedContent?) throws -> Conversation {
         guard case .conversation(let c) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .conversation, got \(String(describing: content))")
+            XCTFail("expected .conversation, got \(String(describing: content))")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return c
     }
 
     func page(_ content: CapturedContent?) throws -> GenericPage {
         guard case .generic(let p) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .generic, got \(String(describing: content))")
+            XCTFail("expected .generic, got \(String(describing: content))")
+            throw NSError(domain: "ExpectedContentShape", code: 1)
         }
         return p
     }
