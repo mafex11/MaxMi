@@ -1,0 +1,40 @@
+{
+  "role": "AXWindow",
+  "title": "WhatsApp",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1000, "height": 700 },
+  "children": [
+    {
+      "role": "AXHeading",
+      "value": "Weekend Plans",
+      "label": "conversation title",
+      "focused": false,
+      "frame": { "x": 340, "y": 20, "width": 220, "height": 22 },
+      "children": []
+    },
+    {
+      "role": "AXCell",
+      "identifier": "WAMessageBubbleTableViewCell",
+      "label": "Mira: bringing snacks",
+      "focused": false,
+      "frame": { "x": 340, "y": 100, "width": 300, "height": 44 },
+      "children": []
+    },
+    {
+      "role": "AXCell",
+      "identifier": "WAMessageBubbleTableViewCell",
+      "label": "Niko: arranging rides",
+      "focused": false,
+      "frame": { "x": 340, "y": 160, "width": 300, "height": 44 },
+      "children": []
+    },
+    {
+      "role": "AXCell",
+      "identifier": "WAMessageBubbleTableViewCell",
+      "label": "You: I will bring drinks",
+      "focused": false,
+      "frame": { "x": 660, "y": 220, "width": 300, "height": 44 },
+      "children": []
+    }
+  ]
+}

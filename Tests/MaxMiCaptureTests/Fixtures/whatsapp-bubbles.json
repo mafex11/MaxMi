@@ -1,0 +1,75 @@
+{
+  "role": "AXWindow",
+  "title": "WhatsApp",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1000, "height": 700 },
+  "children": [
+    {
+      "role": "AXGroup",
+      "label": "Chats",
+      "focused": false,
+      "frame": { "x": 0, "y": 0, "width": 300, "height": 700 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Archived",
+          "focused": false,
+          "frame": { "x": 20, "y": 36, "width": 120, "height": 18 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXHeading",
+      "value": "Contact Quill",
+      "label": "conversation title",
+      "focused": false,
+      "frame": { "x": 340, "y": 20, "width": 220, "height": 22 },
+      "children": []
+    },
+    {
+      "role": "AXCell",
+      "identifier": "WAMessageBubbleTableViewCell",
+      "focused": false,
+      "frame": { "x": 340, "y": 100, "width": 300, "height": 44 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "synthetic inbound note",
+          "focused": false,
+          "frame": { "x": 360, "y": 108, "width": 220, "height": 18 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "16:02",
+          "focused": false,
+          "frame": { "x": 560, "y": 128, "width": 40, "height": 12 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXCell",
+      "identifier": "WAMessageBubbleTableViewCell",
+      "focused": false,
+      "frame": { "x": 660, "y": 164, "width": 300, "height": 44 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "synthetic outbound note",
+          "focused": false,
+          "frame": { "x": 680, "y": 172, "width": 220, "height": 18 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "16:04",
+          "focused": false,
+          "frame": { "x": 880, "y": 192, "width": 40, "height": 12 },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

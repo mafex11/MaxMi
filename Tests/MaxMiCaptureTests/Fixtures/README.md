@@ -48,6 +48,25 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `obsidian-offset-preview.json` | Hand-authored Obsidian reading pane at a nonzero origin with navigator chrome retained | `ObsidianParser` preview anchor and origin invariance |
 | `obsidian-offset-preview-golden.json` | Expected `CapturedContent` for `obsidian-offset-preview.json` | golden comparison |
 | <!-- // lane-a end --> |  |  |
+<!-- // lane-b begin -->
+| `slack-dom-messages.json` | Hand-authored Slack DOM-class message list with an invented composer draft | `SlackParser` DOM-class message and draft anchors |
+| `slack-dom-messages-golden.json` | Golden `CapturedContentEnvelope` for `slack-dom-messages.json` | `SlackParser` DOM-class conversation output |
+| `discord-messages.json` | Hand-authored Discord transcript list at the origin with grouped messages, reaction chrome, and a sidebar | `DiscordParser` tree-order sender attribution |
+| `discord-messages-golden.json` | Golden `CapturedContentEnvelope` for `discord-messages.json` | `DiscordParser` conversation output |
+| `discord-offset-messages.json` | Hand-authored Discord transcript list at a nonzero origin with the same semantic content | `DiscordParser` geometry-free output |
+| `messages-thread.json` | Hand-authored Messages thread for invented Priya Vantar at the origin, with left and right bubbles plus a delivery status | `MessagesParser` bubble-side authorship |
+| `messages-thread-golden.json` | Golden `CapturedContentEnvelope` for `messages-thread.json` | `MessagesParser` conversation output |
+| `messages-offset-thread.json` | Hand-authored Messages thread for invented Priya Vantar at a nonzero origin with the same left and right bubble geometry | `MessagesParser` window-relative authorship |
+| `messages-offset-thread-golden.json` | Golden `CapturedContentEnvelope` for `messages-offset-thread.json` | `MessagesParser` conversation output |
+| `whatsapp-bubbles.json` | Hand-authored WhatsApp bubble-cell thread at the origin with a sidebar and timestamp nodes | `WhatsAppParser` bubble-cell anchor |
+| `whatsapp-bubbles-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-bubbles.json` | `WhatsAppParser` conversation output |
+| `whatsapp-offset-bubbles.json` | Hand-authored WhatsApp bubble-cell thread at a nonzero origin with the same semantic content | `WhatsAppParser` window-relative authorship |
+| `whatsapp-offset-bubbles-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-offset-bubbles.json` | `WhatsAppParser` conversation output |
+| `whatsapp-group-senders.json` | Hand-authored WhatsApp group chat with combined named bubble-cell labels | `WhatsAppParser` structural sender attribution |
+| `whatsapp-group-senders-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-group-senders.json` | `WhatsAppParser` group conversation output |
+| `whatsapp-direct-senders.json` | Hand-authored WhatsApp 1:1 chat for invented Priya Vantar, with left and right bubble cells | `WhatsAppParser` bubble-side user attribution |
+| `whatsapp-direct-senders-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-direct-senders.json` | `WhatsAppParser` direct conversation output |
+<!-- // lane-b end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
 minimum role/frame structure required for a regression test.

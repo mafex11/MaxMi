@@ -1,0 +1,29 @@
+{
+  "role": "AXWindow",
+  "title": "Priya Vantar",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 900, "height": 700 },
+  "children": [
+    {
+      "role": "AXTextArea",
+      "value": "review has begun",
+      "focused": false,
+      "frame": { "x": 40, "y": 100, "width": 300, "height": 40 },
+      "children": []
+    },
+    {
+      "role": "AXTextArea",
+      "value": "noted, I will verify",
+      "focused": false,
+      "frame": { "x": 540, "y": 160, "width": 300, "height": 40 },
+      "children": []
+    },
+    {
+      "role": "AXStaticText",
+      "value": "Delivered",
+      "focused": false,
+      "frame": { "x": 700, "y": 205, "width": 100, "height": 14 },
+      "children": []
+    }
+  ]
+}

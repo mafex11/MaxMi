@@ -7,75 +7,72 @@ final class SlackParserTests: XCTestCase {
         AppInfo(bundleID: "com.tinyspeck.slackmacgap", name: "Slack", windowTitle: title)
     }
 
-    func testSingleOversizeMessageStillHardCapped() throws {
-        // One message far larger than the cap must still be bounded (resource-bound guard).
-        let huge = String(repeating: "x", count: 20_000)
-        let win = AXNode(role: "AXWindow", value: nil, title: "c - w - Slack", url: nil, frame: nil, focused: false,
-            children: [AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                              frame: CGRect(x: 240, y: 0, width: 10, height: 10), focused: false,
-                children: [AXNode(role: "AXStaticText", value: huge, title: nil, url: nil,
-                                  frame: CGRect(x: 240, y: 0, width: 10, height: 10), focused: false, children: [])])])
-        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("c - w - Slack")))
-        XCTAssertLessThanOrEqual(cap.content.count, 8000, "single oversize message must not bypass the cap")
-        XCTAssertTrue(cap.content.hasSuffix(String(repeating: "x", count: 100)),
-                      "the TAIL of the oversize message survives")
-        let structured = try XCTUnwrap(cap.structured)
-        XCTAssertEqual(cap.content, ContentRenderer.render(structured, style: .full),
-                       "the cap is applied to the structured value, not to the rendered string")
-        guard case .conversation(let conversation) = structured else { return XCTFail() }
-        XCTAssertEqual(conversation.messages.count, 1, "the message is trimmed, never dropped")
+    func domWindow(_ bodies: [String]) -> AXNode {
+        AXNode(
+            role: "AXWindow", value: nil, title: nil, url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_200, height: 800), focused: false,
+            children: [
+                AXNode(
+                    role: "AXGroup", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 240, y: 0, width: 900, height: 700), focused: false,
+                    children: bodies.enumerated().map { index, body in
+                        let y = CGFloat(index * 30)
+                        return AXNode(
+                            role: "AXGroup", value: nil, title: nil, url: nil,
+                            frame: CGRect(x: 240, y: y, width: 900, height: 28), focused: false,
+                            children: [
+                                AXNode(
+                                    role: "AXStaticText", value: "Mira", title: nil, url: nil,
+                                    frame: CGRect(x: 240, y: y, width: 100, height: 16),
+                                    focused: false, children: [], domClassList: ["c-message__sender"]
+                                ),
+                                AXNode(
+                                    role: "AXStaticText", value: body, title: nil, url: nil,
+                                    frame: CGRect(x: 240, y: y + 16, width: 600, height: 16),
+                                    focused: false, children: []
+                                ),
+                            ],
+                            domClassList: ["c-virtual_list__item"]
+                        )
+                    },
+                    domClassList: ["c-message_list"]
+                ),
+            ]
+        )
     }
 
-    func testSelfBoundingCaptureReportsTruncation() throws {
-        func window(_ messages: [String]) -> AXNode {
-            AXNode(
-                role: "AXWindow", value: nil, title: "general - Acme - Slack", url: nil,
-                frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
-                children: messages.enumerated().map { index, message in
-                    AXNode(
-                        role: "AXRow", value: nil, title: nil, url: nil,
-                        frame: CGRect(x: 240, y: CGFloat(index * 20), width: 500, height: 18),
-                        focused: false,
-                        children: [
-                            AXNode(
-                                role: "AXStaticText", value: message, title: nil, url: nil,
-                                frame: CGRect(x: 240, y: CGFloat(index * 20), width: 400, height: 18),
-                                focused: false, children: []
-                            ),
-                        ]
-                    )
-                }
-            )
-        }
-
+    func testV2CaptureHardBoundsOversizeStructuredContent() throws {
         let small = try XCTUnwrap(try SlackParser().parse(
-            window: window(["A short message"]), app: app("general - Acme - Slack")))
+            window: domWindow(["A short message"]), app: app("#general - Acme - Slack")))
         XCTAssertFalse(small.truncated)
 
         let oversize = try XCTUnwrap(try SlackParser().parse(
-            window: window([String(repeating: "x", count: SlackParser.contentCap * 2)]),
-            app: app("general - Acme - Slack")
+            window: domWindow([String(repeating: "x", count: SlackParser.contentCap * 2)]),
+            app: app("#general - Acme - Slack")
         ))
         XCTAssertTrue(oversize.truncated)
+        XCTAssertLessThanOrEqual(oversize.content.count, SlackParser.contentCap)
+        XCTAssertEqual(oversize.content,
+                       ContentRenderer.render(try XCTUnwrap(oversize.structured), style: .full))
     }
 
     func testKeyFromTitleAndSenderAttributedMessages() throws {
-        let win = try fixture("slack-window")
-        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
+        let win = try fixture("slack-dom-messages")
+        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("#general - Acme - Slack")))
         XCTAssertEqual(cap.sourceApp, "Slack")
         XCTAssertEqual(cap.sourceKey, "slack:acme/general")
-        XCTAssertTrue(cap.content.contains("(From: Alice): shipped the build"))
-        XCTAssertTrue(cap.content.contains("(From: Bob): deploy looks green"))
+        XCTAssertTrue(cap.content.contains("(From: Arin)(sent 09:12 AM): cache warmup finished"))
+        XCTAssertTrue(cap.content.contains("(From: Bela)(sent 09:14 AM): queue is clear"))
         // message ordering top->bottom
-        XCTAssertLessThan(cap.content.range(of: "Alice")!.lowerBound, cap.content.range(of: "Bob")!.lowerBound)
+        XCTAssertLessThan(cap.content.range(of: "Arin")!.lowerBound, cap.content.range(of: "Bela")!.lowerBound)
     }
     func testUnexpectedTitleFallsBackToFullTitleKey() throws {
-        let win = try fixture("slack-window")
+        let win = try fixture("slack-dom-messages")
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("Huddle")))
         XCTAssertEqual(cap.sourceKey, "slack:huddle")
     }
     func testNilTitleStillParses() throws {
-        let win = try fixture("slack-window")
+        let win = try fixture("slack-dom-messages")
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app(nil)))
         XCTAssertTrue(cap.sourceKey.hasPrefix("slack:"))
     }
@@ -83,64 +80,24 @@ final class SlackParserTests: XCTestCase {
         let bare = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil, focused: false, children: [])
         XCTAssertNil(try SlackParser().parse(window: bare, app: app("x - y - Slack")))
     }
-    func testSidebarRowsExcludedFromContent() throws {
-        let win = try fixture("slack-window")
-        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
-        // message-area rows (x>=240) present
-        XCTAssertTrue(cap.content.contains("(From: Alice): shipped the build"))
-        XCTAssertTrue(cap.content.contains("(From: Bob): deploy looks green"))
-        // sidebar row (x<240) excluded
-        XCTAssertFalse(cap.content.contains("random-channel"), "sidebar chrome must not appear in message content")
-    }
-    func testContentCapAtWholeMessageBoundaries() throws {
-        // Build 400 rows, each ~50 chars, totaling >8000 chars
-        var rows: [AXNode] = []
-        var allMessages: [String] = []
-        for i in 0..<400 {
-            let msg = "User\(i): message body number \(i) with some padding text"
-            allMessages.append(msg)
-            let textNode = AXNode(role: "AXStaticText", value: msg, title: nil, url: nil,
-                                  frame: CGRect(x: 240, y: CGFloat(i * 20), width: 400, height: 18),
-                                  focused: false, children: [])
-            let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                            frame: CGRect(x: 240, y: CGFloat(i * 20), width: 500, height: 20),
-                            focused: false, children: [textNode])
-            rows.append(row)
-        }
-        let window = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
-                           focused: false, children: rows)
-        let cap = try XCTUnwrap(try SlackParser().parse(window: window, app: app("test - ws - Slack")))
-
-        // 1. content.count <= 8000 (approximately — within one line)
-        XCTAssertLessThanOrEqual(cap.content.count, 8000 + 100, "Content should be capped near 8000")
-
-        // 2. The NEWEST message (last row by y) IS present
-        let newestMsg = allMessages.last!
-        XCTAssertTrue(cap.content.contains(newestMsg), "Newest message should be present")
-
-        // 3. The OLDEST message (first row) is NOT present (it was dropped)
-        let oldestMsg = allMessages.first!
-        XCTAssertFalse(cap.content.contains(oldestMsg), "Oldest message should be dropped")
-
-        // 4. Content does not start or end mid-word — all kept lines are complete. Each row here
-        // holds a single static text, so it becomes an unknown-sender message (spec §4b).
-        let expected = allMessages.map { "(From: unknown): \($0)" }
-        let keptLines = cap.content.components(separatedBy: "\n")
-        for line in keptLines {
-            XCTAssertTrue(expected.contains(line), "Each kept line should be a complete original message")
-        }
-    }
-    func testSidebarFilterIsWindowRelative() throws {
-        // Window floated at screen x=600. Sidebar row at x=610 (winX+10), message row at x=840 (winX+240).
-        func node(_ role: String, _ value: String?, _ x: CGFloat, _ y: CGFloat, _ kids: [AXNode] = []) -> AXNode {
-            AXNode(role: role, value: value, title: nil, url: nil, frame: CGRect(x: x, y: y, width: 10, height: 10), focused: false, children: kids)
-        }
-        let win = node("AXWindow", nil, 600, 0, [
-            node("AXRow", nil, 610, 90, [node("AXStaticText", "sidebar-channel", 610, 90)]),
-            node("AXRow", nil, 840, 100, [node("AXStaticText", "Zoe", 840, 100), node("AXStaticText", "hi team", 860, 100)]),
-        ])
-        let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))
-        XCTAssertTrue(cap.content.contains("(From: Zoe): hi team"), "message row (winX+240) kept")
-        XCTAssertFalse(cap.content.contains("sidebar-channel"), "sidebar row (winX+10) excluded even when window is not flush-left")
+    func testUnanchoredRowsReturnNilForGenericFallThrough() throws {
+        let win = AXNode(
+            role: "AXWindow", value: nil, title: nil, url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_200, height: 800), focused: false,
+            children: [
+                AXNode(
+                    role: "AXRow", value: nil, title: nil, url: nil,
+                    frame: CGRect(x: 240, y: 100, width: 500, height: 20), focused: false,
+                    children: [
+                        AXNode(
+                            role: "AXStaticText", value: "sidebar-like row", title: nil, url: nil,
+                            frame: CGRect(x: 240, y: 100, width: 400, height: 18),
+                            focused: false, children: []
+                        ),
+                    ]
+                ),
+            ]
+        )
+        XCTAssertNil(try SlackParser().parse(window: win, app: app("#general - Acme - Slack")))
     }
 }

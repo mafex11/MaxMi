@@ -91,7 +91,7 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.sourceKey, "md.obsidian:Roadmap - Research - Obsidian v1.5")
     }
 
-    func testDiscordKeepsItsOwnChromeFilteringWrappedInGenericBlocks() throws {
+    func testDiscordWithoutATranscriptAnchorFallsThroughToGenericV2() throws {
         let window = body([
             text("Add Reaction", y: 10),
             text("Ana", y: 30),
@@ -99,25 +99,22 @@ final class GenericV2ParserTests: XCTestCase {
         ], title: "#general | Acme - Discord")
         let app = AppInfo(bundleID: ParserRegistry.discordBundleID, name: "Discord",
                           windowTitle: "#general | Acme - Discord")
-        let capture = try XCTUnwrap(try DiscordParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.contentKind, .conversation)
-        XCTAssertFalse(capture.content.contains("Add Reaction"),
-                       "the app-specific chrome filter is preserved")
+        let result = CaptureDispatch.parseDetailed(window: window, app: app, registry: ParserRegistry())
+        guard case .parsedByFallback(let capture, let failedParser) = result else {
+            return XCTFail("expected the generic fallback, got \(result)")
+        }
+        XCTAssertEqual(failedParser, "DiscordParser")
+        XCTAssertEqual(capture.contentKind, .generic)
+        XCTAssertTrue(capture.content.contains("Add Reaction"))
         XCTAssertTrue(capture.content.contains("Great work everyone!"))
-        guard case .generic(let page) = try XCTUnwrap(capture.structured) else {
+        guard case .generic = try XCTUnwrap(capture.structured) else {
             return XCTFail("expected .generic")
         }
-        XCTAssertEqual(page.regions.map(\.kind), [.main])
-        XCTAssertEqual(page.regions[0].blocks.map(\.type),
-                       Array(repeating: BlockType.paragraph, count: page.regions[0].blocks.count))
         XCTAssertEqual(capture.content, ContentRenderer.render(capture.structured!, style: .full))
-        // Task 9's accumulation bridge keys on this pair, which is what keeps cross-window
-        // appending alive until the anchored parser lands in Phase D.
-        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
-        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
+        XCTAssertEqual(capture.accumulationPolicy, .replace)
     }
 
-    func testMessagesKeepsBubbleOrderWrappedInGenericBlocks() throws {
+    func testMessagesKeepsBubbleOrderAsATypedConversation() throws {
         let window = body([
             AXNode(role: "AXTextArea", value: "call me", title: nil, url: nil,
                    frame: CGRect(x: 300, y: 300, width: 400, height: 20), focused: false, children: []),
@@ -129,10 +126,16 @@ final class GenericV2ParserTests: XCTestCase {
         let capture = try XCTUnwrap(try MessagesParser().parse(window: window, app: app))
         XCTAssertEqual(capture.sourceKey, "imessage:harnish")
         XCTAssertEqual(capture.contentKind, .conversation)
-        XCTAssertEqual(capture.content, "hey are you free\ncall me")
-        XCTAssertEqual(try XCTUnwrap(capture.structured).kind, .generic)
-        // Same Task 9 bridge precondition as Discord.
-        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
+        XCTAssertEqual(capture.content,
+                       ContentRenderer.render(try XCTUnwrap(capture.structured), style: .full))
+        guard case .conversation(let conversation) = try XCTUnwrap(capture.structured) else {
+            return XCTFail("expected .conversation")
+        }
+        XCTAssertEqual(conversation.channel, "Harnish")
+        XCTAssertEqual(conversation.messages.map(\.text), ["hey are you free", "call me"])
+        XCTAssertEqual(conversation.messages.map(\.sender), ["Harnish", "Harnish"])
+        XCTAssertEqual(conversation.messages.map(\.isUser), [false, false])
+        XCTAssertFalse(try XCTUnwrap(capture.structured).isLegacyShaped)
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 

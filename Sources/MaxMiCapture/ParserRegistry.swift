@@ -67,7 +67,7 @@ public struct ParserRegistry: Sendable {
         // two maps below are derived, never hand-maintained in parallel with the list. Tasks 7-26
         // append to this ONE list; by the end of Phase D it holds the seventeen entries written
         // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
-        let structured: [any StructuredParser] = [
+        var structured: [any StructuredParser] = [
             // lane-a begin
             TerminalParser(),
             EditorParser(),
@@ -76,6 +76,9 @@ public struct ParserRegistry: Sendable {
             ObsidianParser(),
             // lane-a end
         ]
+        // lane-b begin
+        structured.append(contentsOf: [SlackParser(), DiscordParser(), MessagesParser(), WhatsAppParser()] as [any StructuredParser])
+        // lane-b end
         var byBundle: [String: any StructuredParser] = [:]
         var bundleClaims: [String: [any StructuredParser]] = [:]
         var byHost: [String: any StructuredParser] = [:]
