@@ -4,16 +4,25 @@ import MaxMiCore
 
 final class ObsidianStructuredTests: XCTestCase {
     func node(_ role: String, value: String? = nil, domClassList: [String]? = nil,
-              headingLevel: Int? = nil, frame: CGRect, children: [AXNode] = []) -> AXNode {
+              headingLevel: Int? = nil, subrole: String? = nil, selectedText: String? = nil,
+              frame: CGRect, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: nil, frame: frame, focused: false,
-               children: children, identifier: nil, label: nil, subrole: nil,
-               headingLevel: headingLevel, selected: false, placeholder: nil, selectedText: nil,
+               children: children, identifier: nil, label: nil, subrole: subrole,
+               headingLevel: headingLevel, selected: false, placeholder: nil,
+               selectedText: selectedText,
                hidden: false, domClassList: domClassList, domIdentifier: nil)
     }
 
-    func window(paneClass: String, origin: CGPoint = .zero) -> AXNode {
+    func window(paneClass: String, origin: CGPoint = .zero,
+                paneChildren: [AXNode] = []) -> AXNode {
         let x = origin.x
         let y = origin.y
+        let pane = [
+            node("AXHeading", value: "Index rebuild", headingLevel: 2,
+                 frame: CGRect(x: x + 320, y: y + 80, width: 400, height: 28)),
+            node("AXStaticText", value: "vec0 uses L2, not cosine.",
+                 frame: CGRect(x: x + 320, y: y + 120, width: 600, height: 20)),
+        ] + paneChildren
         return node("AXWindow", frame: CGRect(origin: origin,
                                              size: CGSize(width: 1300, height: 850)),
                     children: [
@@ -23,12 +32,8 @@ final class ObsidianStructuredTests: XCTestCase {
                      frame: CGRect(x: x + 10, y: y + 20, width: 200, height: 16)),
             ]),
             node("AXGroup", domClassList: [paneClass],
-                 frame: CGRect(x: x + 300, y: y + 40, width: 1000, height: 810), children: [
-                node("AXHeading", value: "Index rebuild", headingLevel: 2,
-                     frame: CGRect(x: x + 320, y: y + 80, width: 400, height: 28)),
-                node("AXStaticText", value: "vec0 uses L2, not cosine.",
-                     frame: CGRect(x: x + 320, y: y + 120, width: 600, height: 20)),
-            ]),
+                 frame: CGRect(x: x + 300, y: y + 40, width: 1000, height: 810),
+                 children: pane),
         ])
     }
 
@@ -39,7 +44,8 @@ final class ObsidianStructuredTests: XCTestCase {
 
     func document(_ content: CapturedContent?) throws -> Document {
         guard case .document(let doc) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .document, got \(String(describing: content))")
+            XCTFail("expected .document, got \(String(describing: content))")
+            throw NSError(domain: "ObsidianStructuredTests", code: 1)
         }
         return doc
     }
@@ -86,6 +92,46 @@ final class ObsidianStructuredTests: XCTestCase {
             window(paneClass: "cm-editor"),
             context: context("Index rebuild - Research - Obsidian v1.5.3")))
         XCTAssertFalse(doc.blocks.contains { $0.text == "Daily notes" })
+    }
+
+    func testSecureFieldsInsideThePaneAreNeverCaptured() throws {
+        let secrets = ["role secret", "subrole secret", "selected secret"]
+        let content = try XCTUnwrap(ObsidianParser().parse(
+            window(paneClass: "cm-editor", paneChildren: [
+                node("AXSecureTextField", value: secrets[0],
+                     frame: CGRect(x: 320, y: 180, width: 300, height: 24)),
+                node("AXStaticText", value: secrets[1],
+                     subrole: GenericPageExtractor.secureSubrole, selectedText: secrets[2],
+                     frame: CGRect(x: 320, y: 220, width: 300, height: 24)),
+            ]),
+            context: context("Index rebuild - Research - Obsidian v1.5.3")))
+        let doc = try document(content)
+        let rendered = ContentRenderer.render(content, style: .full)
+        for secret in secrets {
+            XCTAssertFalse(doc.title.contains(secret))
+            XCTAssertFalse(doc.blocks.contains { $0.text.contains(secret) })
+            XCTAssertFalse(rendered.contains(secret))
+        }
+    }
+
+    func testStructuredPathBoundsOversizeDocumentsAndV1MarksThemTruncated() throws {
+        let paneChildren = (0..<40).map { index in
+            node("AXStaticText", value: "line \(index) " + String(repeating: "x", count: 1_000),
+                 frame: CGRect(x: 320, y: CGFloat(200 + index * 20), width: 600, height: 20))
+        }
+        let snapshot = window(paneClass: "cm-editor", paneChildren: paneChildren)
+        let title = "Index rebuild - Research - Obsidian v1.5.3"
+        let v2 = try XCTUnwrap(ObsidianParser().parse(snapshot, context: context(title)))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(v2, style: .full).count,
+            StructuredEntityExtraction.pageBudget
+        )
+
+        let app = AppInfo(bundleID: ParserRegistry.obsidianBundleID, name: "Obsidian",
+                          windowTitle: title)
+        let v1 = try XCTUnwrap(ObsidianParser().parse(window: snapshot, app: app))
+        XCTAssertTrue(v1.truncated)
+        XCTAssertEqual(v1.structured, v2)
     }
 
     func testTheEditorPaneWinsWhenBothPanesArePresent() throws {

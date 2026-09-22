@@ -14,9 +14,9 @@ public struct ObsidianParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
-        let structured = CaptureAccumulator.boundHard(
-            unbounded, to: StructuredEntityExtraction.pageBudget)
+        let context = ParseContext(app: app)
+        guard let structured = try parse(window, context: context),
+              let unbounded = unboundedDocument(window, context: context) else { return nil }
         return ParsedCapture(sourceApp: "Obsidian", sourceKey: key(fromTitle: app.windowTitle),
                              sourceTitle: app.windowTitle,
                              content: ContentRenderer.render(structured, style: .full),
@@ -71,6 +71,11 @@ extension ObsidianParser: StructuredParser {
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
+        return CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+    }
+
+    func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
         guard let pane = Self.paneRoot(in: snapshot) else { return nil }
         let texts = AXQuery.all(in: pane) {
             ($0.role == "AXHeading" || $0.role == "AXStaticText")
