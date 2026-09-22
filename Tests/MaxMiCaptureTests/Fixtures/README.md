@@ -30,6 +30,9 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `calendar-event-golden.json` | Golden `CapturedContentEnvelope` for `calendar-event.json` | `CalendarParser` |
 | `calendar-offset-event.json` | Hand-authored scrubbed Calendar event-detail popover at a nonzero screen origin | `CalendarParser` event detail, sidebar filtering and conference metadata |
 | `calendar-offset-event-golden.json` | Golden `CapturedContentEnvelope` for `calendar-offset-event.json` | `CalendarParser` |
+| `reminder-task-golden.json` | Golden `CapturedContentEnvelope` for `reminder-task.json` | `RemindersParser` detail fallback |
+| `reminders-offset-list.json` | Hand-authored scrubbed Reminders list at a nonzero screen origin, with open/completed row checkboxes, due date and sidebar chrome | `RemindersParser` row status, ordering and chrome filtering |
+| `reminders-offset-list-golden.json` | Golden `CapturedContentEnvelope` for `reminders-offset-list.json` | `RemindersParser` |
 <!-- lane-c end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the

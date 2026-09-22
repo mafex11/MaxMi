@@ -72,6 +72,7 @@ public struct ParserRegistry: Sendable {
             FinderParser(),
             CalendarParser(),
             FantasticalParser(),
+            RemindersParser(),
             // lane-c end
         ]
         var byBundle: [String: any StructuredParser] = [:]
