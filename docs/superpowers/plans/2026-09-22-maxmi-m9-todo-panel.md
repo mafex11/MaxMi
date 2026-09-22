@@ -49,7 +49,6 @@
 - Create: `Sources/MaxMiActivity/OptionEventMapper.swift`
 - Create: `Tests/MaxMiActivityTests/OptionDoubleTapDetectorTests.swift`
 - Create: `Tests/MaxMiActivityTests/OptionEventMapperTests.swift`
-- Modify: `Tests/MaxMiCaptureTests/TypingObserverTests.swift`
 
 **Interfaces:**
 
@@ -106,9 +105,9 @@ final class OptionDoubleTapDetectorTests: XCTestCase {
         var detector = OptionDoubleTapDetector()
 
         XCTAssertFalse(detector.consume(.optionDown(1_000)))
-        XCTAssertFalse(detector.consume(.optionUp(1_050)))
+        XCTAssertFalse(detector.consume(.optionUp(1_020)))
         XCTAssertFalse(detector.consume(.optionDown(1_040)))
-        XCTAssertTrue(detector.consume(.optionUp(1_090)))
+        XCTAssertTrue(detector.consume(.optionUp(1_060)))
     }
 
     func testSecondDownAtThirtyNineMillisecondsDoesNotFire() {
@@ -161,7 +160,7 @@ final class OptionDoubleTapDetectorTests: XCTestCase {
 }
 ```
 
-- ```swift
+```swift
 // Tests/MaxMiActivityTests/OptionEventMapperTests.swift
 import AppKit
 import XCTest
@@ -198,49 +197,6 @@ final class OptionEventMapperTests: XCTestCase {
 }
 ```
 
-```swift
-// Replace testNoEventTapAnywhereInSources in Tests/MaxMiCaptureTests/TypingObserverTests.swift.
-func testNoEventTapOrKeystrokeCaptureOutsideOptionDoubleTapMonitor() throws {
-    let sourcesRoot = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("Sources")
-    let allowedMonitorFile = sourcesRoot
-        .appendingPathComponent("MaxMi/OptionDoubleTapMonitor.swift")
-        .standardizedFileURL
-    let files = FileManager.default.enumerator(at: sourcesRoot, includingPropertiesForKeys: nil)?
-        .compactMap { $0 as? URL }
-        .filter { $0.pathExtension == "swift" } ?? []
-    var globalMonitorFiles: [URL] = []
-    var localMonitorFiles: [URL] = []
-    let bannedEverywhere = [
-        ".keyDown", ".keyUp", "CGEvent.tapCreate", "CGEventTapCreate", "IOHIDManager",
-    ]
-
-    XCTAssertFalse(files.isEmpty, "no Swift sources found under \(sourcesRoot.path)")
-    for file in files {
-        let text = try String(contentsOf: file, encoding: .utf8)
-        if text.contains("addGlobalMonitorForEvents") {
-            globalMonitorFiles.append(file.standardizedFileURL)
-        }
-        if text.contains("addLocalMonitorForEvents") {
-            localMonitorFiles.append(file.standardizedFileURL)
-        }
-        for token in bannedEverywhere {
-            XCTAssertFalse(text.contains(token), "\(token) found in \(file.lastPathComponent)")
-        }
-    }
-
-    XCTAssertEqual(globalMonitorFiles, [allowedMonitorFile])
-    XCTAssertEqual(localMonitorFiles, [allowedMonitorFile])
-    let allowedText = try String(contentsOf: allowedMonitorFile, encoding: .utf8)
-    XCTAssertEqual(allowedText.components(separatedBy: "addGlobalMonitorForEvents").count - 1, 1)
-    XCTAssertEqual(allowedText.components(separatedBy: "addLocalMonitorForEvents").count - 1, 1)
-    XCTAssertEqual(allowedText.components(separatedBy: "matching: [.flagsChanged]").count - 1, 2)
-}
-```
-
 - [ ] **Step 2: Run the focused tests to verify they fail**
 
 Run:
@@ -248,10 +204,9 @@ Run:
 ```bash
 swift test --filter OptionDoubleTapDetectorTests
 swift test --filter OptionEventMapperTests
-swift test --filter TypingObserverTests/testNoEventTapOrKeystrokeCaptureOutsideOptionDoubleTapMonitor
 ```
 
-Expected: FAIL because the detector, mapper, and narrowly permitted monitor policy do not exist.
+Expected: FAIL because the detector and mapper do not exist.
 
 - [ ] **Step 3: Implement the pure detector and mapper**
 
@@ -358,15 +313,14 @@ Run:
 ```bash
 swift test --filter OptionDoubleTapDetectorTests
 swift test --filter OptionEventMapperTests
-swift test --filter TypingObserverTests/testNoEventTapOrKeystrokeCaptureOutsideOptionDoubleTapMonitor
 ```
 
-Expected: PASS. The boundary tests prove 40–350 ms is inclusive, hold time is capped at 250 ms, and the source guard allows exactly one flags-only global/local monitor pair in `OptionDoubleTapMonitor.swift`.
+Expected: PASS. The boundary tests prove 40–350 ms is inclusive, hold time is capped at 250 ms, and flags-only mapping resets for other modifiers.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/MaxMiActivity/OptionDoubleTapDetector.swift Sources/MaxMiActivity/OptionEventMapper.swift Tests/MaxMiActivityTests/OptionDoubleTapDetectorTests.swift Tests/MaxMiActivityTests/OptionEventMapperTests.swift Tests/MaxMiCaptureTests/TypingObserverTests.swift
+git add Sources/MaxMiActivity/OptionDoubleTapDetector.swift Sources/MaxMiActivity/OptionEventMapper.swift Tests/MaxMiActivityTests/OptionDoubleTapDetectorTests.swift Tests/MaxMiActivityTests/OptionEventMapperTests.swift
 git commit -m "Add flags-only Option gesture"
 ```
 
@@ -876,7 +830,7 @@ git commit -m "Add action item reminders"
 
 **Interfaces:**
 
-- Consumes: Task 2’s `Store.setReminder(_:remindAtMs:)` transaction helper and `ReminderWindow`; existing `AgentGenerationRelay.reviewActivity(_:)`.
+- Consumes: Task 2’s Store transaction helper for `setReminder(_:remindAtMs:)` through the executable adapter; existing `AgentGenerationRelay.reviewActivity(_:)`. `ReminderWindow` remains Store-only, so `MaxMiActivity` does not import `MaxMiStore`.
 - Produces:
 
 ```swift
@@ -1622,11 +1576,9 @@ XCTAssertEqual(evidence, "done")
 
 Change the `complete` method in `FailingTimelineAgentRepository` to the same `[ValidatedAgentOp]` signature. Keep `MockAgentRelay` and `ReminderCapturingAgentRelay` returning raw `[AgentOpDTO]`, because only `HourlyAgent` is allowed to validate relay JSON.
 
-Add this fixed zone once in `HourlyAgentTests`, then supply it to every existing `HourlyAgent` initializer in that file:
+The `fixedHourlyAgentTimeZone` declaration above is the one fixed zone for this file; supply it to every existing `HourlyAgent` initializer:
 
 ```swift
-private let fixedHourlyAgentTimeZone = TimeZone(identifier: "Asia/Kolkata")!
-
 await HourlyAgent(
     repo: repo,
     relay: relay,
@@ -2627,13 +2579,13 @@ func testRowRenderingStateShowsOnlyUnremindedClockAndFormatsAge() {
 }
 ```
 
-- ```swift
+```swift
 // Tests/MaxMiUITests/TodoPanelPoliciesTests.swift
 import CoreGraphics
 import XCTest
 @testable import MaxMiUI
 
-final class TodoPanelPoliciesTests: XCTestCase {
+final class TodoPanelPlacementTests: XCTestCase {
     func testTodoPanelPlacementCentersWithinVisibleScreenFrame() {
         XCTAssertEqual(
             TodoPanelPlacement.centeredFrame(
@@ -2643,7 +2595,9 @@ final class TodoPanelPoliciesTests: XCTestCase {
             CGRect(x: 560, y: 290, width: 520, height: 400)
         )
     }
+}
 
+final class OutsideClickPolicyTests: XCTestCase {
     func testOutsideClickPolicyClosesOnlyForPointsOutsidePanelFrame() {
         let panelFrame = CGRect(x: 100, y: 200, width: 520, height: 400)
 
@@ -2669,7 +2623,8 @@ Run:
 
 ```bash
 swift test --filter TodoPanelViewModelTests/testRowRenderingStateShowsOnlyUnremindedClockAndFormatsAge
-swift test --filter TodoPanelPoliciesTests
+swift test --filter TodoPanelPlacementTests
+swift test --filter OutsideClickPolicyTests
 ```
 
 Expected: FAIL because `TodoPanelRowState`, `TodoPanelPlacement`, and `OutsideClickPolicy` do not exist. Do not add snapshot tests or an executable test target.
@@ -2867,7 +2822,8 @@ Run:
 
 ```bash
 swift test --filter TodoPanelViewModelTests
-swift test --filter TodoPanelPoliciesTests
+swift test --filter TodoPanelPlacementTests
+swift test --filter OutsideClickPolicyTests
 ```
 
 Expected: PASS. This task deliberately has no snapshot test; the XCTest contract verifies the DTO state that controls the title, source/age subtitle, and unreminded clock glyph.
@@ -3195,22 +3151,23 @@ git add Sources/MaxMiStore/AgentStore.swift Sources/MaxMi/StoreTodoPanelReposito
 git commit -m "Add todo panel reminder adapters"
 ```
 
-### Task 8: Add the AppKit panel, Option monitor, and AppWiring integration
+### Task 8: Add AppKit glue and AppWiring integration
 
 **Files:**
 
 - Create: `Sources/MaxMi/TodoPanelController.swift`
 - Create: `Sources/MaxMi/OptionDoubleTapMonitor.swift`
 - Modify: `Sources/MaxMi/AppWiring.swift`
+- Modify: `Tests/MaxMiCaptureTests/TypingObserverTests.swift`
 
 **Interfaces:**
 
-- Consumes: Task 1’s `OptionDoubleTapDetector`; Task 4’s `ReminderScheduler`; Task 5’s `TodoPanelViewModel`; Task 6’s `TodoPanelView`; Task 7’s `StoreTodoPanelRepository`, `StoreReminderRepository`, and `UNUserNotificationCenterNotifier`.
+- Consumes: Task 1’s `OptionDoubleTapDetector` and `OptionEventMapper`; Task 4’s `ReminderScheduler`; Task 5’s `TodoPanelViewModel`; Task 6’s `TodoPanelView`, `TodoPanelPlacement`, and `OutsideClickPolicy`; Task 7’s `StoreTodoPanelRepository`, `StoreReminderRepository`, and `UNUserNotificationCenterNotifier`.
 - Produces:
 
 ```swift
 @MainActor
-final class TodoPanelController: NSObject {
+final class TodoPanelController: NSObject, NSWindowDelegate {
     static let panelWidth: CGFloat = 520
     static let maximumScreenHeightFraction: CGFloat = 0.60
     static let cornerRadius: CGFloat = 14
@@ -3230,19 +3187,66 @@ final class OptionDoubleTapMonitor {
 }
 ```
 
+- This task contains glue only. It creates exactly one global and one local monitor, both in `OptionDoubleTapMonitor.swift` and both matching `.flagsChanged` only. It neither decodes gesture rules nor installs mouse or keystroke monitors: Task 1’s mapper/detector and Task 6’s placement/click policy own those decisions.
 - `AppWiring.start()` starts the monitor after existing Accessibility-gated startup succeeds. `AppWiring.shutdown()` stops it and shuts down the panel. The existing pipeline timer awaits `checkinTrigger.tick(nowMs:)`, then awaits `reminderScheduler.tick(nowMs:)` in that order.
 
-- [ ] **Step 1: Add an executable build gate before implementation**
+- [ ] **Step 1: Replace the source-grep test with the narrowly scoped monitor guard**
 
-There is intentionally no XCTest target for the `MaxMi` executable in `Package.swift`. Keep Tasks 1, 4, and 5 as the testable logic gates; use this build gate for AppKit integration:
+```swift
+// Replace testNoEventTapAnywhereInSources in Tests/MaxMiCaptureTests/TypingObserverTests.swift.
+func testNoEventTapOrKeystrokeCaptureOutsideOptionDoubleTapMonitor() throws {
+    let sourcesRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources")
+    let allowedMonitorFile = sourcesRoot
+        .appendingPathComponent("MaxMi/OptionDoubleTapMonitor.swift")
+        .standardizedFileURL
+    let files = FileManager.default.enumerator(at: sourcesRoot, includingPropertiesForKeys: nil)?
+        .compactMap { $0 as? URL }
+        .filter { $0.pathExtension == "swift" } ?? []
+    var globalMonitorFiles: [URL] = []
+    var localMonitorFiles: [URL] = []
+    let bannedEverywhere = [
+        ".keyDown", ".keyUp", "CGEvent.tapCreate", "CGEventTapCreate", "IOHIDManager",
+    ]
+
+    XCTAssertFalse(files.isEmpty, "no Swift sources found under \(sourcesRoot.path)")
+    for file in files {
+        let text = try String(contentsOf: file, encoding: .utf8)
+        if text.contains("addGlobalMonitorForEvents") {
+            globalMonitorFiles.append(file.standardizedFileURL)
+        }
+        if text.contains("addLocalMonitorForEvents") {
+            localMonitorFiles.append(file.standardizedFileURL)
+        }
+        for token in bannedEverywhere {
+            XCTAssertFalse(text.contains(token), "\(token) found in \(file.lastPathComponent)")
+        }
+    }
+
+    XCTAssertEqual(globalMonitorFiles, [allowedMonitorFile])
+    XCTAssertEqual(localMonitorFiles, [allowedMonitorFile])
+    let allowedText = try String(contentsOf: allowedMonitorFile, encoding: .utf8)
+    XCTAssertEqual(allowedText.components(separatedBy: "addGlobalMonitorForEvents").count - 1, 1)
+    XCTAssertEqual(allowedText.components(separatedBy: "addLocalMonitorForEvents").count - 1, 1)
+    XCTAssertEqual(allowedText.components(separatedBy: "matching: [.flagsChanged]").count - 1, 2)
+}
+```
+
+- [ ] **Step 2: Run the red source-policy gate and executable build**
+
+There is intentionally no XCTest target for the `MaxMi` executable in `Package.swift`. Keep Tasks 1, 4, 5, and 6 as the testable logic gates; use the build gate for AppKit integration:
 
 ```bash
+swift test --filter TypingObserverTests/testNoEventTapOrKeystrokeCaptureOutsideOptionDoubleTapMonitor
 swift build --target MaxMi
 ```
 
-Expected: PASS before this task. Record any pre-existing warnings, but do not modify the existing `nonisolated(unsafe)` warning in `AppWiring.swift`.
+Expected: the source-policy test FAILS because `OptionDoubleTapMonitor.swift` does not yet contain the permitted monitor pair; the build PASSES. Record any pre-existing warnings, but do not modify the existing `nonisolated(unsafe)` warning in `AppWiring.swift`.
 
-- [ ] **Step 2: Implement the panel controller**
+- [ ] **Step 3: Implement the panel controller as AppKit glue**
 
 ```swift
 // Sources/MaxMi/TodoPanelController.swift
@@ -3251,7 +3255,7 @@ import SwiftUI
 import MaxMiUI
 
 @MainActor
-final class TodoPanelController: NSObject {
+final class TodoPanelController: NSObject, NSWindowDelegate {
     static let panelWidth: CGFloat = 520
     static let maximumScreenHeightFraction: CGFloat = 0.60
     static let cornerRadius: CGFloat = 14
@@ -3259,8 +3263,6 @@ final class TodoPanelController: NSObject {
     private let viewModel: TodoPanelViewModel
     private let panel: NSPanel
     private var hostingView: NSHostingView<TodoPanelView>?
-    private var outsideClickMonitor: Any?
-    private var localEventMonitor: Any?
 
     init(viewModel: TodoPanelViewModel) {
         self.viewModel = viewModel
@@ -3272,6 +3274,7 @@ final class TodoPanelController: NSObject {
         )
         super.init()
 
+        panel.delegate = self
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
@@ -3291,28 +3294,6 @@ final class TodoPanelController: NSObject {
         hostingView.layer?.masksToBounds = true
         panel.contentView = hostingView
         self.hostingView = hostingView
-
-        localEventMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .leftMouseDown, .rightMouseDown]
-        ) { [weak self] event in
-            guard let self, self.panel.isVisible else { return event }
-            if event.type == .keyDown, event.keyCode == 53 {
-                self.close()
-                return nil
-            }
-            if event.type == .keyDown, [123, 124, 125, 126, 36, 51].contains(event.keyCode),
-               !self.panel.isKeyWindow {
-                self.panel.makeKey()
-            }
-            if event.type == .leftMouseDown || event.type == .rightMouseDown {
-                if self.panel.frame.contains(NSEvent.mouseLocation) {
-                    self.panel.makeKey()
-                } else {
-                    self.close()
-                }
-            }
-            return event
-        }
     }
 
     func show() {
@@ -3320,13 +3301,11 @@ final class TodoPanelController: NSObject {
             await viewModel.refresh()
             guard let screen = screenContainingMouse() else { return }
             resizeAndCenter(on: screen)
-            installOutsideClickMonitor()
             panel.orderFront(nil)
         }
     }
 
     func close() {
-        removeOutsideClickMonitor()
         panel.orderOut(nil)
     }
 
@@ -3335,26 +3314,37 @@ final class TodoPanelController: NSObject {
     }
 
     func shutdown() {
-        removeOutsideClickMonitor()
-        if let localEventMonitor {
-            NSEvent.removeMonitor(localEventMonitor)
-            self.localEventMonitor = nil
-        }
+        panel.delegate = nil
         panel.orderOut(nil)
         hostingView = nil
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === panel,
+              panel.isVisible else {
+            return
+        }
+        if OutsideClickPolicy.shouldClose(
+            clickLocation: NSEvent.mouseLocation,
+            panelFrame: panel.frame
+        ) {
+            close()
+        }
     }
 
     private func resizeAndCenter(on screen: NSScreen) {
         guard let hostingView else { return }
         let maximumHeight = screen.visibleFrame.height * Self.maximumScreenHeightFraction
-        let fittingHeight = hostingView.fittingSize.height
-        let height = min(maximumHeight, fittingHeight)
-        let origin = NSPoint(
-            x: screen.visibleFrame.midX - Self.panelWidth / 2,
-            y: screen.visibleFrame.midY - height / 2
+        let size = NSSize(
+            width: Self.panelWidth,
+            height: min(maximumHeight, hostingView.fittingSize.height)
         )
         panel.setFrame(
-            NSRect(origin: origin, size: NSSize(width: Self.panelWidth, height: height)),
+            TodoPanelPlacement.centeredFrame(
+                panelSize: size,
+                screenVisibleFrame: screen.visibleFrame
+            ),
             display: false
         )
     }
@@ -3363,31 +3353,10 @@ final class TodoPanelController: NSObject {
         let mouse = NSEvent.mouseLocation
         return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
     }
-
-    private func installOutsideClickMonitor() {
-        removeOutsideClickMonitor()
-        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.panel.isVisible else { return }
-                if !self.panel.frame.contains(NSEvent.mouseLocation) {
-                    self.close()
-                }
-            }
-        }
-    }
-
-    private func removeOutsideClickMonitor() {
-        if let outsideClickMonitor {
-            NSEvent.removeMonitor(outsideClickMonitor)
-            self.outsideClickMonitor = nil
-        }
-    }
 }
 ```
 
-- [ ] **Step 3: Implement global and local Option-key monitoring**
+- [ ] **Step 4: Implement the sole flags-only global/local monitor pair**
 
 ```swift
 // Sources/MaxMi/OptionDoubleTapMonitor.swift
@@ -3410,16 +3379,16 @@ final class OptionDoubleTapMonitor {
     func start() {
         guard globalMonitor == nil, localMonitor == nil else { return }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.flagsChanged, .keyDown]
+            matching: [.flagsChanged]
         ) { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.consume(event)
+                self?.consumeFlagsChanged(event)
             }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.flagsChanged, .keyDown]
+            matching: [.flagsChanged]
         ) { [weak self] event in
-            self?.consume(event)
+            self?.consumeFlagsChanged(event)
             return event
         }
     }
@@ -3437,42 +3406,29 @@ final class OptionDoubleTapMonitor {
         optionIsDown = false
     }
 
-    private func consume(_ event: NSEvent) {
-        let nowMs = EpochMs(event.timestamp * 1_000)
+    private func consumeFlagsChanged(_ event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let otherModifierMask: NSEvent.ModifierFlags = [.command, .control, .shift, .function]
-
-        if event.type == .keyDown {
-            fireIfNeeded(detector.consume(.otherKeyOrModifier(nowMs)))
+        let nowMs = EpochMs(event.timestamp * 1_000)
+        guard let mapped = OptionEventMapper.map(
+            flags: flags,
+            isOptionDown: optionIsDown,
+            timestampMs: nowMs
+        ) else {
             return
         }
-        if !flags.intersection(otherModifierMask).isEmpty {
-            optionIsDown = flags.contains(.option)
-            fireIfNeeded(detector.consume(.otherKeyOrModifier(nowMs)))
-            return
-        }
-
-        let isOptionDown = flags.contains(.option)
-        guard isOptionDown != optionIsDown else { return }
-        optionIsDown = isOptionDown
-        fireIfNeeded(detector.consume(
-            isOptionDown ? .optionDown(nowMs) : .optionUp(nowMs)
-        ))
-    }
-
-    private func fireIfNeeded(_ fired: Bool) {
-        if fired {
+        optionIsDown = flags.contains(.option)
+        if detector.consume(mapped) {
             onDoubleTap()
         }
     }
 }
 ```
 
-This uses only `NSEvent` global and local monitors. Do not add Input Monitoring permission code, a `CGEventTap`, or a global keystroke capture abstraction.
+The source guard from Task 1 requires this file to contain exactly this one global/local pair, each with `.flagsChanged`; `.keyDown`, `.keyUp`, `CGEvent.tapCreate`, and `CGEventTapCreate` must remain absent from all `Sources/`.
 
-- [ ] **Step 4: Wire all components into `AppWiring`**
+- [ ] **Step 5: Wire all components into `AppWiring`**
 
-Add these stored properties beside the existing check-in and panel state:
+Add these stored properties beside the existing check-in state:
 
 ```swift
 let reminderScheduler: ReminderScheduler
@@ -3480,9 +3436,16 @@ let todoPanelController: TodoPanelController
 let optionDoubleTapMonitor: OptionDoubleTapMonitor
 ```
 
-Construct them in `AppWiring.init()` after `checkinTrigger` and before the activity UI wiring:
+Construct the production hourly agent with the existing `checkinTimeZone`, then construct panel and reminder glue after `checkinTrigger` and before the activity UI wiring:
 
 ```swift
+let hourlyAgent = HourlyAgent(
+    repo: agentRepo,
+    relay: agentRelay,
+    timeZone: checkinTimeZone
+)
+agentScheduler = AgentScheduler(agent: hourlyAgent)
+
 let todoPanelRepository = StoreTodoPanelRepository(
     store: store,
     timeZone: checkinTimeZone
@@ -3543,23 +3506,27 @@ todoPanelController.shutdown()
 
 Do not touch `cloudReviewInitialized()`.
 
-- [ ] **Step 5: Run the integration build and focused logic regressions**
+- [ ] **Step 6: Run the integration build and focused logic regressions**
 
 Run:
 
 ```bash
 swift build --target MaxMi
 swift test --filter OptionDoubleTapDetectorTests
+swift test --filter OptionEventMapperTests
+swift test --filter TypingObserverTests/testNoEventTapOrKeystrokeCaptureOutsideOptionDoubleTapMonitor
 swift test --filter ReminderSchedulerTests
 swift test --filter TodoPanelViewModelTests
+swift test --filter TodoPanelPlacementTests
+swift test --filter OutsideClickPolicyTests
 ```
 
-Expected: PASS. The build validates AppKit and UserNotifications integration; the three focused XCTest suites preserve all event, scheduling, and UI-state behavior that is testable outside the executable.
+Expected: PASS. The build validates the AppKit and UserNotifications glue; the focused XCTest suites preserve every deterministic gesture, source-policy, scheduling, placement, click-policy, and UI-state behavior outside the executable.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add Sources/MaxMi/TodoPanelController.swift Sources/MaxMi/OptionDoubleTapMonitor.swift Sources/MaxMi/AppWiring.swift
+git add Sources/MaxMi/TodoPanelController.swift Sources/MaxMi/OptionDoubleTapMonitor.swift Sources/MaxMi/AppWiring.swift Tests/MaxMiCaptureTests/TypingObserverTests.swift
 git commit -m "Wire todo panel and reminders"
 ```
 
@@ -3576,7 +3543,7 @@ git commit -m "Wire todo panel and reminders"
 
 - [ ] **Step 1: Write the live verification checklist**
 
-```markdown
+````markdown
 # MaxMi M9 Live Verification
 
 Run this after the full XCTest gate passes. This is verification only; do not modify source while following it.
@@ -3607,9 +3574,10 @@ Run this after the full XCTest gate passes. This is verification only; do not mo
 
 ## Double-tap panel behavior
 
-- [ ] Keep another app frontmost, then tap and release Option twice with each hold at most 400 ms and the two downs no more than 350 ms apart.
+- [ ] Keep another app frontmost, then tap and release Option twice with each hold at most 250 ms and the two downs 40–350 ms apart inclusive.
 - [ ] Confirm the todo panel opens centered on the screen containing the mouse cursor and does not activate MaxMi or steal focus from the other app.
-- [ ] Confirm an Option-plus-other-key chord, a hold longer than 400 ms, and a second tap beginning at least 351 ms after the first down do not open the panel.
+- [ ] Confirm a hold longer than 250 ms, a second tap beginning within 39 ms, and a second tap beginning at least 351 ms after the first down do not open the panel.
+- [ ] Confirm that adding Shift, Control, Command, or Function to either tap resets the detector and does not open the panel. An Option+letter chord is not observable by the flags-only monitor; two such quick chords can toggle the panel and this is accepted.
 - [ ] Confirm the panel is always dark, has a fixed 520-point width, and does not exceed 60% of the current screen’s visible height.
 - [ ] Click inside the panel, then verify Up/Down wraps selection, Return resolves the selected row, Delete dismisses it, and Escape closes the panel.
 - [ ] Reopen it, click outside it, and double-tap Option again; verify each closes it.
@@ -3636,7 +3604,7 @@ Run this after the full XCTest gate passes. This is verification only; do not mo
 - [ ] Wait through the next 30-second pipeline tick and confirm a notification appears with the action-item title and `sourceApp · age`, never item details or raw capture text.
 - [ ] Click the notification and confirm the todo panel opens.
 - [ ] Deny notifications in System Settings, seed another due reminder, and confirm no notification appears while the panel still shows its clock glyph.
-```
+````
 
 - [ ] **Step 2: Run the full XCTest regression gate**
 

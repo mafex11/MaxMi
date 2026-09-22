@@ -27,7 +27,7 @@ Non-goals: user-authored todos, editing item text, snooze/manual scheduling, syn
 
 ### 3b. `TodoPanelController` + `TodoPanel` (Sources/MaxMi)
 - `NSPanel` with `.nonactivatingPanel`, `.borderless`, level `.floating`, `hidesOnDeactivate = false`, `isMovableByWindowBackground = true`, transparent titlebar, corner radius 14, fixed width 520, height fits content up to 60% of screen height.
-- Centered on the screen containing the mouse cursor. Opens without activating the app; the first arrow key, Return, Delete or click inside makes the panel key (`makeKey()`), Escape / click outside / another double-tap closes it. Click-outside uses a global mouse-down monitor active only while the panel is visible.
+- `TodoPanelPlacement.centeredFrame(panelSize:screenVisibleFrame:) -> CGRect` (MaxMiUI) calculates the centered frame, and `OutsideClickPolicy.shouldClose(clickLocation:panelFrame:) -> Bool` (MaxMiUI) decides whether a panel resign-key event closes it; both are pure and unit-tested. Opens without activating the app; SwiftUI handles Escape and row keyboard commands after the panel receives focus, while resigning key outside the frame and another double-tap close it. No mouse monitor is installed.
 - Hosts `TodoPanelView` (SwiftUI, MaxMiUI) via `NSHostingView`. Reloads items every time it opens.
 
 ### 3c. `TodoPanelView` + `TodoPanelViewModel` (Sources/MaxMiUI)

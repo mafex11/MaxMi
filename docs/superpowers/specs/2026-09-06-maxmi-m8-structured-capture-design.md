@@ -1027,7 +1027,7 @@ Three additions the architect approved on 2026-09-07. Each bullet below records 
 
 **Amendments (2026-09-22, M9 plan repair)**
 
-- M8's “no `NSEvent.addGlobalMonitorForEvents`, ever” rule targets keystroke and typing capture. M9 permits exactly one global and one local `NSEvent` monitor with the `.flagsChanged` mask only, confined to `Sources/MaxMi/OptionDoubleTapMonitor.swift`; `.keyDown`, `.keyUp`, and every CGEvent tap remain banned everywhere.
+- M8's “no `NSEvent.addGlobalMonitorForEvents`, ever” rule targets keystroke and typing capture. M9 permits exactly one global+local `NSEvent` pair (one global and one local monitor) with the `.flagsChanged` mask only, confined to `Sources/MaxMi/OptionDoubleTapMonitor.swift`; `.keyDown`, `.keyUp`, and every CGEvent tap remain banned everywhere.
 - Q9's “reminder slot legend” is superseded by M9's per-item `remind_at`; M9 adds no legend.
 
 ## 13. Rollout
