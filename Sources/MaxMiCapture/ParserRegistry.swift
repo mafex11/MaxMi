@@ -135,6 +135,15 @@ public struct ParserRegistry: Sendable {
     public func parser(for bundleID: String) -> (any SourceParser)? {
         parsers[bundleID]
     }
+
+    /// The union of the legacy bundle map and both structured routing maps. Kept internal so
+    /// coverage tests derive their expected parser set from the same registry that dispatches.
+    var registeredParserTypeNames: Set<String> {
+        let legacy = Set(parsers.values.map { String(describing: type(of: $0)) })
+        let structured = Set(structuredParsers.values.map { String(describing: type(of: $0)) })
+        let hosts = Set(hostParsers.values.map { String(describing: type(of: $0)) })
+        return legacy.union(structured).union(hosts)
+    }
 }
 
 /// Thrown by a parser that will not let this window be stored at all, as distinct from returning

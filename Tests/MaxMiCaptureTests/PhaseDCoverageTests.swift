@@ -2,8 +2,9 @@ import XCTest
 import MaxMiCore
 @testable import MaxMiCapture
 
-/// Spec §11 item 8 as a test: every registered structured parser has executable fixture/golden
-/// coverage plus a known not-handled or refusal surface.
+/// Spec §11 item 8 as a test: every registered parser is represented here. Structured parsers
+/// have executable fixture/golden coverage; legacy-only routes are covered by their dedicated
+/// parser tests but remain listed so a registry entry cannot silently escape this inventory.
 final class PhaseDCoverageTests: XCTestCase {
     struct FixturePair {
         let fixture: String
@@ -12,9 +13,11 @@ final class PhaseDCoverageTests: XCTestCase {
     }
 
     struct Coverage {
-        let parser: any StructuredParser
+        let parser: (any StructuredParser)?
         let pairs: [FixturePair]
-        let blankContext: ParseContext
+        let blankContext: ParseContext?
+
+        static let legacy = Coverage(parser: nil, pairs: [], blankContext: nil)
     }
 
     static func context(
@@ -275,24 +278,36 @@ final class PhaseDCoverageTests: XCTestCase {
             blankContext: context(bundleID: "com.apple.reminders", name: "Reminders",
                                   title: "Reminders")
         ),
+        // These parsers are registered in the legacy SourceParser bundle map rather than the
+        // Phase D structured/host maps. Their route-specific tests remain the executable evidence.
+        "MailParser": .legacy,
+        "TeamsParser": .legacy,
+        "MicrosoftToDoParser": .legacy,
+        "TodoistParser": .legacy,
+        "OmniFocusParser": .legacy,
+        "TogglParser": .legacy,
+        "WordParser": .legacy,
+        "PagesParser": .legacy,
+        "OutlookParser": .legacy,
+        "SparkParser": .legacy,
     ]
 
     static func registeredParserNames(in registry: ParserRegistry) -> Set<String> {
-        let parsers = Array(registry.structuredParsers.values) + Array(registry.hostParsers.values)
-        return Set(parsers.map { String(describing: type(of: $0)) })
+        registry.registeredParserTypeNames
     }
 
     func testCoverageTableMatchesEveryParserRegisteredInTheRegistry() {
         let registry = ParserRegistry()
         XCTAssertEqual(Set(Self.coverage.keys), Self.registeredParserNames(in: registry))
         XCTAssertNil(registry.structuredParser(for: ParserRegistry.mailBundleID),
-                     "Mail stays AppleScript-sourced (§12 Q6) and is deliberately unregistered")
+                     "Mail is registered only through the legacy AppleScript/compose route")
     }
 
     func testEveryCoveredHostIsReachableFromTheHostMap() {
         let registry = ParserRegistry()
         for (name, coverage) in Self.coverage {
-            for configuredHost in type(of: coverage.parser).config.hosts {
+            guard let parser = coverage.parser else { continue }
+            for configuredHost in type(of: parser).config.hosts {
                 let host = configuredHost.hasPrefix(".") ? "example\(configuredHost)" : configuredHost
                 guard let parser = registry.structuredParser(forHost: host) else {
                     return XCTFail("no structured parser registered for host \(host)")
@@ -308,11 +323,14 @@ final class PhaseDCoverageTests: XCTestCase {
                            frame: CGRect(x: 0, y: 0, width: 800, height: 600),
                            focused: false, children: [])
         for (name, coverage) in Self.coverage {
+            guard let parser = coverage.parser, let blankContext = coverage.blankContext else {
+                continue
+            }
             XCTAssertGreaterThanOrEqual(coverage.pairs.count, 2,
                                         "\(name) needs at least two fixture/golden cases")
             for pair in coverage.pairs {
                 let actual = try XCTUnwrap(
-                    try coverage.parser.parse(try fixture(pair.fixture), context: pair.context),
+                    try parser.parse(try fixture(pair.fixture), context: pair.context),
                     "\(name) did not parse \(pair.fixture)"
                 )
                 XCTAssertEqual(actual, try goldenCapturedContent(pair.golden),
@@ -320,7 +338,7 @@ final class PhaseDCoverageTests: XCTestCase {
             }
 
             do {
-                let outcome = try coverage.parser.parse(blank, context: coverage.blankContext)
+                let outcome = try parser.parse(blank, context: blankContext)
                 XCTAssertNil(outcome,
                              "\(name) must not claim a blank surface")
             } catch is ParserRefusal {
@@ -331,6 +349,7 @@ final class PhaseDCoverageTests: XCTestCase {
 
     func testEveryCoveredParserHasAtLeastOneNonzeroOriginFixture() throws {
         for (parser, coverage) in Self.coverage {
+            guard coverage.parser != nil else { continue }
             var sawNonzeroOrigin = false
             for pair in coverage.pairs {
                 let frame = try fixture(pair.fixture).frame
