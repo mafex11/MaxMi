@@ -60,18 +60,13 @@ public struct ParserRegistry: Sendable {
         for bid in Self.pagesBundleIDs { p[bid] = PagesParser() }
         for bid in Self.outlookBundleIDs { p[bid] = OutlookParser() }
         for bid in Self.sparkBundleIDs { p[bid] = SparkParser() }
-        // lane-a begin
         for bid in Self.editorBundleIDs { p[bid] = EditorParser() }
-        // lane-a end
-        // lane-c begin
         p[Self.finderBundleID] = FinderParser()
-        // lane-c end
         // Structured (v2) parsers. Each one declares the bundle IDs and hosts it claims, so the
         // two maps below are derived, never hand-maintained in parallel with the list. Tasks 7-26
         // append to this ONE list; by the end of Phase D it holds the seventeen entries written
         // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
         var structured: [any StructuredParser] = [
-            // lane-a begin
             TerminalParser(),
             EditorParser(),
             NotesParser(),
@@ -79,12 +74,8 @@ public struct ParserRegistry: Sendable {
             ObsidianParser(),
             GmailParser(),
             SlackParser(),
-            // lane-a end
         ]
-        // lane-b begin
         structured.append(contentsOf: [DiscordParser(), MessagesParser(), WhatsAppParser(), LinkedInMessagingParser(), TeamsWebParser()] as [any StructuredParser])
-        // lane-b end
-        // lane-c begin
         structured.append(contentsOf: [
             FinderParser(),
             CalendarParser(),
@@ -92,7 +83,6 @@ public struct ParserRegistry: Sendable {
             RemindersParser(),
             OutlookWebParser(),
         ] as [any StructuredParser])
-        // lane-c end
         var byBundle: [String: any StructuredParser] = [:]
         var bundleClaims: [String: [any StructuredParser]] = [:]
         var byHost: [String: any StructuredParser] = [:]

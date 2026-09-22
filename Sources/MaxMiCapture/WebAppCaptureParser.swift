@@ -26,8 +26,6 @@ public struct WebAppParseResult: Sendable, Equatable {
 public enum WebAppCaptureParser {
     /// The browser content cap. Public because it is the default of a public parameter.
     public static let contentCap = 16_000
-    static let messageRoles: Set<String> = ["AXRow", "AXListItem"]
-    static let textRoles: Set<String> = ["AXStaticText", "AXHeading", "AXLink"]
 
     /// Classifies a URL for the parser ID, `contentKind` and accumulation policy ONLY. Since
     /// M8 Phase D the content shape comes from `ParserRegistry`'s host map (spec §7b), so a new
@@ -82,75 +80,5 @@ public enum WebAppCaptureParser {
         return WebAppParseResult(
             capture: capture, app: app, truncated: truncated
         )
-    }
-
-    /// One line per visible message container: `sender: body`. Containers without a
-    /// distinct sender still remain one atomic line, which keeps row handling stable.
-    static func messageLines(in root: AXNode) -> [String] {
-        messageValues(in: root).compactMap(messageLine)
-    }
-
-    /// The atomic text values of each visible message container, in visual order, with
-    /// accidental adjacent duplicate containers collapsed. `messageLines` joins each row into
-    /// one rendered line.
-    static func messageValues(in root: AXNode) -> [[String]] {
-        var rows: [(y: CGFloat, values: [String])] = []
-        collectMessageContainers(root, into: &rows)
-        var result: [[String]] = []
-        // Adjacent identical visual rows collapse so repeated AX containers do not duplicate
-        // the rendered line.
-        var previous: String?
-        for values in rows.sorted(by: { $0.y < $1.y }).map(\.values) {
-            guard let line = messageLine(values) else { continue }
-            if previous?.caseInsensitiveCompare(line) == .orderedSame { continue }
-            result.append(values)
-            previous = line
-        }
-        return result
-    }
-
-    private static func collectMessageContainers(
-        _ node: AXNode,
-        into out: inout [(y: CGFloat, values: [String])]
-    ) {
-        let metadata = [node.identifier, node.label, node.title]
-            .compactMap { $0 }.joined(separator: " ").lowercased()
-        let singularMessageHint = metadata.contains("message") && !metadata.contains("messages")
-        let candidate = messageRoles.contains(node.role) || singularMessageHint
-        if candidate {
-            var text: [(y: CGFloat, x: CGFloat, value: String)] = []
-            collectText(node, into: &text)
-            let values = text.sorted { $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x }
-                .map(\.value)
-                .reduce(into: [String]()) { result, value in
-                    if result.last != value { result.append(value) }
-                }
-            if let line = messageLine(values), !line.isEmpty {
-                out.append((node.frame?.origin.y ?? 0, values))
-                return
-            }
-        }
-        for child in node.children { collectMessageContainers(child, into: &out) }
-    }
-
-    private static func messageLine(_ values: [String]) -> String? {
-        let values = values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard let first = values.first else { return nil }
-        if values.count == 1 { return first }
-        return "\(first): \(values.dropFirst().joined(separator: " "))"
-    }
-
-    private static func collectText(
-        _ node: AXNode,
-        into out: inout [(y: CGFloat, x: CGFloat, value: String)]
-    ) {
-        if textRoles.contains(node.role), let raw = node.value ?? node.title {
-            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty {
-                out.append((node.frame?.origin.y ?? 0, node.frame?.origin.x ?? 0, value))
-            }
-        }
-        for child in node.children { collectText(child, into: &out) }
     }
 }

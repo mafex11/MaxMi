@@ -22,7 +22,6 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `dom-attributes.json` | Hand-authored web-area DOM shape at a nonzero window origin | `AXNode` decoding of `domClassList`/`domIdentifier`, `AXQuery` `domClass`/`domId` predicates |
 | `slack-composer-draft.json` | Hand-authored Slack-shaped window at a nonzero origin with a focused composer, plus a second focused text area inside the message `AXList` | `ComposerDraft` picking the composer, not the list descendant |
 | `generic-empty-golden.json` | Hand-authored deterministic `CapturedContentEnvelope` for an empty generic page | Fixture loader golden encoder/decoder |
-| <!-- // lane-a begin --> |  |  |
 | `warp-session.json` | Scrubbed Warp scrollback, window flush at the origin | `TerminalParser` `.terminal` segmentation |
 | `warp-session-golden.json` | Expected `CapturedContent` for `warp-session.json` | golden comparison |
 | `iterm-offset-session.json` | Scrubbed iTerm2 scrollback at a nonzero window origin | `TerminalParser` origin invariance |
@@ -55,8 +54,6 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `slack-web-channel-golden.json` | Golden `CapturedContent` for the above | `SlackParser` |
 | `slack-web-offset-dm.json` | Hand-authored scrubbed Chrome `app.slack.com` DM shape at a nonzero screen origin | `SlackParser` DM header → `isGroup` false, composer draft |
 | `slack-web-offset-dm-golden.json` | Golden `CapturedContent` for the above | `SlackParser` |
-| <!-- // lane-a end --> |  |  |
-<!-- // lane-b begin -->
 | `slack-dom-messages.json` | Hand-authored Slack DOM-class message list with an invented composer draft | `SlackParser` DOM-class message and draft anchors |
 | `slack-dom-messages-golden.json` | Golden `CapturedContentEnvelope` for `slack-dom-messages.json` | `SlackParser` DOM-class conversation output |
 | `slack-offset-dom-messages.json` | Hand-authored Slack DOM-class message list at a nonzero origin | `SlackParser` DOM anchors and origin invariance |
@@ -84,8 +81,6 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `teams-web-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
 | `teams-web-offset-chat.json` | Hand-authored scrubbed Teams web chat shape at a nonzero screen origin | `TeamsWebParser` AXDescription fallback and composer draft |
 | `teams-web-offset-chat-golden.json` | Golden `CapturedContent` for the above | `TeamsWebParser` |
-<!-- // lane-b end -->
-<!-- lane-c begin -->
 | `finder-list.json` | Hand-authored scrubbed Finder list-view shape at the screen origin | `FinderParser` sidebar, listing, selection and toolbar regions |
 | `finder-list-golden.json` | Golden `CapturedContentEnvelope` for `finder-list.json` | `FinderParser` |
 | `finder-offset-copy.json` | Hand-authored scrubbed Finder copy-progress shape at a nonzero screen origin | `FinderParser` sidebar, listing, selection and toolbar regions |
@@ -100,7 +95,6 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `outlook-web-reading-golden.json` | Golden `CapturedContent` for the above | `OutlookWebParser` |
 | `outlook-web-offset-list.json` | Hand-authored scrubbed Outlook web message list at a nonzero screen origin | `OutlookWebParser` generic page of table rows |
 | `outlook-web-offset-list-golden.json` | Golden `CapturedContent` for the above | `OutlookWebParser` |
-<!-- lane-c end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
 minimum role/frame structure required for a regression test.

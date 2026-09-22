@@ -125,29 +125,4 @@ final class WebAppStructuredTests: XCTestCase {
         XCTAssertNil(result.capture.structured)
     }
 
-    func testMessageLinesHelperIsUnchanged() {
-        func text(_ value: String, y: CGFloat) -> AXNode {
-            AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
-                   frame: CGRect(x: 0, y: y, width: 100, height: 16), focused: false, children: [])
-        }
-        let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                         frame: CGRect(x: 0, y: 100, width: 400, height: 30), focused: false,
-                         children: [text("Alex", y: 100), text("yes", y: 101)])
-        let root = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
-                          focused: false, children: [row])
-        XCTAssertEqual(WebAppCaptureParser.messageLines(in: root), ["Alex: yes"])
-    }
-
-    /// A one-label bubble is never re-split on ": ": that fabricates a sender.
-    func testSingleLabelContainerKeepsItsWholeTextAsAnUnattributedMessage() {
-        let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                         frame: CGRect(x: 0, y: 100, width: 400, height: 30), focused: false,
-                         children: [
-            AXNode(role: "AXStaticText", value: "Note: check the doc", title: nil, url: nil,
-                   frame: CGRect(x: 0, y: 100, width: 300, height: 16), focused: false, children: []),
-        ])
-        let root = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
-                          focused: false, children: [row])
-        XCTAssertEqual(WebAppCaptureParser.messageLines(in: root), ["Note: check the doc"])
-    }
 }
