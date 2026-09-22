@@ -167,14 +167,14 @@ final class TodoPanelViewModelTests: XCTestCase {
         XCTAssertTrue(TodoPanelRowState.showsPendingReminder(for: pending))
         XCTAssertFalse(TodoPanelRowState.showsPendingReminder(for: delivered))
         XCTAssertEqual(
-            TodoPanelRowState.ageDescription(
+            ActivityTime.ageDescription(
                 detectedAtMs: pending.detectedAtMs,
                 nowMs: 1_790_007_200_000
             ),
             "3h"
         )
         XCTAssertEqual(
-            TodoPanelRowState.ageDescription(
+            ActivityTime.ageDescription(
                 detectedAtMs: delivered.detectedAtMs,
                 nowMs: 1_790_000_000_000
             ),

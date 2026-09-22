@@ -5,6 +5,18 @@ import MaxMiActivity
 
 struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
     let store: Store
+    let clock: @Sendable () -> EpochMs
+    let timeZone: TimeZone
+
+    init(
+        store: Store,
+        clock: @escaping @Sendable () -> EpochMs,
+        timeZone: TimeZone
+    ) {
+        self.store = store
+        self.clock = clock
+        self.timeZone = timeZone
+    }
 
     func claimNextPage() async -> AgentLeasedPage? {
         let page: AgentPage
@@ -12,7 +24,8 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
             guard let claimedPage = try store.claimNextAgentRun(
                 maxVersions: 50,
                 leaseMs: 120_000,
-                nowMs: epochNowMs()
+                nowMs: clock(),
+                timeZone: timeZone
             ) else {
                 return nil
             }
@@ -56,12 +69,12 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
     }
 
     func complete(runID: String, ops: [ValidatedAgentOp]) async throws {
-        _ = try store.completeAgentRun(runID: runID, ops: ops, nowMs: epochNowMs())
+        _ = try store.completeAgentRun(runID: runID, ops: ops, nowMs: clock())
     }
 
     func renew(runID: String) async {
         do {
-            try store.renewAgentRunLease(runID: runID, leaseMs: 120_000, nowMs: epochNowMs())
+            try store.renewAgentRunLease(runID: runID, leaseMs: 120_000, nowMs: clock())
         } catch {
             // Best effort
         }
@@ -69,7 +82,7 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
 
     func fail(runID: String, error: String) async {
         do {
-            try store.failAgentRun(runID: runID, error: error, nowMs: epochNowMs())
+            try store.failAgentRun(runID: runID, error: error, nowMs: clock())
         } catch {
             // Best effort
         }
@@ -77,7 +90,7 @@ struct StoreAgentRepository: AgentRepository, @unchecked Sendable {
 
     private func localTimeISO(for ms: EpochMs) -> String {
         let formatter = ISO8601DateFormatter()
-        formatter.timeZone = .current
+        formatter.timeZone = timeZone
         formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
         return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1_000))
     }

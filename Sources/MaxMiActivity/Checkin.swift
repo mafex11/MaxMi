@@ -110,26 +110,23 @@ public enum CheckinInputBuildError: Error, Sendable {
 public struct CheckinInputBuilder: Sendable {
     private let repo: any CheckinRepository
     private let timeZone: TimeZone
-    private let dayBucket: @Sendable (EpochMs, TimeZone) -> Int64
 
     public init(
         repo: any CheckinRepository,
-        timeZone: TimeZone,
-        dayBucket: @escaping @Sendable (EpochMs, TimeZone) -> Int64
+        timeZone: TimeZone
     ) {
         self.repo = repo
         self.timeZone = timeZone
-        self.dayBucket = dayBucket
     }
 
     public func dayBucket(nowMs: EpochMs) -> Int64 {
-        dayBucket(nowMs, timeZone)
+        ActivityTime.dayBucket(forMs: nowMs, timeZone: timeZone)
     }
 
     public func build(nowMs: EpochMs) async throws -> (dayBucket: Int64, input: DailyCheckinInput) {
         let effectiveNowMs = nowMs
         let now = Date(timeIntervalSince1970: Double(effectiveNowMs) / 1_000)
-        var calendar = Calendar.current
+        var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let todayStart = calendar.startOfDay(for: now)
         guard let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) else {
@@ -205,7 +202,7 @@ public actor DailyCheckinGenerator: CheckinGenerating {
         repo: any CheckinRepository,
         relay: any CheckinGenerationRelay,
         builder: CheckinInputBuilder,
-        timeZone: TimeZone = .current
+        timeZone: TimeZone
     ) {
         self.repo = repo
         self.relay = relay

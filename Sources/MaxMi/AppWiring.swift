@@ -274,12 +274,6 @@ final class AppWiring {
         )
 
         let checkinTimeZone = TimeZone.current
-        let checkinDayBucket: @Sendable (EpochMs, TimeZone) -> Int64 = { nowMs, timeZone in
-            var calendar = Calendar.current
-            calendar.timeZone = timeZone
-            let date = Date(timeIntervalSince1970: Double(nowMs) / 1_000)
-            return EpochMs(calendar.startOfDay(for: date).timeIntervalSince1970 * 1_000)
-        }
         let checkinRepository = StoreCheckinRepository(
             store: store,
             clock: epochNowMs,
@@ -287,8 +281,7 @@ final class AppWiring {
         )
         let checkinBuilder = CheckinInputBuilder(
             repo: checkinRepository,
-            timeZone: checkinTimeZone,
-            dayBucket: checkinDayBucket
+            timeZone: checkinTimeZone
         )
         dailyCheckinGenerator = DailyCheckinGenerator(
             repo: checkinRepository,
@@ -314,7 +307,11 @@ final class AppWiring {
         )
 
         // Initialize agent scheduler
-        let agentRepo = StoreAgentRepository(store: store)
+        let agentRepo = StoreAgentRepository(
+            store: store,
+            clock: epochNowMs,
+            timeZone: checkinTimeZone
+        )
         let agentRelay = GeminiAgentRelay(geminiClient: relay, modelID: config.extractModel)
         let hourlyAgent = HourlyAgent(
             repo: agentRepo,
@@ -379,7 +376,8 @@ final class AppWiring {
                     return []
                 }
             },
-            now: { epochNowMs() }
+            now: { epochNowMs() },
+            timeZone: checkinTimeZone
         )
 
         let actionItemsViewModel = ActionItemsViewModel(
@@ -989,8 +987,7 @@ final class AppWiring {
                 await trayCheckinTrigger.regenerateNow(nowMs: epochNowMs())
             },
             now: { epochNowMs() },
-            timeZone: checkinTimeZone,
-            dayBucket: checkinDayBucket
+            timeZone: checkinTimeZone
         )
         trayHomeViewModel = TrayHomeViewModel(
             loadStatus: { @MainActor [weak self] in

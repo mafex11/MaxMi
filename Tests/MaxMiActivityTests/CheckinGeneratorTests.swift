@@ -185,10 +185,11 @@ private func builder(repo: any CheckinRepository) -> CheckinInputBuilder {
     let zone = TimeZone(identifier: "UTC")!
     return CheckinInputBuilder(
         repo: repo,
-        timeZone: zone,
-        dayBucket: { ms, _ in ms / 86_400_000 }
+        timeZone: zone
     )
 }
+
+private let checkinGeneratorTimeZone = TimeZone(identifier: "UTC")!
 
 private func storedCheckin(summary: String) -> CheckinRecord {
     CheckinRecord(
@@ -206,7 +207,12 @@ final class CheckinGeneratorTests: XCTestCase {
     func testFailureLeavesNoRowAndDefersRetryWithoutBlockingLaterCall() async {
         let repo = CheckinGeneratorRepoMock()
         let relay = CheckinRelayMock(result: .failure(RelayError.httpStatus(429)))
-        let generator = DailyCheckinGenerator(repo: repo, relay: relay, builder: builder(repo: repo))
+        let generator = DailyCheckinGenerator(
+            repo: repo,
+            relay: relay,
+            builder: builder(repo: repo),
+            timeZone: checkinGeneratorTimeZone
+        )
 
         await generator.generateIfMissing(nowMs: 1_800_000_000_000)
         await generator.generateIfMissing(nowMs: 1_800_000_001_000)
@@ -224,7 +230,12 @@ final class CheckinGeneratorTests: XCTestCase {
     func testSuccessfulGenerationIsNotRepeatedForSameDay() async {
         let repo = CheckinGeneratorRepoMock()
         let relay = CheckinRelayMock(result: .success("You should review the migration."))
-        let generator = DailyCheckinGenerator(repo: repo, relay: relay, builder: builder(repo: repo))
+        let generator = DailyCheckinGenerator(
+            repo: repo,
+            relay: relay,
+            builder: builder(repo: repo),
+            timeZone: checkinGeneratorTimeZone
+        )
 
         await generator.generateIfMissing(nowMs: 1_800_000_000_000)
         await generator.generateIfMissing(nowMs: 1_800_000_001_000)
@@ -238,7 +249,12 @@ final class CheckinGeneratorTests: XCTestCase {
     func testManualRegenerateOverwritesTodaysRow() async {
         let repo = CheckinGeneratorRepoMock(existing: storedCheckin(summary: "Old"))
         let relay = CheckinRelayMock(result: .success("You should review the migration."))
-        let generator = DailyCheckinGenerator(repo: repo, relay: relay, builder: builder(repo: repo))
+        let generator = DailyCheckinGenerator(
+            repo: repo,
+            relay: relay,
+            builder: builder(repo: repo),
+            timeZone: checkinGeneratorTimeZone
+        )
 
         await generator.regenerate(nowMs: 1_800_000_000_000)
 
@@ -249,7 +265,12 @@ final class CheckinGeneratorTests: XCTestCase {
     func testRefusalOutputLeavesNoRowAndSchedulesRetry() async {
         let repo = CheckinGeneratorRepoMock()
         let relay = CheckinRelayMock(result: .success("I'm unable to create a check-in."))
-        let generator = DailyCheckinGenerator(repo: repo, relay: relay, builder: builder(repo: repo))
+        let generator = DailyCheckinGenerator(
+            repo: repo,
+            relay: relay,
+            builder: builder(repo: repo),
+            timeZone: checkinGeneratorTimeZone
+        )
 
         await generator.generateIfMissing(nowMs: 1_800_000_000_000)
 

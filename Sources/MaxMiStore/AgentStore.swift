@@ -90,7 +90,12 @@ private enum AgentReviewPromptVersion {
 }
 
 extension Store {
-    public func claimNextAgentRun(maxVersions: Int, leaseMs: EpochMs, nowMs: EpochMs) throws -> AgentPage? {
+    public func claimNextAgentRun(
+        maxVersions: Int,
+        leaseMs: EpochMs,
+        nowMs: EpochMs,
+        timeZone: TimeZone
+    ) throws -> AgentPage? {
         let privacy = try sourceCloudEligibility()
         return try db.dbQueue.write { d in
             try d.execute(sql: """
@@ -122,7 +127,7 @@ extension Store {
             guard let first = versions.first, let last = versions.last else { return nil }
 
             let runID = Ident.uuidv7(nowMs: nowMs)
-            let dayBucket = Store.dayBucket(forMs: nowMs, timeZone: .current)
+            let dayBucket = ActivityTime.dayBucket(forMs: nowMs, timeZone: timeZone)
             let leaseExpires = nowMs + leaseMs
 
             try d.execute(sql: """
@@ -591,9 +596,9 @@ extension Store {
         }
     }
 
-    public func setReminder(_ id: String, remindAtMs: EpochMs?) throws {
+    public func setReminder(_ id: String, remindAtMs: EpochMs?, nowMs: EpochMs) throws {
         try db.dbQueue.write { database in
-            try setReminder(database, id: id, remindAtMs: remindAtMs, nowMs: epochNowMs())
+            try setReminder(database, id: id, remindAtMs: remindAtMs, nowMs: nowMs)
         }
     }
 

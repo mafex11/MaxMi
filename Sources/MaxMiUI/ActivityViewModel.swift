@@ -9,10 +9,16 @@ public final class ActivityViewModel {
 
     private let load: @Sendable () async -> [TimelineSessionDTO]
     private let now: () -> Int64
+    private let timeZone: TimeZone
 
-    public init(load: @escaping @Sendable () async -> [TimelineSessionDTO], now: @escaping () -> Int64) {
+    public init(
+        load: @escaping @Sendable () async -> [TimelineSessionDTO],
+        now: @escaping () -> Int64,
+        timeZone: TimeZone
+    ) {
         self.load = load
         self.now = now
+        self.timeZone = timeZone
     }
 
     public func refresh() async {
@@ -75,7 +81,8 @@ public final class ActivityViewModel {
     }
 
     private func dayGroupLabel(startedAtMs: EpochMs, nowMs: EpochMs) -> String {
-        let calendar = Calendar.current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
         let startDate = Date(timeIntervalSince1970: Double(startedAtMs) / 1000.0)
         let nowDate = Date(timeIntervalSince1970: Double(nowMs) / 1000.0)
 
@@ -91,6 +98,7 @@ public final class ActivityViewModel {
             return "Yesterday"
         default:
             let formatter = DateFormatter()
+            formatter.timeZone = timeZone
             formatter.dateStyle = .medium
             formatter.timeStyle = .none
             return formatter.string(from: startDate)

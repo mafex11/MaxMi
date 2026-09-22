@@ -44,6 +44,8 @@ private actor CheckinActionState {
 
 @MainActor
 final class CheckinViewModelTests: XCTestCase {
+    private let fixedTimeZone = TimeZone(identifier: "Asia/Kolkata")!
+
     func testRefreshMapsReadyDismissedAndEmptyStates() async {
         let ready = CheckinDTO(
             dayBucket: 1, generatedAtMs: 100, summary: "You reviewed the migration.",
@@ -51,7 +53,7 @@ final class CheckinViewModelTests: XCTestCase {
         )
         let vm = CheckinViewModel(
             load: { _ in ready }, dismiss: { _, _ in }, regenerate: {},
-            now: { 200 }, timeZone: .current, dayBucket: { _, _ in 1 }
+            now: { 200 }, timeZone: fixedTimeZone
         )
 
         await vm.refresh()
@@ -64,8 +66,7 @@ final class CheckinViewModelTests: XCTestCase {
                     dismissedAtMs: 101, isEmptySummary: false
                 )
             },
-            dismiss: { _, _ in }, regenerate: {}, now: { 200 }, timeZone: .current,
-            dayBucket: { _, _ in 1 }
+            dismiss: { _, _ in }, regenerate: {}, now: { 200 }, timeZone: fixedTimeZone
         )
         await dismissed.refresh()
         XCTAssertEqual(dismissed.state, .dismissed)
@@ -77,8 +78,7 @@ final class CheckinViewModelTests: XCTestCase {
                     dismissedAtMs: nil, isEmptySummary: true
                 )
             },
-            dismiss: { _, _ in }, regenerate: {}, now: { 200 }, timeZone: .current,
-            dayBucket: { _, _ in 1 }
+            dismiss: { _, _ in }, regenerate: {}, now: { 200 }, timeZone: fixedTimeZone
         )
         await empty.refresh()
         XCTAssertEqual(
@@ -93,7 +93,7 @@ final class CheckinViewModelTests: XCTestCase {
             load: { _ in await state.load() },
             dismiss: { _, _ in await state.dismiss() },
             regenerate: { try await state.regenerate() },
-            now: { 200 }, timeZone: .current, dayBucket: { _, _ in 1 }
+            now: { 200 }, timeZone: fixedTimeZone
         )
 
         await vm.dismissToday()
@@ -113,10 +113,11 @@ final class CheckinViewModelTests: XCTestCase {
         XCTAssertEqual(loadCountAfterFailure, 2)
     }
 
-    func testLoadAndDismissUseTheInjectedDayBucket() async {
+    func testLoadAndDismissUseTheSharedFixedZoneDayBucket() async {
         let state = CheckinBucketState()
-        let nowMs: EpochMs = 123_456
-        let expectedBucket: Int64 = 987_654
+        let nowMs: EpochMs = 1_800_000_000_000
+        let timeZone = TimeZone(identifier: "Asia/Kolkata")!
+        let expectedBucket = ActivityTime.dayBucket(forMs: nowMs, timeZone: timeZone)
         let vm = CheckinViewModel(
             load: { bucket in
                 await state.recordLoad(bucket)
@@ -127,10 +128,7 @@ final class CheckinViewModelTests: XCTestCase {
             },
             regenerate: {},
             now: { nowMs },
-            timeZone: TimeZone(identifier: "Asia/Kolkata")!,
-            dayBucket: { _, _ in
-                return expectedBucket
-            }
+            timeZone: timeZone
         )
 
         await vm.refresh()

@@ -63,7 +63,7 @@ public actor ReminderScheduler {
                 continue
             }
             let sourceApp = item.sourceApp ?? "MaxMi"
-            let age = Self.ageDescription(detectedAtMs: item.detectedAtMs, nowMs: nowMs)
+            let age = ActivityTime.ageDescription(detectedAtMs: item.detectedAtMs, nowMs: nowMs)
             let outcome = await notifier.post(
                 id: item.id,
                 title: item.title,
@@ -84,12 +84,4 @@ public actor ReminderScheduler {
         }
     }
 
-    private static func ageDescription(detectedAtMs: EpochMs, nowMs: EpochMs) -> String {
-        let elapsedMs = max(0, nowMs - detectedAtMs)
-        let elapsedHours = elapsedMs / 3_600_000
-        if elapsedHours < 24 {
-            return "\(elapsedHours)h"
-        }
-        return "\(elapsedHours / 24)d"
-    }
 }

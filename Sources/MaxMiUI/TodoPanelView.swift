@@ -5,14 +5,6 @@ public enum TodoPanelRowState {
     public static func showsPendingReminder(for item: TodoPanelItem) -> Bool {
         item.remindAtMs != nil && item.remindedAtMs == nil
     }
-
-    public static func ageDescription(detectedAtMs: EpochMs, nowMs: EpochMs) -> String {
-        let elapsedHours = max(0, nowMs - detectedAtMs) / 3_600_000
-        if elapsedHours < 24 {
-            return "\(elapsedHours)h"
-        }
-        return "\(elapsedHours / 24)d"
-    }
 }
 
 public struct TodoPanelView: View {
@@ -115,7 +107,7 @@ public struct TodoPanelView: View {
                             .foregroundColor(Theme.secondaryText)
                     }
                 }
-                Text("\(item.sourceApp ?? "MaxMi") · \(ageDescription(item.detectedAtMs))")
+                Text("\(item.sourceApp ?? "MaxMi") · \(viewModel.ageDescription(detectedAtMs: item.detectedAtMs))")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.secondaryText)
                     .lineLimit(1)
@@ -141,9 +133,5 @@ public struct TodoPanelView: View {
         .onTapGesture {
             viewModel.select(index: index)
         }
-    }
-
-    private func ageDescription(_ detectedAtMs: EpochMs) -> String {
-        TodoPanelRowState.ageDescription(detectedAtMs: detectedAtMs, nowMs: epochNowMs())
     }
 }

@@ -39,13 +39,7 @@ struct StoreTodoPanelRepository: TodoPanelRepository, @unchecked Sendable {
     func todayCheckinFirstLine(nowMs: EpochMs) async -> String? {
         await Task.detached(priority: .userInitiated) {
             do {
-                var calendar = Calendar.current
-                calendar.timeZone = self.timeZone
-                let dayBucket = Int64(
-                    calendar.startOfDay(
-                        for: Date(timeIntervalSince1970: Double(nowMs) / 1_000)
-                    ).timeIntervalSince1970 * 1_000
-                )
+                let dayBucket = ActivityTime.dayBucket(forMs: nowMs, timeZone: self.timeZone)
                 guard let summary = try self.store.checkin(dayBucket: dayBucket)?.summary else {
                     return nil
                 }

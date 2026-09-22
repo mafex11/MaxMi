@@ -49,7 +49,7 @@ Non-goals: user-authored todos, editing item text, snooze/manual scheduling, syn
 
 ### 3d. Reminder schema (Sources/MaxMiStore)
 - Migration **v14**: `ALTER TABLE agent_action_items ADD COLUMN remind_at_ms INTEGER NULL; ADD COLUMN reminded_at_ms INTEGER NULL;` index on `(status, remind_at_ms)`. `DatabaseRecovery` derives the migration set from the migrator (no hand-edited lists). `ActionItem` gains `remindAtMs: EpochMs?`, `remindedAtMs: EpochMs?`.
-- New Store API: `dueReminders(nowMs:) -> [ActionItem]` (status open, `remind_at_ms <= now`, `reminded_at_ms IS NULL`, and `remind_at_ms >= now - 24h`), `markReminded(_ id:, nowMs:)`, `setReminder(_ id:, remindAtMs: EpochMs?)`. `resolveActionItem`/`dismissActionItem` also clear `remind_at_ms`.
+- New Store API: `dueReminders(nowMs:) -> [ActionItem]` (status open, `remind_at_ms <= now`, `reminded_at_ms IS NULL`, and `remind_at_ms >= now - 24h`), `markReminded(_ id:, nowMs:)`, `setReminder(_ id:, remindAtMs: EpochMs?, nowMs:)`. `resolveActionItem`/`dismissActionItem` also clear `remind_at_ms`.
 - Prune/delete-all need no change (rows live in `agent_action_items`); a test asserts the new columns are gone with the row.
 
 ### 3e. Hourly review `remind_at` (Sources/MaxMiActivity)

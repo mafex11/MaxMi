@@ -8,7 +8,7 @@ public enum CheckinSchedule {
         hasCheckinForToday: Bool
     ) -> Bool {
         guard !hasCheckinForToday else { return false }
-        var calendar = Calendar.current
+        var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let date = Date(timeIntervalSince1970: Double(nowMs) / 1_000)
         return calendar.component(.hour, from: date) >= 8
@@ -35,7 +35,7 @@ public actor CheckinTrigger {
             = CheckinSchedule.isAutomaticGenerationEligible,
         isActivitySynthesisEnabled: @escaping @Sendable () -> Bool,
         clock: @escaping @Sendable () -> EpochMs = epochNowMs,
-        timeZone: TimeZone = .current
+        timeZone: TimeZone
     ) {
         self.generator = generator
         self.schedule = schedule

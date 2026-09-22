@@ -14,27 +14,24 @@ public final class CheckinViewModel {
     private let regenerate: @Sendable () async throws -> Void
     private let now: @Sendable () -> EpochMs
     private let timeZone: TimeZone
-    private let dayBucket: @Sendable (EpochMs, TimeZone) -> Int64
 
     public init(
         load: @escaping @Sendable (Int64) async -> CheckinDTO?,
         dismiss: @escaping @Sendable (Int64, EpochMs) async throws -> Void,
         regenerate: @escaping @Sendable () async throws -> Void,
         now: @escaping @Sendable () -> EpochMs,
-        timeZone: TimeZone,
-        dayBucket: @escaping @Sendable (EpochMs, TimeZone) -> Int64
+        timeZone: TimeZone
     ) {
         self.load = load
         self.dismiss = dismiss
         self.regenerate = regenerate
         self.now = now
         self.timeZone = timeZone
-        self.dayBucket = dayBucket
         state = .pending
     }
 
     public func refresh() async {
-        let today = dayBucket(now(), timeZone)
+        let today = ActivityTime.dayBucket(forMs: now(), timeZone: timeZone)
         guard let dto = await load(today) else {
             openItems = []
             state = .pending
@@ -56,7 +53,7 @@ public final class CheckinViewModel {
         guard !isRegenerating else { return }
         do {
             let nowMs = now()
-            try await dismiss(dayBucket(nowMs, timeZone), nowMs)
+            try await dismiss(ActivityTime.dayBucket(forMs: nowMs, timeZone: timeZone), nowMs)
             await refresh()
         } catch {
         }

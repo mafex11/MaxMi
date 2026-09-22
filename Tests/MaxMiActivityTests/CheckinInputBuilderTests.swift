@@ -146,6 +146,8 @@ private final class CheckinRepositoryStub: CheckinRepository, @unchecked Sendabl
 }
 
 final class CheckinInputBuilderTests: XCTestCase {
+    private let fixedTimeZone = TimeZone(identifier: "Asia/Kolkata")!
+
     func testBuildUsesDetectedAtAgeTimelineCalendarAndCaps() async throws {
         let repo = CheckinRepositoryStub(
             open: (0..<20).map {
@@ -161,8 +163,8 @@ final class CheckinInputBuilderTests: XCTestCase {
             timeline: timeline(text: String(repeating: "T", count: 3_000))
         )
         let built = try await CheckinInputBuilder(
-            repo: repo, timeZone: .current,
-            dayBucket: { ms, zone in Int64(ms / 86_400_000) + Int64(zone.secondsFromGMT() / 86_400) }
+            repo: repo,
+            timeZone: fixedTimeZone
         ).build(nowMs: 1_800_000_000_000)
 
         XCTAssertEqual(built.input.openItems.count, 15)
@@ -184,8 +186,8 @@ final class CheckinInputBuilderTests: XCTestCase {
         let repo = CheckinRepositoryStub(timeline: timeline(text: ""))
 
         _ = try await CheckinInputBuilder(
-            repo: repo, timeZone: zone,
-            dayBucket: { ms, timeZone in Int64(ms / 86_400_000) + Int64(timeZone.secondsFromGMT() / 86_400) }
+            repo: repo,
+            timeZone: zone
         ).build(nowMs: EpochMs(now.timeIntervalSince1970 * 1_000))
 
         let range = await repo.resolvedRange

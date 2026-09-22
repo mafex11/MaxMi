@@ -469,14 +469,6 @@ extension Store {
     // MARK: - Helpers
 
     public static func dayBucket(forMs ms: EpochMs, timeZone: TimeZone) -> Int64 {
-        let date = Date(timeIntervalSince1970: Double(ms) / 1000.0)
-        let calendar = Calendar.current
-        var cal = calendar
-        cal.timeZone = timeZone
-        let components = cal.dateComponents([.year, .month, .day], from: date)
-        guard let dayStart = cal.date(from: components) else {
-            return ms / (24 * 3_600_000)
-        }
-        return Int64(dayStart.timeIntervalSince1970 * 1000)
+        ActivityTime.dayBucket(forMs: ms, timeZone: timeZone)
     }
 }

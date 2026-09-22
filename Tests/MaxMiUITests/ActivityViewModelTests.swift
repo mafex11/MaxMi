@@ -4,6 +4,8 @@ import MaxMiCore
 
 @MainActor
 final class ActivityViewModelTests: XCTestCase {
+    private let fixedTimeZone = TimeZone(identifier: "UTC")!
+
     func testGroupsByDayNewestFirst() async {
         // Fixed "now" = 2026-01-15 10:00:00 UTC
         let now: EpochMs = 1_736_935_200_000
@@ -38,7 +40,7 @@ final class ActivityViewModelTests: XCTestCase {
         }
         let getNow: () -> Int64 = { now }
 
-        let vm = ActivityViewModel(load: load, now: getNow)
+        let vm = ActivityViewModel(load: load, now: getNow, timeZone: fixedTimeZone)
         await vm.refresh()
 
         XCTAssertEqual(vm.groups.count, 2, "Should have 2 day groups")
@@ -71,7 +73,7 @@ final class ActivityViewModelTests: XCTestCase {
         let load: @Sendable () async -> [TimelineSessionDTO] = { [s1] }
         let getNow: () -> Int64 = { now }
 
-        let vm = ActivityViewModel(load: load, now: getNow)
+        let vm = ActivityViewModel(load: load, now: getNow, timeZone: fixedTimeZone)
         await vm.refresh()
 
         XCTAssertEqual(vm.groups[0].rows[0].summary, "Activity in Terminal")
@@ -91,7 +93,7 @@ final class ActivityViewModelTests: XCTestCase {
         let load: @Sendable () async -> [TimelineSessionDTO] = { [s1] }
         let getNow: () -> Int64 = { now }
 
-        let vm = ActivityViewModel(load: load, now: getNow)
+        let vm = ActivityViewModel(load: load, now: getNow, timeZone: fixedTimeZone)
         await vm.refresh()
 
         XCTAssertEqual(vm.groups[0].rows[0].evidence, evidence)

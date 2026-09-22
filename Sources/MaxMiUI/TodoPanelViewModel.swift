@@ -54,6 +54,10 @@ public final class TodoPanelViewModel {
         removeSelectedItem(id: id)
     }
 
+    public func ageDescription(detectedAtMs: EpochMs) -> String {
+        ActivityTime.ageDescription(detectedAtMs: detectedAtMs, nowMs: now())
+    }
+
     private func selectedItemID() -> String? {
         guard let selectedIndex, items.indices.contains(selectedIndex) else { return nil }
         return items[selectedIndex].id
