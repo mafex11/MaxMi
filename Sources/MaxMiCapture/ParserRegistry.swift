@@ -71,6 +71,7 @@ public struct ParserRegistry: Sendable {
             // lane-a begin
             TerminalParser(),
             EditorParser(),
+            NotesParser(),
             // lane-a end
         ]
         var byBundle: [String: any StructuredParser] = [:]

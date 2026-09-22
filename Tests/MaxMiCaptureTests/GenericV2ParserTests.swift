@@ -23,7 +23,6 @@ final class GenericV2ParserTests: XCTestCase {
             text("body line", y: 40),
         ], title: nil)
         let cases: [(parser: any SourceParser, app: AppInfo, kind: CaptureContentKind, label: String)] = [
-            (NotesParser(), AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Groceries"), .document, "Notes"),
             (NotionParser(), AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "June LP"), .document, "Notion"),
             (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Welcome - My Vault - Obsidian v1.5"), .document, "Obsidian"),
             (WordParser(), AppInfo(bundleID: "com.microsoft.Word", name: "Word", windowTitle: "Brief - Microsoft Word"), .document, "Word"),
@@ -45,7 +44,7 @@ final class GenericV2ParserTests: XCTestCase {
         }
     }
 
-    func testDocumentParsersNowSeeHeadingsAndKeepTheirKeys() throws {
+    func testNotesWithoutBodyAnchorFallsThroughToGenericPageExtractor() throws {
         let window = body([
             AXNode(role: "AXHeading", value: "Groceries", title: nil, url: nil,
                    frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
@@ -53,11 +52,12 @@ final class GenericV2ParserTests: XCTestCase {
             text("milk", y: 40),
         ], title: "Groceries")
         let app = AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Groceries")
-        let capture = try XCTUnwrap(try NotesParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.sourceKey, "notes:groceries")
-        XCTAssertEqual(capture.content, "## Groceries\nmilk",
-                       "generic v2 sees the heading level DocumentExtraction threw away")
-        XCTAssertEqual(capture.accumulationPolicy, .replace)
+        XCTAssertNil(try NotesParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "com.apple.Notes:Groceries")
     }
 
     func testDiscordKeepsItsOwnChromeFilteringWrappedInGenericBlocks() throws {
@@ -112,7 +112,6 @@ final class GenericV2ParserTests: XCTestCase {
             text("paragraph \(index) " + String(repeating: "x", count: 40), y: CGFloat(20 * index))
         }, title: "Long note")
         let cases: [(parser: any SourceParser, app: AppInfo, label: String)] = [
-            (NotesParser(), AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Long note"), "Notes"),
             (NotionParser(), AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Long note"), "Notion"),
             (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Long note - My Vault - Obsidian v1.5"), "Obsidian"),
         ]
@@ -125,6 +124,28 @@ final class GenericV2ParserTests: XCTestCase {
             XCTAssertLessThanOrEqual(capture.content.count,
                                      StructuredEntityExtraction.pageBudget, entry.label)
         }
+        let notes = body([
+            AXNode(
+                role: "AXTextArea",
+                value: "Long note\n" + (0..<400).map {
+                    "paragraph \($0) " + String(repeating: "x", count: 40)
+                }.joined(separator: "\n"),
+                title: nil,
+                url: nil,
+                frame: CGRect(x: 300, y: 20, width: 400, height: 8_000),
+                focused: false,
+                children: [],
+                identifier: NotesParser.bodyIdentifier
+            ),
+        ], title: "Long note")
+        let notesApp = AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Long note")
+        let notesCapture = try XCTUnwrap(try NotesParser().parse(window: notes, app: notesApp))
+        XCTAssertEqual(notesCapture.offscreenPolicy.maxCharacters,
+                       StructuredEntityExtraction.pageBudget, "Notes")
+        XCTAssertGreaterThan(notesCapture.content.count, 8_000,
+                             "Notes must not be trimmed at the 8_000 default")
+        XCTAssertLessThanOrEqual(notesCapture.content.count,
+                                 StructuredEntityExtraction.pageBudget, "Notes")
     }
 
     func testEmptyWindowsStillReturnNilEverywhere() throws {

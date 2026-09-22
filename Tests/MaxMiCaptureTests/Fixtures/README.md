@@ -35,6 +35,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `chrome-landmarks-golden.json` | Expected `CapturedContent` for `chrome-landmarks.json` | golden comparison |
 | `safari-offset-article.json` | Hand-authored Safari article at a nonzero window origin with browser chrome retained | `WebPageParser` origin invariance and chrome exclusion |
 | `safari-offset-article-golden.json` | Expected `CapturedContent` for `safari-offset-article.json` | golden comparison |
+| `notes-body.json` | Hand-authored Notes window at the origin with folder and note-list chrome retained | `NotesParser` note-body anchor |
+| `notes-body-golden.json` | Expected `CapturedContent` for `notes-body.json` | golden comparison |
+| `notes-offset-shared.json` | Hand-authored shared Notes window at a nonzero origin with folder and note-list chrome retained | `NotesParser` origin invariance and shared author |
+| `notes-offset-shared-golden.json` | Expected `CapturedContent` for `notes-offset-shared.json` | golden comparison |
 | <!-- // lane-a end --> |  |  |
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the

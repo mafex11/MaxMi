@@ -1,0 +1,74 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [],
+          "focused": false,
+          "frame": {
+            "height": 16,
+            "width": 200,
+            "x": 1450,
+            "y": 240
+          },
+          "role": "AXStaticText",
+          "value": "All iCloud"
+        }
+      ],
+      "focused": false,
+      "frame": {
+        "height": 700,
+        "width": 260,
+        "x": 1440,
+        "y": 220
+      },
+      "role": "AXOutline"
+    },
+    {
+      "children": [
+        {
+          "children": [],
+          "focused": false,
+          "frame": {
+            "height": 16,
+            "width": 220,
+            "x": 1715,
+            "y": 310
+          },
+          "role": "AXStaticText",
+          "value": "Trip plan"
+        }
+      ],
+      "focused": false,
+      "frame": {
+        "height": 700,
+        "width": 260,
+        "x": 1710,
+        "y": 220
+      },
+      "role": "AXTable"
+    },
+    {
+      "children": [],
+      "focused": true,
+      "frame": {
+        "height": 620,
+        "width": 570,
+        "x": 1990,
+        "y": 280
+      },
+      "identifier": "Note Body Text View",
+      "role": "AXTextArea",
+      "value": "Trip plan\nSample Collaborator — Shared\nreserve room\nsend outline"
+    }
+  ],
+  "focused": false,
+  "frame": {
+    "height": 760,
+    "width": 1140,
+    "x": 1440,
+    "y": 220
+  },
+  "role": "AXWindow",
+  "title": "Trip plan"
+}
