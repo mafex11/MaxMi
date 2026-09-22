@@ -128,7 +128,7 @@ final class RemindersStructuredTests: XCTestCase {
         XCTAssertEqual(items[0].title, "Submit project notes")
     }
 
-    func testUnsupportedShapesAreRefused() {
+    func testKnownBlankShapesRefuseButUnrecognizedContentFallsThrough() {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1100, height: 760),
                         children: [node("AXGroup", identifier: "reminders-sidebar",
                                         frame: CGRect(x: 0, y: 0, width: 240, height: 760))])
@@ -146,6 +146,13 @@ final class RemindersStructuredTests: XCTestCase {
                                ParserRefusal(reason: "unmatched-reminders-window"))
             }
         }
+
+        let unrelated = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1100, height: 760),
+                             children: [
+            node("AXStaticText", value: "Preferences",
+                 frame: CGRect(x: 300, y: 100, width: 200, height: 20)),
+        ])
+        XCTAssertNil(try RemindersParser().parse(unrelated, context: context("Preferences")))
     }
 
     func testResultIsIdenticalAtANonzeroWindowOrigin() throws {

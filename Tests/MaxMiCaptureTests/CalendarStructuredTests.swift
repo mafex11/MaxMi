@@ -161,7 +161,7 @@ final class CalendarStructuredTests: XCTestCase {
         XCTAssertFalse(list.contains { $0.title == "Today" })
     }
 
-    func testNoDetailRootIsRefusedByBothCalendarParsers() {
+    func testKnownBlankCalendarWindowsRefuseButUnrecognizedContentFallsThrough() {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
                         children: [node("AXGroup", identifier: "calendar-sidebar",
                                         frame: CGRect(x: 0, y: 0, width: 220, height: 800))])
@@ -177,16 +177,19 @@ final class CalendarStructuredTests: XCTestCase {
             (CalendarParser(), "com.apple.iCal"),
             (FantasticalParser(), "com.flexibits.fantastical2.mac"),
         ]
-        for window in [bare, unrelatedPopover] {
-            for (parser, bundleID) in cases {
-                XCTAssertThrowsError(try parser.parse(
-                    window, context: context(
-                        bundleID, parser is FantasticalParser ? "Fantastical" : "Calendar"
-                    )
-                )) {
+        for (parser, bundleID) in cases {
+            XCTAssertThrowsError(try parser.parse(
+                bare, context: context(
+                    bundleID, parser is FantasticalParser ? "Fantastical" : "Calendar"
+                )
+            )) {
                     XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-calendar-window"))
-                }
             }
+            XCTAssertNil(try parser.parse(
+                unrelatedPopover, context: context(
+                    bundleID, parser is FantasticalParser ? "Fantastical" : "Calendar"
+                )
+            ))
         }
     }
 

@@ -47,6 +47,12 @@ public struct FinderParser: SourceParser, StructuredParser {
             || !AXQuery.findAll("//AXTable", in: snapshot).isEmpty
     }
 
+    /// Empty and toolbar-only windows carry no page content. Every other unmatched Finder shape
+    /// may be useful (Get Info, Go to Folder, etc.), so it must fall through to generic capture.
+    static func isKnownNonContentSurface(in snapshot: AXNode) -> Bool {
+        snapshot.children.isEmpty || snapshot.children.allSatisfy { $0.role == "AXToolbar" }
+    }
+
     static func key(fromPath path: String?, windowTitle: String?) -> String {
         if let path, !path.isEmpty { return "finder:\(path.lowercased())" }
         let title = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -55,7 +61,10 @@ public struct FinderParser: SourceParser, StructuredParser {
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         guard Self.hasExpectedShape(in: snapshot) else {
-            throw ParserRefusal(reason: "unmatched-finder-window")
+            if Self.isKnownNonContentSurface(in: snapshot) {
+                throw ParserRefusal(reason: "unmatched-finder-window")
+            }
+            return nil
         }
         var options = GenericPageExtractor.Options()
         // The v2 structured path preserves every block. Its consumer applies the configured

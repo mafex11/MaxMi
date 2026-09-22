@@ -150,14 +150,14 @@ final class FinderStructuredTests: XCTestCase {
         }
     }
 
-    func testAnEmptyWindowIsNotHandled() throws {
+    func testAnEmptyWindowIsRefused() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800))
         XCTAssertThrowsError(try FinderParser().parse(bare, context: context("sample"))) {
             XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-finder-window"))
         }
     }
 
-    func testToolbarOnlyAndUnrelatedWindowsAreRefused() {
+    func testToolbarOnlyWindowsAreRefusedButUnrecognizedContentFallsThrough() throws {
         let toolbarOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
                                children: [
                                 node("AXToolbar", frame: CGRect(x: 0, y: 0, width: 1200, height: 40),
@@ -168,15 +168,24 @@ final class FinderStructuredTests: XCTestCase {
                                ])
         let unrelated = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
                              children: [
-                                node("AXStaticText", value: "Nothing to do with a folder",
+                                node("AXStaticText", value: "Name: Project plan",
                                      frame: CGRect(x: 100, y: 100, width: 300, height: 20)),
                              ])
-        for candidate in [toolbarOnly, unrelated] {
-            XCTAssertThrowsError(try FinderParser().parse(candidate, context: context("sample"))) {
-                XCTAssertEqual($0 as? ParserRefusal,
-                               ParserRefusal(reason: "unmatched-finder-window"))
-            }
+        XCTAssertThrowsError(try FinderParser().parse(toolbarOnly, context: context("sample"))) {
+            XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-finder-window"))
         }
+        XCTAssertNil(try FinderParser().parse(unrelated, context: context("Get Info")))
+
+        let app = AppInfo(bundleID: ParserRegistry.finderBundleID, name: "Finder",
+                          windowTitle: "Get Info")
+        guard case .parsedByFallback(let fallback, let parser) = CaptureDispatch.parseDetailed(
+            window: unrelated, app: app, registry: ParserRegistry()
+        ) else {
+            return XCTFail("an unrecognized Finder window must use generic fallback")
+        }
+        XCTAssertEqual(parser, "FinderParser")
+        XCTAssertEqual(fallback.sourceKey, "com.apple.finder:Get Info")
+        XCTAssertTrue(fallback.content.contains("Name: Project plan"))
     }
 
     func testSourceParserSuppliesTheKeyAndTheGenericKind() throws {

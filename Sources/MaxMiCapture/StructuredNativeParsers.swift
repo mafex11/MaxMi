@@ -65,14 +65,20 @@ public struct FantasticalParser: SourceParser {
 /// F15's no-duplicate-implementations rule).
 enum CalendarStructuredExtraction {
     static func events(in window: AXNode, context: ParseContext, sourceApp: String) throws
-        -> [CalendarEvent] {
+        -> [CalendarEvent]? {
         guard let detailRoot = StructuredEntityExtraction.calendarDetailRoot(in: window) else {
-            throw ParserRefusal(reason: "unmatched-calendar-window")
+            return nil
         }
         guard let extracted = StructuredEntityExtraction.calendarContent(
                 detailRoot: detailRoot, context: context, sourceApp: sourceApp),
               case .calendar(let events) = extracted.content else { return [] }
         return events
+    }
+
+    static func isKnownNonContentSurface(in window: AXNode) -> Bool {
+        window.children.isEmpty || window.children.allSatisfy {
+            $0.role == "AXToolbar" || $0.identifier?.contains("calendar-sidebar") == true
+        }
     }
 }
 
@@ -84,11 +90,16 @@ extension CalendarParser: StructuredParser {
     )
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        let events = try CalendarStructuredExtraction.events(
+        guard let events = try CalendarStructuredExtraction.events(
             in: snapshot,
             context: context,
             sourceApp: Self.config.app
-        )
+        ) else {
+            if CalendarStructuredExtraction.isKnownNonContentSurface(in: snapshot) {
+                throw ParserRefusal(reason: "unmatched-calendar-window")
+            }
+            return nil
+        }
         return events.isEmpty ? nil : .calendar(events)
     }
 }
@@ -101,11 +112,16 @@ extension FantasticalParser: StructuredParser {
     )
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
-        let events = try CalendarStructuredExtraction.events(
+        guard let events = try CalendarStructuredExtraction.events(
             in: snapshot,
             context: context,
             sourceApp: Self.config.app
-        )
+        ) else {
+            if CalendarStructuredExtraction.isKnownNonContentSurface(in: snapshot) {
+                throw ParserRefusal(reason: "unmatched-calendar-window")
+            }
+            return nil
+        }
         return events.isEmpty ? nil : .calendar(events)
     }
 }
@@ -723,6 +739,12 @@ enum TaskStructuredExtraction {
         return hasRows || reminderDetailRoot(in: window) != nil
     }
 
+    static func isKnownNonContentSurface(in window: AXNode) -> Bool {
+        window.children.isEmpty || window.children.allSatisfy {
+            $0.role == "AXToolbar" || $0.identifier?.contains("reminders-sidebar") == true
+        }
+    }
+
     /// Everything the named fields did not claim, as the notes body. `AXCheckBox` is excluded
     /// because it is in `StructuredEntityExtraction.readableRoles` — without this, a row's
     /// checkbox value ("0") is rendered as a task note (ruling F23). One implementation, used by
@@ -812,7 +834,10 @@ extension RemindersParser: StructuredParser {
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         guard TaskStructuredExtraction.hasExpectedShape(in: snapshot) else {
-            throw ParserRefusal(reason: "unmatched-reminders-window")
+            if TaskStructuredExtraction.isKnownNonContentSurface(in: snapshot) {
+                throw ParserRefusal(reason: "unmatched-reminders-window")
+            }
+            return nil
         }
         let items = TaskStructuredExtraction.tasks(in: snapshot, windowTitle: context.windowTitle)
         return items.isEmpty ? nil : .tasks(items)
