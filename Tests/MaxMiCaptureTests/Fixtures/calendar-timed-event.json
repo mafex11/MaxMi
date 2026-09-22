@@ -1,0 +1,12 @@
+{
+  "role":"AXWindow","value":null,"title":"Calendar","url":null,
+  "frame":{"x":0,"y":0,"width":1200,"height":800},"focused":false,"children":[
+    {"role":"AXPopover","value":null,"title":null,"identifier":"event-detail","url":null,
+     "frame":{"x":400,"y":120,"width":480,"height":420},"focused":false,"children":[
+      {"role":"AXHeading","value":"Planning","title":null,"identifier":"event-title","url":null,
+       "frame":{"x":420,"y":140,"width":300,"height":20},"focused":false,"children":[]},
+      {"role":"AXStaticText","value":"Thursday 24 September, 14:00 to 15:30","title":null,"identifier":"event-date","url":null,
+       "frame":{"x":420,"y":180,"width":300,"height":20},"focused":false,"children":[]}
+    ]}
+  ]
+}

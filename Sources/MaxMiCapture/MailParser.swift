@@ -11,41 +11,40 @@ import MaxMiCore
 /// Requires Automation (AppleEvents) permission for MaxMi → Mail; the first run triggers the
 /// system prompt. If scripting is unavailable/denied, parse returns nil (→ skipped, per the
 /// no-silent-fallback rule) rather than crashing.
-public struct MailParser: SourceParser {
+public struct MailParser: SourceParser, StructuredParser {
     static let contentCap = 32_000
     static let perAccountLimit = 6      // most-recent N messages per account
     static let structuredHeader = "MAXMI_MAIL_V2"
     static let recordSeparator = "\u{1D}"
     static let fieldSeparator = "\u{1E}"
+    /// The ONE AX attribute Mail is worth reading. Everything else comes from AppleScript,
+    /// because Mail's AX tree costs ~80 ms per node (spec §12 Q6).
+    static let subjectFieldIdentifier = "Mail.subjectField"
+    public static let config = ParserConfig(
+        app: "Mail",
+        bundleIDs: [ParserRegistry.mailBundleID],
+        offscreenPolicy: .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
+    )
     public init() {}
 
     struct Extracted {
         let content: CapturedContent
         let sourceKey: String
         let sourceTitle: String?
-        let truncated: Bool
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let raw = Self.runAppleScript(Self.script) else { return nil }
-        return Self.makeCapture(fromScriptOutput: raw, windowTitle: app.windowTitle)
-    }
-
-    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        guard let raw = Self.runAppleScript(Self.script) else { return nil }
-        return Self.extract(fromScriptOutput: raw, windowTitle: app.windowTitle)?.content
-    }
-
-    /// Pure transform from raw osascript output → ParsedCapture (nil if no usable records).
-    /// Separated from the Process call so it's unit-testable without a live Mail app.
-    static func makeCapture(fromScriptOutput raw: String, windowTitle: String?) -> ParsedCapture? {
-        guard let extracted = extract(fromScriptOutput: raw, windowTitle: windowTitle) else { return nil }
-        let isThread = extracted.sourceKey != "mail:inbox"
+        guard let unbounded = try parse(window, context: ParseContext(app: app)),
+              let metadata = Self.metadata(for: unbounded, windowTitle: app.windowTitle) else {
+            return nil
+        }
+        let content = CaptureAccumulator.bound(unbounded, to: Self.contentCap)
+        let isThread = metadata.sourceKey != "mail:inbox"
         return ParsedCapture(
             sourceApp: "Mail",
-            sourceKey: extracted.sourceKey,
-            sourceTitle: extracted.sourceTitle,
-            content: ContentRenderer.render(extracted.content, style: .full),
+            sourceKey: metadata.sourceKey,
+            sourceTitle: metadata.sourceTitle,
+            content: ContentRenderer.render(content, style: .full),
             // Not derivable from the .conversation shape — Mail stays .email (spec 12 Q3).
             contentKind: .email,
             parserVersion: 2,
@@ -53,26 +52,96 @@ public struct MailParser: SourceParser {
             offscreenPolicy: isThread
                 ? .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
                 : .accessibilityScroll(maxSteps: 3),
-            structured: extracted.content,
-            truncated: extracted.truncated
+            structured: content,
+            truncated: content != unbounded
         )
     }
 
-    static func extract(fromScriptOutput raw: String, windowTitle: String?) -> Extracted? {
-        if raw.hasPrefix(structuredHeader) {
-            return selectedMessageContent(fromScriptOutput: raw, windowTitle: windowTitle)
+    public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        try parse(window, context: ParseContext(app: app))
+    }
+
+    /// The one extraction path for both v2 routing and the v1 render bridge.
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        // A frontmost compose window is what the user is doing right now, so it wins over the
+        // AppleScript-sourced inbox (spec §7c).
+        if Self.hasComposeSubjectField(in: snapshot) {
+            guard let draft = Self.composeDraft(window: snapshot) else {
+                throw ParserRefusal(reason: "empty-compose-draft")
+            }
+            return draft
         }
-        guard let inbox = inboxContent(fromScriptOutput: raw) else { return nil }
+        guard let raw = Self.runAppleScript(Self.script) else { return nil }
+        return Self.extractUnbounded(fromScriptOutput: raw, windowTitle: context.windowTitle)?.content
+    }
+
+    /// A frontmost compose window, as a single user draft. nil for every other Mail window, so
+    /// the AppleScript path stays authoritative for reading mail.
+    static func composeDraft(window: AXNode) -> CapturedContent? {
+        guard let subjectField = composeSubjectField(in: window) else { return nil }
+        let subject = (subjectField.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // The compose body is the largest text area in the window; a compose window has no others.
+        let body = AXQuery.findAll("//AXTextArea", in: window)
+            .compactMap { $0.value?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .max { $0.count < $1.count } ?? ""
+        guard !subject.isEmpty || !body.isEmpty else { return nil }
+        let channel = subject.isEmpty ? "(no subject)" : subject
+        return .conversation(Conversation(
+            channel: channel,
+            isGroup: false,
+            messages: [Message(id: Message.makeID(sender: "You", timeString: nil, text: body),
+                               sender: "You", text: body, timestamp: nil, timeString: nil,
+                               isUser: true, isDraft: true)]
+        ))
+    }
+
+    static func hasComposeSubjectField(in window: AXNode) -> Bool {
+        composeSubjectField(in: window) != nil
+    }
+
+    private static func composeSubjectField(in window: AXNode) -> AXNode? {
+        AXQuery.find("//*[identifier=\"\(subjectFieldIdentifier)\"]", in: window)
+    }
+
+    /// Pure transform from raw osascript output → ParsedCapture (nil if no usable records).
+    /// Separated from the Process call so it's unit-testable without a live Mail app.
+    static func makeCapture(fromScriptOutput raw: String, windowTitle: String?) -> ParsedCapture? {
+        guard let extracted = extractUnbounded(fromScriptOutput: raw, windowTitle: windowTitle) else {
+            return nil
+        }
+        let content = CaptureAccumulator.bound(extracted.content, to: contentCap)
+        let isThread = extracted.sourceKey != "mail:inbox"
+        return ParsedCapture(
+            sourceApp: "Mail",
+            sourceKey: extracted.sourceKey,
+            sourceTitle: extracted.sourceTitle,
+            content: ContentRenderer.render(content, style: .full),
+            // Not derivable from the .conversation shape — Mail stays .email (spec 12 Q3).
+            contentKind: .email,
+            parserVersion: 2,
+            accumulationPolicy: .rollingText,
+            offscreenPolicy: isThread
+                ? .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
+                : .accessibilityScroll(maxSteps: 3),
+            structured: content,
+            truncated: content != extracted.content
+        )
+    }
+
+    static func extractUnbounded(fromScriptOutput raw: String, windowTitle: String?) -> Extracted? {
+        if raw.hasPrefix(structuredHeader) {
+            return selectedMessageUnboundedContent(fromScriptOutput: raw, windowTitle: windowTitle)
+        }
+        guard let inbox = inboxUnboundedContent(fromScriptOutput: raw) else { return nil }
         return Extracted(
-            content: inbox.content,
+            content: inbox,
             sourceKey: "mail:inbox",
-            sourceTitle: windowTitle,
-            truncated: inbox.truncated
+            sourceTitle: windowTitle
         )
     }
 
     /// The per-account inbox listing: "account » sender | subject" per line.
-    static func inboxContent(fromScriptOutput raw: String) -> (content: CapturedContent, truncated: Bool)? {
+    static func inboxUnboundedContent(fromScriptOutput raw: String) -> CapturedContent? {
         let lines = raw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         guard !lines.isEmpty else { return nil }
@@ -89,18 +158,13 @@ public struct MailParser: SourceParser {
                 isUser: false, isDraft: false
             )
         }
-        let unbounded = CapturedContent.conversation(
+        return CapturedContent.conversation(
             Conversation(channel: "Inbox", isGroup: false, messages: messages)
         )
-        let content = CaptureAccumulator.bound(
-            unbounded,
-            to: contentCap
-        )
-        return (content, content != unbounded)
     }
 
     /// One `Message` per `MailRecord`; `channel` is the subject (spec 4f).
-    static func selectedMessageContent(fromScriptOutput raw: String, windowTitle: String?) -> Extracted? {
+    static func selectedMessageUnboundedContent(fromScriptOutput raw: String, windowTitle: String?) -> Extracted? {
         let records = mailRecords(fromScriptOutput: raw)
         guard !records.isEmpty else { return nil }
         let messages = records.map { record in
@@ -125,13 +189,53 @@ public struct MailParser: SourceParser {
             isGroup: false,
             messages: messages
         )
-        let unbounded = CapturedContent.conversation(conversation)
-        let content = CaptureAccumulator.bound(unbounded, to: contentCap)
+        return Extracted(
+            content: .conversation(conversation),
+            sourceKey: "mail:thread:\(String(ContentHash.sha256Hex(identities).prefix(24)))",
+            sourceTitle: subject ?? windowTitle
+        )
+    }
+
+    /// Compatibility transform retained for the parser-transform tests. Production routing uses
+    /// `parse(_:context:)`, which deliberately keeps the structured value unbounded until the
+    /// v1 bridge applies its legacy cap.
+    static func selectedMessageContent(fromScriptOutput raw: String, windowTitle: String?) -> Extracted? {
+        guard let extracted = selectedMessageUnboundedContent(
+            fromScriptOutput: raw, windowTitle: windowTitle
+        ) else { return nil }
+        return Extracted(
+            content: CaptureAccumulator.bound(extracted.content, to: contentCap),
+            sourceKey: extracted.sourceKey,
+            sourceTitle: extracted.sourceTitle
+        )
+    }
+
+    /// Recreates the legacy source identity from the typed conversation. Script-provided message
+    /// IDs survive in `Message.id`; synthesized IDs identify records that used the old
+    /// sender-plus-subject fallback. Compose drafts did not have a v1 capture before this bridge.
+    static func metadata(for content: CapturedContent, windowTitle: String?) -> Extracted? {
+        guard case .conversation(let conversation) = content else { return nil }
+        if conversation.channel == "Inbox" {
+            return Extracted(content: content, sourceKey: "mail:inbox", sourceTitle: windowTitle)
+        }
+        if conversation.messages.allSatisfy(\.isDraft) {
+            let identity = conversation.messages.map(\.text).joined(separator: "|")
+            return Extracted(
+                content: content,
+                sourceKey: "mail:draft:\(String(ContentHash.sha256Hex("\(conversation.channel)|\(identity)").prefix(24)))",
+                sourceTitle: conversation.channel
+            )
+        }
+        let identities = conversation.messages.map { message -> String in
+            let synthesized = Message.makeID(
+                sender: message.sender, timeString: message.timeString, text: message.text
+            )
+            return message.id == synthesized ? "\(message.sender)|\(conversation.channel)" : message.id
+        }.joined(separator: "|")
         return Extracted(
             content: content,
             sourceKey: "mail:thread:\(String(ContentHash.sha256Hex(identities).prefix(24)))",
-            sourceTitle: subject ?? windowTitle,
-            truncated: content != unbounded
+            sourceTitle: conversation.channel == "message" ? windowTitle : conversation.channel
         )
     }
 

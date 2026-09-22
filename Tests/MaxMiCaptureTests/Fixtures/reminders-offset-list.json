@@ -1,0 +1,29 @@
+{
+  "role":"AXWindow","value":null,"title":"Reminders","url":null,
+  "frame":{"x":1440,"y":220,"width":1100,"height":760},"focused":false,"children":[
+    {"role":"AXGroup","value":null,"title":null,"identifier":"reminders-sidebar","url":null,
+     "frame":{"x":1440,"y":220,"width":240,"height":760},"focused":false,"children":[
+      {"role":"AXStaticText","value":"Scheduled","title":null,"url":null,
+       "frame":{"x":1460,"y":280,"width":120,"height":20},"focused":false,"children":[]}
+    ]},
+    {"role":"AXTable","value":null,"title":null,"identifier":"reminder-list","url":null,
+     "frame":{"x":1720,"y":280,"width":700,"height":660},"focused":false,"children":[
+      {"role":"AXRow","value":null,"title":null,"url":null,
+       "frame":{"x":1740,"y":320,"width":600,"height":44},"focused":false,"children":[
+        {"role":"AXCheckBox","value":"checked","title":null,"identifier":"completed-checkbox","url":null,
+         "frame":{"x":1740,"y":320,"width":20,"height":20},"focused":false,"children":[]},
+        {"role":"AXStaticText","value":"Archive sample packet","title":null,"identifier":"reminder-title","url":null,
+         "frame":{"x":1770,"y":320,"width":300,"height":20},"focused":false,"children":[]},
+        {"role":"AXStaticText","value":"Friday 14:30","title":null,"identifier":"due-date","url":null,
+         "frame":{"x":1770,"y":342,"width":200,"height":16},"focused":false,"children":[]}
+      ]},
+      {"role":"AXRow","value":null,"title":null,"url":null,
+       "frame":{"x":1740,"y":390,"width":600,"height":44},"focused":false,"children":[
+        {"role":"AXCheckBox","value":"0","title":null,"identifier":"completed-checkbox","url":null,
+         "frame":{"x":1740,"y":390,"width":20,"height":20},"focused":false,"children":[]},
+        {"role":"AXStaticText","value":"Review draft outline","title":null,"identifier":"reminder-title","url":null,
+         "frame":{"x":1770,"y":390,"width":300,"height":20},"focused":false,"children":[]}
+      ]}
+    ]}
+  ]
+}

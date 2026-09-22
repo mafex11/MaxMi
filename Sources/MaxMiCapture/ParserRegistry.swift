@@ -63,6 +63,9 @@ public struct ParserRegistry: Sendable {
         // lane-a begin
         for bid in Self.editorBundleIDs { p[bid] = EditorParser() }
         // lane-a end
+        // lane-c begin
+        p[Self.finderBundleID] = FinderParser()
+        // lane-c end
         // Structured (v2) parsers. Each one declares the bundle IDs and hosts it claims, so the
         // two maps below are derived, never hand-maintained in parallel with the list. Tasks 7-26
         // append to this ONE list; by the end of Phase D it holds the seventeen entries written
@@ -79,6 +82,9 @@ public struct ParserRegistry: Sendable {
         // lane-b begin
         structured.append(contentsOf: [SlackParser(), DiscordParser(), MessagesParser(), WhatsAppParser()] as [any StructuredParser])
         // lane-b end
+        // lane-c begin
+        structured.append(contentsOf: [MailParser(), FinderParser(), CalendarParser(), FantasticalParser(), RemindersParser()] as [any StructuredParser])
+        // lane-c end
         var byBundle: [String: any StructuredParser] = [:]
         var bundleClaims: [String: [any StructuredParser]] = [:]
         var byHost: [String: any StructuredParser] = [:]
