@@ -33,6 +33,43 @@ final class BrowserCapturePipelineTests: XCTestCase {
         XCTAssertTrue(result.capture.sourceKey.hasPrefix("https://mail.google.com/"))
     }
 
+    func testRegisteredHostFallbackPageIsBoundedToTheGenericPageBudget() throws {
+        func paragraph(_ value: String, y: CGFloat) -> AXNode {
+            AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
+                   frame: CGRect(x: 20, y: y, width: 600, height: 16), focused: false,
+                   children: [])
+        }
+        let url = "https://mail.google.com/mail/u/0/#inbox/oversized"
+        let webArea = AXNode(
+            role: "AXWebArea", value: nil, title: "Gmail", url: url,
+            frame: CGRect(x: 0, y: 40, width: 1200, height: 760), focused: false,
+            children: [
+                paragraph("Paragraph one is visible.", y: 80),
+                paragraph("Paragraph two is visible.", y: 110),
+                paragraph("Paragraph three is visible.", y: 140),
+                paragraph("Paragraph four is visible.", y: 170),
+                paragraph("Paragraph five is visible.", y: 200),
+            ]
+        )
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "Gmail", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1200, height: 800), focused: false,
+            children: [webArea]
+        )
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        let result = try BrowserCapturePipeline.parse(
+            window: window, windowTitle: "Gmail", browser: browser, contentBudget: 120
+        )
+
+        guard case .generic(let page) = try XCTUnwrap(result.capture.structured) else {
+            return XCTFail("a host parser without anchors must fall through to its generic page")
+        }
+        XCTAssertTrue(result.parserID.contains("fallback/GmailParser"))
+        XCTAssertLessThan(page.regions[0].blocks.count, 5)
+        XCTAssertLessThanOrEqual(ContentRenderer.render(.generic(page), style: .full).count, 120)
+        XCTAssertTrue(result.truncated)
+    }
+
     func testAllDedicatedWebAppsClassify() {
         let cases: [(String, WebAppKind)] = [
             ("https://mail.google.com/mail/u/0/#inbox", .gmail),

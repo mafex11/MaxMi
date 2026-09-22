@@ -74,6 +74,8 @@ public enum BrowserCapturePipeline {
             structuredWasBounded = bounded != content
         case .fellThrough(let content, let notHandledBy):
             if tabHasNoReadableText { throw ExtractionError.emptyContent }
+            // Keep the generic browser path's pre-Phase-D soft bound: generic pages retain their
+            // last readable block instead of being hard-trimmed into an empty page.
             let bounded = CaptureAccumulator.bound(content, to: contentBudget)
             structured = bounded
             hostClaimed = false
