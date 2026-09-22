@@ -42,13 +42,22 @@ final class SlackParserTests: XCTestCase {
     }
 
     func testV2CaptureHardBoundsOversizeStructuredContent() throws {
-        let small = try XCTUnwrap(try SlackParser().parse(
+        let parser = SlackParser()
+        let small = try XCTUnwrap(try parser.parse(
             window: domWindow(["A short message"]), app: app("#general - Acme - Slack")))
         XCTAssertFalse(small.truncated)
 
-        let oversize = try XCTUnwrap(try SlackParser().parse(
-            window: domWindow([String(repeating: "x", count: SlackParser.contentCap * 2)]),
-            app: app("#general - Acme - Slack")
+        let oversizedWindow = domWindow([String(repeating: "x", count: SlackParser.contentCap * 2)])
+        let direct = try XCTUnwrap(try parser.parse(
+            oversizedWindow, context: ParseContext(app: app("#general - Acme - Slack"))
+        ))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(direct, style: .full).count,
+            SlackParser.contentCap
+        )
+
+        let oversize = try XCTUnwrap(try parser.parse(
+            window: oversizedWindow, app: app("#general - Acme - Slack")
         ))
         XCTAssertTrue(oversize.truncated)
         XCTAssertLessThanOrEqual(oversize.content.count, SlackParser.contentCap)

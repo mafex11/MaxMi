@@ -17,8 +17,10 @@ public struct MessagesParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
-        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        guard let outcome = parseOutcome(
+            window, context: ParseContext(app: app)
+        ) else { return nil }
+        let content = outcome.content
         return ParsedCapture(
             sourceApp: "Messages",
             sourceKey: key(fromTitle: app.windowTitle),
@@ -29,7 +31,7 @@ public struct MessagesParser: SourceParser {
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3),
             structured: content,
-            truncated: content != unbounded
+            truncated: outcome.truncated
         )
     }
 
@@ -85,7 +87,10 @@ extension MessagesParser: StructuredParser {
         return AXQuery.sortedByVisualOrder(found, relativeTo: transcript.frame)
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+    private static func unboundedContent(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) -> CapturedContent? {
         guard let transcript = Self.transcript(in: snapshot) else { return nil }
         let chat = Self.chatName(fromTitle: context.windowTitle)
         let messages = Self.bubbles(in: transcript).compactMap { bubble -> Message? in
@@ -109,4 +114,19 @@ extension MessagesParser: StructuredParser {
         let isGroup = Set(messages.filter { !$0.isUser }.map(\.sender)).count > 1
         return .conversation(Conversation(channel: chat, isGroup: isGroup, messages: messages))
     }
+
+    func parseOutcome(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) -> StructuredContentOutcome? {
+        guard let unbounded = Self.unboundedContent(snapshot, context: context) else { return nil }
+        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        return StructuredContentOutcome(content: content, truncated: content != unbounded)
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        parseOutcome(snapshot, context: context)?.content
+    }
 }
+
+extension MessagesParser: TruncationReportingStructuredParser {}

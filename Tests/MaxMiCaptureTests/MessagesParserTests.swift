@@ -37,7 +37,7 @@ final class MessagesParserTests: XCTestCase {
                        ContentRenderer.render(try XCTUnwrap(cap.structured), style: .full))
     }
 
-    func testSelfBoundingCaptureReportsTruncation() throws {
+    func testV2ParseHardBoundsOversizeContent() throws {
         func conversationWindow(_ messages: [String]) -> AXNode {
             node("AXWindow", nil, y: 0, [
                 transcript(messages.enumerated().map { index, message in
@@ -48,15 +48,24 @@ final class MessagesParserTests: XCTestCase {
             ])
         }
 
-        let small = try XCTUnwrap(try MessagesParser().parse(
+        let parser = MessagesParser()
+        let small = try XCTUnwrap(try parser.parse(
             window: conversationWindow(["A short message"]), app: app("Harnish")))
         XCTAssertFalse(small.truncated)
 
-        let oversize = try XCTUnwrap(try MessagesParser().parse(
-            window: conversationWindow((0..<120).map {
-                "message \($0) " + String(repeating: "bubble body ", count: 10)
-            }),
-            app: app("Harnish")
+        let oversizedWindow = conversationWindow((0..<120).map {
+            "message \($0) " + String(repeating: "bubble body ", count: 10)
+        })
+        let direct = try XCTUnwrap(try parser.parse(
+            oversizedWindow, context: ParseContext(app: app("Harnish"))
+        ))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(direct, style: .full).count,
+            MessagesParser.contentCap
+        )
+
+        let oversize = try XCTUnwrap(try parser.parse(
+            window: oversizedWindow, app: app("Harnish")
         ))
         XCTAssertTrue(oversize.truncated)
     }

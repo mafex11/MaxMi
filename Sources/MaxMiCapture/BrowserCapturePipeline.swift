@@ -70,7 +70,7 @@ public enum BrowserCapturePipeline {
         var hostMarker: String?
         var structuredWasBounded = false
         switch routed {
-        case .parsed(let content, let parserName):
+        case .parsed(let content, let parserName, let parserTruncated):
             let cap: Int
             if case .conversation = content {
                 cap = Self.conversationContentCap
@@ -81,7 +81,7 @@ public enum BrowserCapturePipeline {
             structured = bounded
             hostClaimed = true
             hostMarker = parserName
-            structuredWasBounded = bounded != content
+            structuredWasBounded = bounded != content || parserTruncated
         case .fellThrough(let content, let notHandledBy):
             if tabHasNoReadableText { throw ExtractionError.emptyContent }
             // Keep the generic browser path's pre-Phase-D soft bound: generic pages retain their

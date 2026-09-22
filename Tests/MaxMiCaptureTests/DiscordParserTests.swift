@@ -1,4 +1,5 @@
 import XCTest
+import MaxMiCore
 @testable import MaxMiCapture
 
 final class DiscordParserTests: XCTestCase {
@@ -73,7 +74,7 @@ final class DiscordParserTests: XCTestCase {
         XCTAssertTrue(cap.content.contains("message with no frame"))
     }
 
-    func testSelfBoundingCaptureReportsTruncation() throws {
+    func testV2ParseHardBoundsOversizeContent() throws {
         func conversationWindow(_ messages: [String]) -> AXNode {
             node("AXWindow", nil, x: 230, [
                 AXNode(
@@ -97,15 +98,24 @@ final class DiscordParserTests: XCTestCase {
             ])
         }
 
-        let small = try XCTUnwrap(try DiscordParser().parse(
+        let parser = DiscordParser()
+        let small = try XCTUnwrap(try parser.parse(
             window: conversationWindow(["A short message"]), app: app("#general | Acme - Discord")))
         XCTAssertFalse(small.truncated)
 
-        let oversize = try XCTUnwrap(try DiscordParser().parse(
-            window: conversationWindow((0..<120).map {
-                "message \($0) " + String(repeating: "discord body ", count: 10)
-            }),
-            app: app("#general | Acme - Discord")
+        let oversizedWindow = conversationWindow((0..<120).map {
+            "message \($0) " + String(repeating: "discord body ", count: 10)
+        })
+        let direct = try XCTUnwrap(try parser.parse(
+            oversizedWindow, context: ParseContext(app: app("#general | Acme - Discord"))
+        ))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(direct, style: .full).count,
+            DiscordParser.contentCap
+        )
+
+        let oversize = try XCTUnwrap(try parser.parse(
+            window: oversizedWindow, app: app("#general | Acme - Discord")
         ))
         XCTAssertTrue(oversize.truncated)
         XCTAssertLessThanOrEqual(oversize.content.count, DiscordParser.contentCap)

@@ -77,3 +77,18 @@ public protocol StructuredParser: Sendable {
     static var config: ParserConfig { get }
     func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent?
 }
+
+struct StructuredContentOutcome: Sendable, Equatable {
+    let content: CapturedContent
+    let truncated: Bool
+}
+
+/// An optional structured-parser refinement for parsers that bound their own content before
+/// returning it. Dispatch carries the marker forward so downstream renderers do not have to
+/// infer truncation from a second, no-op bound operation.
+protocol TruncationReportingStructuredParser: StructuredParser {
+    func parseOutcome(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) throws -> StructuredContentOutcome?
+}

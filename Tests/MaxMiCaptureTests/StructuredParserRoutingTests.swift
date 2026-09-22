@@ -197,12 +197,13 @@ final class StructuredParserRoutingTests: XCTestCase {
         let registry = ParserRegistry(structuredParsers: [StubNativeParser()], hostParsers: [])
         let result = try CaptureDispatch.structuredCapture(
             window: window(), context: context(bundleID: "com.example.native"), registry: registry)
-        guard case .parsed(let content, let parserName) = result else {
+        guard case .parsed(let content, let parserName, let truncated) = result else {
             return XCTFail("expected .parsed, got \(result)")
         }
         XCTAssertEqual(content, .document(Document(title: "native", blocks: [],
                                                    author: .unknown, url: nil)))
         XCTAssertEqual(parserName, "StubNativeParser")
+        XCTAssertFalse(truncated)
     }
 
     func testStructuredParserRefusalReachesNativeDispatchAsNoContent() {

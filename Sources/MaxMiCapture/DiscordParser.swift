@@ -16,8 +16,10 @@ public struct DiscordParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
-        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        guard let outcome = parseOutcome(
+            window, context: ParseContext(app: app)
+        ) else { return nil }
+        let content = outcome.content
         return ParsedCapture(
             sourceApp: "Discord",
             sourceKey: key(fromTitle: app.windowTitle),
@@ -28,7 +30,7 @@ public struct DiscordParser: SourceParser {
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3),
             structured: content,
-            truncated: content != unbounded
+            truncated: outcome.truncated
         )
     }
 
@@ -145,7 +147,10 @@ extension DiscordParser: StructuredParser {
         return result
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+    private static func unboundedContent(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) -> CapturedContent? {
         guard let list = Self.messageList(in: snapshot) else { return nil }
         let messages = Self.messages(in: list)
         guard !messages.isEmpty else { return nil }
@@ -155,4 +160,19 @@ extension DiscordParser: StructuredParser {
             messages: messages
         ))
     }
+
+    func parseOutcome(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) -> StructuredContentOutcome? {
+        guard let unbounded = Self.unboundedContent(snapshot, context: context) else { return nil }
+        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        return StructuredContentOutcome(content: content, truncated: content != unbounded)
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        parseOutcome(snapshot, context: context)?.content
+    }
 }
+
+extension DiscordParser: TruncationReportingStructuredParser {}

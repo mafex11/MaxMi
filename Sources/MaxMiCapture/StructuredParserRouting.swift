@@ -43,7 +43,7 @@ public extension ParserRegistry {
 
 public extension CaptureDispatch {
     enum StructuredParseResult: Sendable, Equatable {
-        case parsed(CapturedContent, parserName: String)
+        case parsed(CapturedContent, parserName: String, truncated: Bool)
         /// `GenericPageExtractor` output. `notHandledBy` names the registered parser that
         /// returned nil, or is nil when no parser claimed the window at all.
         case fellThrough(CapturedContent, notHandledBy: String?)
@@ -72,8 +72,16 @@ public extension CaptureDispatch {
     ) throws -> StructuredParseResult {
         let parser = registry.structuredParser(bundleID: context.app.bundleID, url: context.url)
         let parserName = parser.map { String(describing: type(of: $0)) }
+        if let reportingParser = parser as? any TruncationReportingStructuredParser,
+           let outcome = try reportingParser.parseOutcome(window, context: context) {
+            return .parsed(
+                outcome.content,
+                parserName: parserName ?? "unknown",
+                truncated: outcome.truncated
+            )
+        }
         if let parser, let content = try parser.parse(window, context: context) {
-            return .parsed(content, parserName: parserName ?? "unknown")
+            return .parsed(content, parserName: parserName ?? "unknown", truncated: false)
         }
         var options = GenericPageExtractor.Options()
         if let parser { options.offscreenPolicy = type(of: parser).config.offscreenPolicy }

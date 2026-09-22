@@ -83,7 +83,8 @@ final class StructuredConversationParserTests: XCTestCase {
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
                           windowTitle: "#general - Acme - Slack")
         let structured = try XCTUnwrap(try SlackParser().parseStructured(window: window, app: app))
-        XCTAssertGreaterThan(ContentRenderer.render(structured, style: .full).count, SlackParser.contentCap)
+        XCTAssertLessThanOrEqual(ContentRenderer.render(structured, style: .full).count,
+                                 SlackParser.contentCap)
         let capture = try XCTUnwrap(try SlackParser().parse(window: window, app: app))
         XCTAssertLessThanOrEqual(capture.content.count, SlackParser.contentCap)
         XCTAssertTrue(capture.content.contains("Person399"), "newest survives")

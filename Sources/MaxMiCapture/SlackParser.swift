@@ -20,8 +20,10 @@ public struct SlackParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
-        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        guard let outcome = try parseOutcome(
+            window, context: ParseContext(app: app)
+        ) else { return nil }
+        let content = outcome.content
         return ParsedCapture(
             sourceApp: "Slack",
             sourceKey: key(fromTitle: app.windowTitle),
@@ -32,7 +34,7 @@ public struct SlackParser: SourceParser {
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3),
             structured: content,
-            truncated: content != unbounded
+            truncated: outcome.truncated
         )
     }
 
@@ -219,7 +221,10 @@ extension SlackParser: StructuredParser {
         return ComposerDraft.draft(window: snapshot)
     }
 
-    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+    private func unboundedContent(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) throws -> CapturedContent? {
         var messages = Self.domMessages(in: snapshot)
         if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
         guard !messages.isEmpty else {
@@ -236,6 +241,19 @@ extension SlackParser: StructuredParser {
         ))
     }
 
+    func parseOutcome(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) throws -> StructuredContentOutcome? {
+        guard let unbounded = try unboundedContent(snapshot, context: context) else { return nil }
+        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        return StructuredContentOutcome(content: content, truncated: content != unbounded)
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        try parseOutcome(snapshot, context: context)?.content
+    }
+
     /// True only for a compose-only Slack surface: a visible composer, an empty draft and no
     /// anchored message. `parse` turns that into `ParserRefusal`; every other empty read stays
     /// nil and degrades to generic v2.
@@ -248,3 +266,5 @@ extension SlackParser: StructuredParser {
             && composer.hidden == false
     }
 }
+
+extension SlackParser: TruncationReportingStructuredParser {}
