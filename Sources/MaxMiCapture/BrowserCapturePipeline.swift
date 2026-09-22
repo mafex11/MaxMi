@@ -21,49 +21,81 @@ public enum BrowserCapturePipeline {
         contentBudget: Int = WebAppCaptureParser.contentCap,
         registry: ParserRegistry = ParserRegistry()
     ) throws -> BrowserCaptureResult {
-        let tab = try BrowserTabExtractor.extract(
-            window: window,
-            windowTitle: windowTitle,
-            engine: browser.browserEngine
-        )
-        let web = try WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: contentBudget)
-        // Host routing (spec §7b): a registered host parser claims the tab; otherwise the tab is
-        // a generic web page. Either way `contentKind` stays whatever `classify` decided (§12 Q3).
+        let tab: TabCapture
+        let tabHasNoReadableText: Bool
+        do {
+            tab = try BrowserTabExtractor.extract(
+                window: window,
+                windowTitle: windowTitle,
+                engine: browser.browserEngine
+            )
+            tabHasNoReadableText = false
+        } catch ExtractionError.emptyContent {
+            // A contenteditable compose body is not a static-text tab line. Preserve the normal
+            // empty-page refusal for generic tabs below, but let a host parser make its explicit
+            // parse/refusal decision first. This sentinel is metadata-only: host content replaces
+            // it before a `ParsedCapture` is returned.
+            guard let url = BrowserTabExtractor.currentURL(
+                window: window, windowTitle: windowTitle, engine: browser.browserEngine
+            ) else {
+                throw ExtractionError.emptyContent
+            }
+            tab = TabCapture(
+                url: url,
+                title: windowTitle ?? window.title,
+                content: "host-parser",
+                urlSource: .webArea,
+                quality: .standard
+            )
+            tabHasNoReadableText = true
+        }
         let hostContext = ParseContext(
             app: AppInfo(bundleID: browser.bundleID, name: browser.displayName,
                          windowTitle: windowTitle),
             url: tab.url
         )
-        // `try` is not optional politeness: a host parser may throw `ParserRefusal` for a tab it
-        // will not let be stored. The refusal propagates to `AppWiring` as `.parserNoContent`;
-        // it is never swallowed into a generic capture.
+        // Routed FIRST: an empty compose-only tab refuses rather than allowing the metadata
+        // parser's empty-tab failure to hide the parser's explicit decision.
         let routed = try CaptureDispatch.structuredCapture(
             window: window, context: hostContext, registry: registry,
             fallback: { window, _, _ in WebPageParser.parse(window: window, tab: tab) }
         )
-        let unboundedStructured: CapturedContent
-        var hostParserMarker: String? = nil
+        let web = try WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: contentBudget)
+        let structured: CapturedContent
+        let hostClaimed: Bool
+        var hostMarker: String?
+        var structuredWasBounded = false
         switch routed {
         case .parsed(let content, let parserName):
-            unboundedStructured = content
-            hostParserMarker = parserName
+            let bounded = CaptureAccumulator.boundHard(content, to: contentBudget)
+            structured = bounded
+            hostClaimed = true
+            hostMarker = parserName
+            structuredWasBounded = bounded != content
         case .fellThrough(let content, let notHandledBy):
-            unboundedStructured = content
-            // Spec §8: a registered host parser that returned nil is a non-silent degradation.
-            hostParserMarker = notHandledBy.map { CaptureDispatch.fallbackParserID(failedParser: $0) }
+            if tabHasNoReadableText { throw ExtractionError.emptyContent }
+            let bounded = CaptureAccumulator.bound(content, to: contentBudget)
+            structured = bounded
+            hostClaimed = false
+            hostMarker = notHandledBy.map { CaptureDispatch.fallbackParserID(failedParser: $0) }
+            structuredWasBounded = bounded != content
         }
-        let structured = CaptureAccumulator.bound(unboundedStructured, to: contentBudget)
         if case .generic(let page) = structured, page.regions.isEmpty {
             throw ExtractionError.emptyContent
         }
-        let quality = tab.quality
+        let quality: BrowserCaptureQuality
+        if hostClaimed {
+            quality = .high
+        } else {
+            quality = tab.quality
+        }
         let parserID = ([
             "BrowserWeb.v2",
             browser.browserEngine?.rawValue ?? "unknown",
             web.app.rawValue,
             tab.urlSource.rawValue,
             "quality-\(quality.rawValue)",
-        ] + (hostParserMarker.map { [$0] } ?? [])).joined(separator: "/")
+        ] + (hostMarker.map { [$0] } ?? [])).joined(separator: "/")
         return BrowserCaptureResult(
             url: tab.url,
             capture: ParsedCapture(
@@ -79,11 +111,8 @@ public enum BrowserCapturePipeline {
             ),
             parserID: parserID,
             quality: quality,
-            // Three independent ways content can have been dropped: the tab text hit the
-            // extractor's cap, bounding the typed shape shed blocks or messages, or the rendered
-            // form is sitting on the cap.
             truncated: tab.truncated || web.truncated
-                || structured != unboundedStructured
+                || structuredWasBounded
                 || ContentRenderer.render(structured, style: .full).count
                     >= WebAppCaptureParser.contentCap,
             webApp: web.app

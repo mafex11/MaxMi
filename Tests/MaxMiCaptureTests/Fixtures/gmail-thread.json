@@ -1,0 +1,116 @@
+{
+  "role": "AXWindow",
+  "title": "Telemetry cache review - Gmail",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1440, "height": 900 },
+  "children": [
+    {
+      "role": "AXHeading",
+      "value": "Main menu",
+      "focused": false,
+      "frame": { "x": 20, "y": 10, "width": 200, "height": 24 },
+      "children": []
+    },
+    {
+      "role": "AXHeading",
+      "value": "Telemetry cache review",
+      "focused": false,
+      "frame": { "x": 300, "y": 60, "width": 500, "height": 24 },
+      "children": []
+    },
+    {
+      "role": "AXGroup",
+      "focused": false,
+      "frame": { "x": 300, "y": 100, "width": 900, "height": 120 },
+      "domClassList": ["adn", "ads"],
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Ilya Venn",
+          "focused": false,
+          "frame": { "x": 300, "y": 100, "width": 150, "height": 16 },
+          "domClassList": ["gD"],
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "ilya@fixture.invalid",
+          "focused": false,
+          "frame": { "x": 460, "y": 100, "width": 180, "height": 16 },
+          "domClassList": ["go"],
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "08:17 AM",
+          "focused": false,
+          "frame": { "x": 1100, "y": 100, "width": 80, "height": 16 },
+          "domClassList": ["g3"],
+          "children": []
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 300, "y": 130, "width": 900, "height": 80 },
+          "domClassList": ["a3s"],
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "The sampled blocks are stable.",
+              "focused": false,
+              "frame": { "x": 300, "y": 130, "width": 400, "height": 16 },
+              "children": []
+            },
+            {
+              "role": "AXStaticText",
+              "value": "No delayed writes remain.",
+              "focused": false,
+              "frame": { "x": 300, "y": 150, "width": 400, "height": 16 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXGroup",
+      "focused": false,
+      "frame": { "x": 300, "y": 240, "width": 900, "height": 24 },
+      "domClassList": ["adn"],
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Moro Quill",
+          "focused": false,
+          "frame": { "x": 300, "y": 240, "width": 150, "height": 16 },
+          "domClassList": ["gD"],
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "moro@fixture.invalid",
+          "focused": false,
+          "frame": { "x": 460, "y": 240, "width": 180, "height": 16 },
+          "domClassList": ["go"],
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "08:26 AM",
+          "focused": false,
+          "frame": { "x": 1100, "y": 240, "width": 80, "height": 16 },
+          "domClassList": ["g3"],
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXTextArea",
+      "value": "I will send the cache summary.",
+      "focused": false,
+      "frame": { "x": 300, "y": 500, "width": 500, "height": 120 },
+      "label": "Message Body",
+      "children": []
+    }
+  ]
+}

@@ -77,6 +77,7 @@ public struct ParserRegistry: Sendable {
             NotesParser(),
             NotionParser(),
             ObsidianParser(),
+            GmailParser(),
             // lane-a end
         ]
         // lane-b begin

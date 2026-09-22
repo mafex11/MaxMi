@@ -47,6 +47,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `obsidian-editor-golden.json` | Expected `CapturedContent` for `obsidian-editor.json` | golden comparison |
 | `obsidian-offset-preview.json` | Hand-authored Obsidian reading pane at a nonzero origin with navigator chrome retained | `ObsidianParser` preview anchor and origin invariance |
 | `obsidian-offset-preview-golden.json` | Expected `CapturedContent` for `obsidian-offset-preview.json` | golden comparison |
+| `gmail-thread.json` | Hand-authored scrubbed Gmail thread at the origin | `GmailParser` conversation: expanded message, collapsed skip, composer draft |
+| `gmail-thread-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
+| `gmail-offset-inbox.json` | Hand-authored scrubbed Gmail inbox at a nonzero screen origin | `GmailParser` generic page of three-cell table rows |
+| `gmail-offset-inbox-golden.json` | Golden `CapturedContent` for the above | `GmailParser` |
 | <!-- // lane-a end --> |  |  |
 <!-- // lane-b begin -->
 | `slack-dom-messages.json` | Hand-authored Slack DOM-class message list with an invented composer draft | `SlackParser` DOM-class message and draft anchors |

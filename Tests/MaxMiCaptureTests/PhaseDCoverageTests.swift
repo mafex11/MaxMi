@@ -29,6 +29,8 @@ final class PhaseDCoverageTests: XCTestCase {
                          ("notion-offset-peek", "notion-offset-peek-golden")],
         "ObsidianParser": [("obsidian-editor", "obsidian-editor-golden"),
                            ("obsidian-offset-preview", "obsidian-offset-preview-golden")],
+        "GmailParser": [("gmail-thread", "gmail-thread-golden"),
+                        ("gmail-offset-inbox", "gmail-offset-inbox-golden")],
         "FinderParser": [("finder-list", "finder-list-golden"),
                          ("finder-offset-copy", "finder-offset-copy-golden")],
         "CalendarParser": [("calendar-event", "calendar-event-golden"),
@@ -46,6 +48,13 @@ final class PhaseDCoverageTests: XCTestCase {
         "TerminalParser", "EditorParser", "SlackParser", "DiscordParser", "MessagesParser",
         "WhatsAppParser", "NotesParser", "NotionParser", "ObsidianParser", "FinderParser",
         "CalendarParser", "FantasticalParser", "RemindersParser",
+    ]
+
+    /// Parser type name -> the hosts it claims. Host-routed parsers (§14b) are registered by
+    /// host, not by bundle ID, so `testEveryCoveredParserIsRegisteredAsAStructuredParser`
+    /// cannot see them.
+    static let hostCoverage: [String: [String]] = [
+        "GmailParser": ["mail.google.com"],
     ]
 
     func testTheRegistrationListIsExactlyTheThirteenBundleIDParsers() {
@@ -87,10 +96,24 @@ final class PhaseDCoverageTests: XCTestCase {
             registered.insert(String(describing: type(of: parser)))
         }
         for name in Self.coverage.keys {
-            XCTAssertTrue(registered.contains(name), "\(name) is not reachable from the registry")
+            XCTAssertTrue(registered.contains(name) || Self.hostCoverage[name] != nil,
+                          "\(name) is reachable neither by bundle id nor by host")
         }
         XCTAssertTrue(registered.contains("FantasticalParser"),
                       "Fantastical shares Calendar's fixtures but must still be registered")
+    }
+
+    func testEveryHostRoutedParserIsReachableFromTheHostMap() {
+        let registry = ParserRegistry()
+        for (name, hosts) in Self.hostCoverage {
+            for host in hosts {
+                guard let parser = registry.structuredParser(forHost: host) else {
+                    return XCTFail("no structured parser registered for host \(host)")
+                }
+                XCTAssertEqual(String(describing: type(of: parser)), name,
+                               "host \(host) resolves to the wrong parser")
+            }
+        }
     }
 
     func testEveryCoveredParserHasTwoFixturesAndTwoGoldens() throws {
