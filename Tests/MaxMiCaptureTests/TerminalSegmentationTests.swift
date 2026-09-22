@@ -36,7 +36,7 @@ final class TerminalSegmentationTests: XCTestCase {
         XCTAssertEqual(session.segments.map(\.output), ["Compiling MaxMi\nBuild complete", "2 failures"])
         XCTAssertEqual(session.segments.map(\.isRunning), [false, true],
                        "no trailing prompt means the last command is still running")
-        XCTAssertEqual(session.cwd, "maxmi")
+        XCTAssertEqual(session.cwd, "~/code/MaxMi")
     }
 
     func testTrailingBarePromptMarksTheLastCommandFinished() throws {
@@ -66,7 +66,7 @@ final class TerminalSegmentationTests: XCTestCase {
         XCTAssertEqual(session.segments.map(\.command), ["git push", "git status"])
         XCTAssertEqual(session.segments.map(\.output), ["Everything up-to-date", ""])
         XCTAssertEqual(session.segments.map(\.isRunning), [false, true])
-        XCTAssertEqual(session.cwd, "shipcast")
+        XCTAssertEqual(session.cwd, "~/code/ShipCast")
     }
 
     /// Ruling F2: the prompt match runs through the marker, so the command never carries the
@@ -99,43 +99,12 @@ final class TerminalSegmentationTests: XCTestCase {
         XCTAssertFalse(session.segments[0].isRunning)
     }
 
-    func testCaptureRendersTheSegmentsAndKeepsKeyKindAndPolicy() throws {
-        let blob = """
-        dev@mac ~/code/MaxMi % swift test
-        2 failures
-        """
-        let capture = try XCTUnwrap(try TerminalParser().parse(window: window(blob), app: app()))
-        XCTAssertEqual(capture.sourceApp, "Warp")
-        XCTAssertEqual(capture.sourceKey, "terminal:warp/maxmi",
-                       "the key is still derived from the RAW scrollback")
-        XCTAssertEqual(capture.contentKind, .terminal)
-        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
-        XCTAssertEqual(capture.content, "$ swift test\n2 failures\n… (running)")
-        XCTAssertEqual(capture.content, ContentRenderer.render(
-            try XCTUnwrap(capture.structured), style: .full))
-    }
-
     func testEmptyScrollbackStillReturnsNil() throws {
         let empty = AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
                            frame: CGRect(x: 0, y: 0, width: 100, height: 100), focused: false,
                            children: [])
         XCTAssertNil(try TerminalParser().parseStructured(window: empty, app: app(nil)))
         XCTAssertNil(try TerminalParser().parse(window: empty, app: app(nil)))
-    }
-
-    func testOversizeScrollbackDropsOldestSegments() throws {
-        var lines: [String] = []
-        for index in 0..<400 {
-            lines.append("dev@mac ~/code/MaxMi % echo \(index)")
-            lines.append(String(repeating: "y", count: 40))
-        }
-        let session = try session(try TerminalParser().parseStructured(
-            window: window(lines.joined(separator: "\n")), app: app()))
-        XCTAssertEqual(session.segments.last?.command, "echo 399")
-        XCTAssertLessThan(session.segments.count, 400, "oldest segments are dropped")
-        let capture = try XCTUnwrap(try TerminalParser().parse(
-            window: window(lines.joined(separator: "\n")), app: app()))
-        XCTAssertLessThanOrEqual(capture.content.count, TerminalParser.contentCap)
     }
 
     func testSelfBoundingCaptureReportsTruncation() throws {

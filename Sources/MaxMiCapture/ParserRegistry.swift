@@ -64,7 +64,11 @@ public struct ParserRegistry: Sendable {
         // two maps below are derived, never hand-maintained in parallel with the list. Tasks 7-26
         // append to this ONE list; by the end of Phase D it holds the seventeen entries written
         // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
-        let structured: [any StructuredParser] = []
+        let structured: [any StructuredParser] = [
+            // lane-a begin
+            TerminalParser(),
+            // lane-a end
+        ]
         var byBundle: [String: any StructuredParser] = [:]
         var bundleClaims: [String: [any StructuredParser]] = [:]
         var byHost: [String: any StructuredParser] = [:]
