@@ -27,6 +27,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `warp-session-golden.json` | Expected `CapturedContent` for `warp-session.json` | golden comparison |
 | `iterm-offset-session.json` | Scrubbed iTerm2 scrollback at a nonzero window origin | `TerminalParser` origin invariance |
 | `iterm-offset-session-golden.json` | Expected `CapturedContent` for `iterm-offset-session.json` | golden comparison |
+| `vscode-editor.json` | Hand-authored VS Code editor and integrated-terminal shape at the origin | `EditorParser` editor anchor |
+| `vscode-editor-golden.json` | Expected `CapturedContent` for `vscode-editor.json` | golden comparison |
+| `cursor-offset-editor.json` | Hand-authored Cursor editor and integrated-terminal shape at a nonzero window origin | `EditorParser` origin invariance |
+| `cursor-offset-editor-golden.json` | Expected `CapturedContent` for `cursor-offset-editor.json` | golden comparison |
 | <!-- // lane-a end --> |  |  |
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the

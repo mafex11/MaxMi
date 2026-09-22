@@ -1,0 +1,1 @@
+{"content":{"document":{"_0":{"author":{"user":{}},"blocks":[{"authoredByUser":false,"text":"func render() {","type":{"paragraph":{}}},{"authoredByUser":false,"text":"    print(\"sample\")","type":{"paragraph":{}}},{"authoredByUser":false,"text":"}","type":{"paragraph":{}}}],"title":"sample.swift"}}},"v":1}

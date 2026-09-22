@@ -63,7 +63,7 @@ final class ApplicationRegistryTests: XCTestCase {
     func testElectronEditorsUseWarmupAndDocumentCaptureProfile() {
         let cursor = ApplicationRegistry.descriptor(for: "com.todesktop.230313mzl4w4u92")
         XCTAssertEqual(cursor?.kind, .document)
-        XCTAssertEqual(cursor?.captureStrategy, .genericAX)
+        XCTAssertEqual(cursor?.captureStrategy, .nativeParser)
         XCTAssertTrue(ApplicationRegistry.needsAccessibilityWarmup("com.todesktop.230313mzl4w4u92"))
         XCTAssertTrue(ApplicationRegistry.needsAccessibilityWarmup("com.google.Chrome"))
         XCTAssertFalse(ApplicationRegistry.needsAccessibilityWarmup("com.apple.dt.Xcode"))

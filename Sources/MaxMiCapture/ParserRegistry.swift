@@ -60,6 +60,9 @@ public struct ParserRegistry: Sendable {
         for bid in Self.pagesBundleIDs { p[bid] = PagesParser() }
         for bid in Self.outlookBundleIDs { p[bid] = OutlookParser() }
         for bid in Self.sparkBundleIDs { p[bid] = SparkParser() }
+        // lane-a begin
+        for bid in Self.editorBundleIDs { p[bid] = EditorParser() }
+        // lane-a end
         // Structured (v2) parsers. Each one declares the bundle IDs and hosts it claims, so the
         // two maps below are derived, never hand-maintained in parallel with the list. Tasks 7-26
         // append to this ONE list; by the end of Phase D it holds the seventeen entries written
@@ -67,6 +70,7 @@ public struct ParserRegistry: Sendable {
         let structured: [any StructuredParser] = [
             // lane-a begin
             TerminalParser(),
+            EditorParser(),
             // lane-a end
         ]
         var byBundle: [String: any StructuredParser] = [:]

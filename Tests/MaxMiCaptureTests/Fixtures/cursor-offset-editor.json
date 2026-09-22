@@ -1,0 +1,63 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [],
+          "focused": true,
+          "frame": {
+            "height": 600,
+            "width": 1000,
+            "x": 1680,
+            "y": 300
+          },
+          "role": "AXTextArea",
+          "value": "func render() {\n    print(\"sample\")\n}"
+        }
+      ],
+      "focused": false,
+      "frame": {
+        "height": 600,
+        "width": 1000,
+        "x": 1680,
+        "y": 300
+      },
+      "identifier": "workbench.editor.main",
+      "role": "AXGroup"
+    },
+    {
+      "children": [
+        {
+          "children": [],
+          "focused": false,
+          "frame": {
+            "height": 180,
+            "width": 1000,
+            "x": 1680,
+            "y": 920
+          },
+          "role": "AXTextArea",
+          "value": "test suite started\ntest alpha passed\ntest beta passed\ntest gamma passed\ntest delta passed\ntest suite completed"
+        }
+      ],
+      "focused": false,
+      "frame": {
+        "height": 180,
+        "width": 1000,
+        "x": 1680,
+        "y": 920
+      },
+      "identifier": "workbench.panel.terminal",
+      "role": "AXGroup"
+    }
+  ],
+  "focused": false,
+  "frame": {
+    "height": 900,
+    "width": 1440,
+    "x": 1440,
+    "y": 220
+  },
+  "role": "AXWindow",
+  "title": "sample — sample.swift"
+}
