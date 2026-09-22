@@ -22,7 +22,7 @@ final class SlackWebStructuredTests: XCTestCase {
     /// The web tree: a message list of `c-message_kit__background` items whose timestamps carry
     /// the readable time in their AXDescription only, plus a header channel title.
     func webWindow(origin: CGPoint = .zero, headerTitle: String? = "#general",
-                   draft: String? = nil) -> AXNode {
+                   draft: String? = nil, firstBody: String = "index rebuilt") -> AXNode {
         let x = origin.x
         let y = origin.y
         func item(_ sender: String, _ time: String, _ body: String, y itemY: CGFloat) -> AXNode {
@@ -47,7 +47,7 @@ final class SlackWebStructuredTests: XCTestCase {
         children.append(node("AXGroup", domClassList: ["c-message_list"],
                              frame: CGRect(x: x + 260, y: y + 80, width: 900, height: 600),
                              children: [
-            item("Ada", "10:14 AM", "index rebuilt", y: y + 100),
+            item("Ada", "10:14 AM", firstBody, y: y + 100),
             item("Grace", "10:16 AM", "deploy looks green", y: y + 160),
         ]))
         if let draft {
@@ -82,6 +82,13 @@ final class SlackWebStructuredTests: XCTestCase {
         -> ParseContext {
         ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
                                   windowTitle: title), url: url)
+    }
+
+    func browserWindow(_ page: AXNode, url: String) -> AXNode {
+        let frame = page.frame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
+        return node("AXWindow", frame: frame, children: [
+            node("AXWebArea", url: url, frame: frame, children: page.children),
+        ])
     }
 
     func conversation(_ content: CapturedContent?) throws -> Conversation {
@@ -208,6 +215,22 @@ final class SlackWebStructuredTests: XCTestCase {
         XCTAssertTrue(registry.structuredParser(forHost: "acme.slack.com") is SlackParser)
         XCTAssertEqual(WebAppCaptureParser.classify(url: "https://app.slack.com/client/T01/C02"),
                        .slack)
+    }
+
+    func testHostConversationIsHardBoundedToEightThousandCharacters() throws {
+        let url = "https://app.slack.com/client/T01/C02"
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        let result = try BrowserCapturePipeline.parse(
+            window: browserWindow(
+                webWindow(firstBody: String(repeating: "slack body ", count: 1_200)),
+                url: url
+            ),
+            windowTitle: "general - Acme - Slack", browser: browser
+        )
+        XCTAssertTrue(result.parserID.contains("SlackParser"))
+        XCTAssertLessThanOrEqual(result.capture.content.count,
+                                 BrowserCapturePipeline.conversationContentCap)
+        XCTAssertTrue(result.truncated)
     }
 
     func testAnUnrelatedHostNeverRoutesToSlackParser() {

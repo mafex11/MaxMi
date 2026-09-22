@@ -12,8 +12,12 @@ public struct BrowserCaptureResult: Sendable, Equatable {
 
 /// Pure browser capture pipeline used by the app and fixture tests.
 public enum BrowserCapturePipeline {
-    /// `contentBudget` is forwarded to `WebAppCaptureParser.parse` and exists only so a test can
-    /// drive the budget without a 16k fixture; production always uses the default.
+    /// Every host-routed conversation is hard-bounded on the v2 path. The generic browser budget
+    /// remains separate because generic pages preserve their last readable block when over cap.
+    static let conversationContentCap = 8_000
+
+    /// `contentBudget` is the generic browser budget forwarded to `WebAppCaptureParser.parse`;
+    /// it exists only so a test can drive the generic path without a 16k fixture.
     public static func parse(
         window: AXNode,
         windowTitle: String?,
@@ -67,7 +71,13 @@ public enum BrowserCapturePipeline {
         var structuredWasBounded = false
         switch routed {
         case .parsed(let content, let parserName):
-            let bounded = CaptureAccumulator.boundHard(content, to: contentBudget)
+            let cap: Int
+            if case .conversation = content {
+                cap = Self.conversationContentCap
+            } else {
+                cap = contentBudget
+            }
+            let bounded = CaptureAccumulator.boundHard(content, to: cap)
             structured = bounded
             hostClaimed = true
             hostMarker = parserName

@@ -5,8 +5,9 @@ import MaxMiCore
 final class OutlookWebParserTests: XCTestCase {
     func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
               selected: Bool = false, domClassList: [String]? = nil, domIdentifier: String? = nil,
-              subrole: String? = nil, frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
-        AXNode(role: role, value: value, title: title, url: nil,
+              subrole: String? = nil, url: String? = nil, frame: CGRect? = nil,
+              children: [AXNode] = []) -> AXNode {
+        AXNode(role: role, value: value, title: title, url: url,
                frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
                children: children, identifier: nil, label: label, subrole: subrole,
                headingLevel: nil, selected: selected, placeholder: nil, selectedText: nil,
@@ -38,7 +39,8 @@ final class OutlookWebParserTests: XCTestCase {
             ])
     }
 
-    func readingWindow(origin: CGPoint = .zero, draft: String? = nil) -> AXNode {
+    func readingWindow(origin: CGPoint = .zero, draft: String? = nil,
+                       firstBody: [String] = ["Rebuild finished overnight.", "No downtime."]) -> AXNode {
         let x = origin.x
         let y = origin.y
         var children: [AXNode] = [
@@ -46,7 +48,7 @@ final class OutlookWebParserTests: XCTestCase {
                  frame: CGRect(x: x + 500, y: y + 60, width: 500, height: 24)),
             card(description: "Message From: Nira Vale, Sent: Mon 10:14 AM",
                  headerTexts: ["Nira Vale", "Mon 10:14 AM"],
-                 body: ["Rebuild finished overnight.", "No downtime."], y: y + 100, x: x + 500),
+                 body: firstBody, y: y + 100, x: x + 500),
             // The second card's description does not carry the From/Sent shape, so the header's
             // static texts in visual order are the fallback.
             card(description: "Message", headerTexts: ["Sol Renn", "Mon 10:41 AM"],
@@ -102,6 +104,13 @@ final class OutlookWebParserTests: XCTestCase {
                  url: String = OutlookWebParserTests.readingURL) -> ParseContext {
         ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
                                   windowTitle: title), url: url)
+    }
+
+    func browserWindow(_ page: AXNode, url: String) -> AXNode {
+        let frame = page.frame ?? CGRect(x: 0, y: 0, width: 1600, height: 900)
+        return node("AXWindow", title: page.title, frame: frame, children: [
+            node("AXWebArea", url: url, frame: frame, children: page.children),
+        ])
     }
 
     func conversation(_ content: CapturedContent?) throws -> Conversation {
@@ -299,6 +308,21 @@ final class OutlookWebParserTests: XCTestCase {
         let key = URLKeyNormalizer.normalize(Self.readingURL)
         XCTAssertTrue(key.contains("itemid=AAQkAD00"))
         XCTAssertFalse(key.contains("exvsurl"))
+    }
+
+    func testHostConversationIsHardBoundedToEightThousandCharacters() throws {
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        let result = try BrowserCapturePipeline.parse(
+            window: browserWindow(
+                readingWindow(firstBody: [String(repeating: "outlook body ", count: 1_000)]),
+                url: Self.readingURL
+            ),
+            windowTitle: "Quarterly index rebuild - Outlook", browser: browser
+        )
+        XCTAssertTrue(result.parserID.contains("OutlookWebParser"))
+        XCTAssertLessThanOrEqual(result.capture.content.count,
+                                 BrowserCapturePipeline.conversationContentCap)
+        XCTAssertTrue(result.truncated)
     }
 
     func testResultIsIdenticalAtANonzeroWindowOrigin() throws {

@@ -30,7 +30,8 @@ final class GmailParserTests: XCTestCase {
     /// One EXPANDED message (has an `a3s` body), one COLLAPSED message (no body node at all),
     /// plus the thread subject as a heading and Gmail's own chrome heading above it.
     func threadWindow(origin: CGPoint = .zero, draft: String? = nil,
-                      sender: String = "Ada Lovelace") -> AXNode {
+                      sender: String = "Ada Lovelace",
+                      bodyLines: [String] = ["Rebuild finished overnight.", "No downtime."]) -> AXNode {
         let x = origin.x
         let y = origin.y
         var children = [
@@ -42,10 +43,10 @@ final class GmailParserTests: XCTestCase {
                 text("ada@example.com", ["go"], y: y + 100, x: x + 460),
                 text("10:14 AM", ["g3"], y: y + 100, x: x + 1100),
                 node("AXGroup", domClassList: ["a3s"],
-                     frame: CGRect(x: x + 300, y: y + 130, width: 900, height: 80), children: [
-                    text("Rebuild finished overnight.", nil, y: y + 130, x: x + 300),
-                    text("No downtime.", nil, y: y + 150, x: x + 300),
-                ]),
+                     frame: CGRect(x: x + 300, y: y + 130, width: 900, height: 80),
+                     children: bodyLines.enumerated().map { index, line in
+                        text(line, nil, y: y + 130 + CGFloat(index * 20), x: x + 300)
+                     }),
             ]),
             node("AXGroup", domClassList: ["adn"],
                  frame: CGRect(x: x + 300, y: y + 240, width: 900, height: 24), children: [
@@ -360,13 +361,19 @@ final class GmailParserTests: XCTestCase {
         }
     }
 
-    func testHostContentIsBoundedToTheBrowserBudget() throws {
+    func testHostConversationIsHardBoundedToEightThousandCharacters() throws {
         let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
         let result = try BrowserCapturePipeline.parse(
-            window: browserWindow(threadWindow(), url: Self.threadURL),
-            windowTitle: nil, browser: browser, contentBudget: 40)
-        XCTAssertLessThanOrEqual(result.capture.content.count, 40,
-                                 "a host parser's content is bounded exactly like the web path's")
+            window: browserWindow(
+                threadWindow(bodyLines: [String(repeating: "gmail body ", count: 1_200)]),
+                url: Self.threadURL
+            ),
+            windowTitle: nil, browser: browser
+        )
+        XCTAssertTrue(result.parserID.contains("GmailParser"))
+        XCTAssertLessThanOrEqual(result.capture.content.count,
+                                 BrowserCapturePipeline.conversationContentCap)
+        XCTAssertTrue(result.truncated)
     }
 
     // MARK: - Goldens

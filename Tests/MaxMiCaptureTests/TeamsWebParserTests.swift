@@ -44,13 +44,14 @@ final class TeamsWebParserTests: XCTestCase {
              })
     }
 
-    func chatWindow(origin: CGPoint = .zero, draft: String? = nil) -> AXNode {
+    func chatWindow(origin: CGPoint = .zero, draft: String? = nil,
+                    firstBody: String = "index rebuilt") -> AXNode {
         let x = origin.x
         let y = origin.y
         var children: [AXNode] = [
             node("AXHeading", value: "Platform team",
                  frame: CGRect(x: x + 400, y: y + 40, width: 400, height: 24)),
-            classedMessage("Ada Lovelace", "10:14 AM", "index rebuilt", y: y + 100, x: x + 400),
+            classedMessage("Ada Lovelace", "10:14 AM", firstBody, y: y + 100, x: x + 400),
             classedMessage("Grace Hopper", "10:16 AM", "deploy looks green", y: y + 180, x: x + 400),
         ]
         if let draft {
@@ -70,13 +71,13 @@ final class TeamsWebParserTests: XCTestCase {
                                   windowTitle: title), url: url)
     }
 
-    func browserWindow(url: String) -> AXNode {
-        node("AXWindow", title: "Browser tab",
-             frame: CGRect(x: 0, y: 0, width: 1200, height: 800), children: [
+    func browserWindow(_ page: AXNode? = nil, url: String) -> AXNode {
+        let frame = page?.frame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
+        return node("AXWindow", title: "Browser tab",
+                    frame: frame, children: [
             node("AXWebArea", title: "Fallback page", url: url,
-                 frame: CGRect(x: 0, y: 40, width: 1200, height: 760), children: [
-                text("Readable fallback page.", nil, y: 80, x: 20),
-            ]),
+                 frame: frame,
+                 children: page?.children ?? [text("Readable fallback page.", nil, y: 80, x: 20)]),
         ])
     }
 
@@ -151,6 +152,21 @@ final class TeamsWebParserTests: XCTestCase {
                        "https://teams.cloud.microsoft/v2/#/x?ctx=chat",
                        "teams.cloud.microsoft keeps today's generic strip: changing it would "
                        + "fork every existing thread on that domain")
+    }
+
+    func testHostConversationIsHardBoundedToEightThousandCharacters() throws {
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        let result = try BrowserCapturePipeline.parse(
+            window: browserWindow(
+                chatWindow(firstBody: String(repeating: "teams body ", count: 1_200)),
+                url: context().url!
+            ),
+            windowTitle: "Chat | Microsoft Teams", browser: browser
+        )
+        XCTAssertTrue(result.parserID.contains("TeamsWebParser"))
+        XCTAssertLessThanOrEqual(result.capture.content.count,
+                                 BrowserCapturePipeline.conversationContentCap)
+        XCTAssertTrue(result.truncated)
     }
 
     // MARK: - Messages

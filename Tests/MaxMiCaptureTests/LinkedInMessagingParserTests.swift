@@ -40,13 +40,14 @@ final class LinkedInMessagingParserTests: XCTestCase {
     /// The messaging thread: two groups from the contact, one from the signed-in user, plus a
     /// continuation `li` under the first group, an entity title and an optional composer.
     func messagingWindow(origin: CGPoint = .zero, draft: String? = nil,
-                         selfName: String? = "Sam Rivers") -> AXNode {
+                         selfName: String? = "Sam Rivers",
+                         firstBody: String = "Sending the deck over.") -> AXNode {
         let x = origin.x
         let y = origin.y
         var children: [AXNode] = [
             text("Ada Lovelace", ["msg-entity-lockup__entity-title"], y: y + 60, x: x + 400),
             event(name: "Ada Lovelace", time: "10:14 AM",
-                  bodies: ["Sending the deck over."], y: y + 100, x: x + 400),
+                  bodies: [firstBody], y: y + 100, x: x + 400),
             event(name: nil, time: nil, bodies: ["Ignore the first slide."],
                   y: y + 160, x: x + 400),
             event(name: "Sam Rivers", time: "10:22 AM", bodies: ["Got it, thanks."],
@@ -82,6 +83,13 @@ final class LinkedInMessagingParserTests: XCTestCase {
                  url: String = LinkedInMessagingParserTests.threadURL) -> ParseContext {
         ParseContext(app: AppInfo(bundleID: "com.google.Chrome", name: "Google Chrome",
                                   windowTitle: title), url: url)
+    }
+
+    func browserWindow(_ page: AXNode, url: String) -> AXNode {
+        let frame = page.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        return node("AXWindow", title: page.title, frame: frame, children: [
+            node("AXWebArea", url: url, frame: frame, children: page.children),
+        ])
     }
 
     func conversation(_ content: CapturedContent?) throws -> Conversation {
@@ -258,6 +266,21 @@ final class LinkedInMessagingParserTests: XCTestCase {
                        URLKeyNormalizer.normalize(Self.threadURL + "?focus=true"))
         XCTAssertTrue(URLKeyNormalizer.normalize(Self.threadURL).hasPrefix(
             "https://www.linkedin.com/messaging/thread"))
+    }
+
+    func testHostConversationIsHardBoundedToEightThousandCharacters() throws {
+        let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "com.google.Chrome"))
+        let result = try BrowserCapturePipeline.parse(
+            window: browserWindow(
+                messagingWindow(firstBody: String(repeating: "linkedin body ", count: 1_000)),
+                url: Self.threadURL
+            ),
+            windowTitle: "Messaging | LinkedIn", browser: browser
+        )
+        XCTAssertTrue(result.parserID.contains("LinkedInMessagingParser"))
+        XCTAssertLessThanOrEqual(result.capture.content.count,
+                                 BrowserCapturePipeline.conversationContentCap)
+        XCTAssertTrue(result.truncated)
     }
 
     func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
