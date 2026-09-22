@@ -17,6 +17,9 @@ public struct MailParser: SourceParser {
     static let structuredHeader = "MAXMI_MAIL_V2"
     static let recordSeparator = "\u{1D}"
     static let fieldSeparator = "\u{1E}"
+    /// The ONE AX attribute Mail is worth reading. Everything else comes from AppleScript,
+    /// because Mail's AX tree costs ~80 ms per node (spec §12 Q6).
+    static let subjectFieldIdentifier = "Mail.subjectField"
     public init() {}
 
     struct Extracted {
@@ -32,8 +35,33 @@ public struct MailParser: SourceParser {
     }
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
+        // A frontmost compose window is what the user is doing right now, so it wins over the
+        // AppleScript-sourced inbox (spec §7c).
+        if let draft = Self.composeDraft(window: window) { return draft }
         guard let raw = Self.runAppleScript(Self.script) else { return nil }
         return Self.extract(fromScriptOutput: raw, windowTitle: app.windowTitle)?.content
+    }
+
+    /// A frontmost compose window, as a single user draft. nil for every other Mail window, so
+    /// the AppleScript path stays authoritative for reading mail.
+    static func composeDraft(window: AXNode) -> CapturedContent? {
+        guard let subjectField = AXQuery.find(
+            "//*[identifier=\"\(subjectFieldIdentifier)\"]", in: window
+        ) else { return nil }
+        let subject = (subjectField.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // The compose body is the largest text area in the window; a compose window has no others.
+        let body = AXQuery.findAll("//AXTextArea", in: window)
+            .compactMap { $0.value?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .max { $0.count < $1.count } ?? ""
+        guard !subject.isEmpty || !body.isEmpty else { return nil }
+        let channel = subject.isEmpty ? "(no subject)" : subject
+        return .conversation(Conversation(
+            channel: channel,
+            isGroup: false,
+            messages: [Message(id: Message.makeID(sender: "You", timeString: nil, text: body),
+                               sender: "You", text: body, timestamp: nil, timeString: nil,
+                               isUser: true, isDraft: true)]
+        ))
     }
 
     /// Pure transform from raw osascript output → ParsedCapture (nil if no usable records).
