@@ -49,6 +49,22 @@ final class OptionDoubleTapDetectorTests: XCTestCase {
         XCTAssertFalse(detector.consume(.optionUp(1_550)))
     }
 
+    func testHoldAtExactMaximumIsATapButOneMillisecondLongerIsNot() {
+        var acceptedDetector = OptionDoubleTapDetector()
+
+        XCTAssertFalse(acceptedDetector.consume(.optionDown(1_000)))
+        XCTAssertFalse(acceptedDetector.consume(.optionUp(1_250)))
+        XCTAssertFalse(acceptedDetector.consume(.optionDown(1_300)))
+        XCTAssertTrue(acceptedDetector.consume(.optionUp(1_350)))
+
+        var rejectedDetector = OptionDoubleTapDetector()
+
+        XCTAssertFalse(rejectedDetector.consume(.optionDown(1_000)))
+        XCTAssertFalse(rejectedDetector.consume(.optionUp(1_251)))
+        XCTAssertFalse(rejectedDetector.consume(.optionDown(1_300)))
+        XCTAssertFalse(rejectedDetector.consume(.optionUp(1_350)))
+    }
+
     func testOtherModifierResetsTheDetector() {
         var detector = OptionDoubleTapDetector()
 
