@@ -29,4 +29,23 @@ final class ReminderTimeValidatorTests: XCTestCase {
         ))
         XCTAssertNil(ReminderTimeValidator.accept("tomorrow morning", nowMs: nowMs, timeZone: zone))
     }
+
+    func testReminderTimeValidatorRejectsNowAndAcceptsExactlyFortyEightHours() {
+        let nowMs: EpochMs = 1_790_071_200_000
+        let zone = TimeZone(secondsFromGMT: 0)!
+
+        XCTAssertNil(ReminderTimeValidator.accept(
+            "2026-09-22T10:00:00Z",
+            nowMs: nowMs,
+            timeZone: zone
+        ))
+        XCTAssertEqual(
+            ReminderTimeValidator.accept(
+                "2026-09-24T10:00:00Z",
+                nowMs: nowMs,
+                timeZone: zone
+            ),
+            nowMs + ReminderTimeValidator.maximumFutureMs
+        )
+    }
 }
