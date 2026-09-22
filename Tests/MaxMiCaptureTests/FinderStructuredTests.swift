@@ -5,10 +5,11 @@ import MaxMiCore
 final class FinderStructuredTests: XCTestCase {
     func node(_ role: String, value: String? = nil, title: String? = nil, url: String? = nil,
               identifier: String? = nil, selected: Bool = false,
+              subrole: String? = nil, selectedText: String? = nil, focused: Bool = false,
               frame: CGRect, children: [AXNode] = []) -> AXNode {
-        AXNode(role: role, value: value, title: title, url: url, frame: frame, focused: false,
-               children: children, identifier: identifier, label: nil, subrole: nil,
-               headingLevel: nil, selected: selected)
+        AXNode(role: role, value: value, title: title, url: url, frame: frame, focused: focused,
+               children: children, identifier: identifier, label: nil, subrole: subrole,
+               headingLevel: nil, selected: selected, selectedText: selectedText)
     }
 
     func cell(_ text: String, x: CGFloat, y: CGFloat) -> AXNode {
@@ -151,7 +152,31 @@ final class FinderStructuredTests: XCTestCase {
 
     func testAnEmptyWindowIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800))
-        XCTAssertNil(try FinderParser().parse(bare, context: context("sample")))
+        XCTAssertThrowsError(try FinderParser().parse(bare, context: context("sample"))) {
+            XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-finder-window"))
+        }
+    }
+
+    func testToolbarOnlyAndUnrelatedWindowsAreRefused() {
+        let toolbarOnly = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                               children: [
+                                node("AXToolbar", frame: CGRect(x: 0, y: 0, width: 1200, height: 40),
+                                     children: [
+                                        node("AXButton", title: "Back",
+                                             frame: CGRect(x: 20, y: 8, width: 40, height: 24)),
+                                    ]),
+                               ])
+        let unrelated = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                             children: [
+                                node("AXStaticText", value: "Nothing to do with a folder",
+                                     frame: CGRect(x: 100, y: 100, width: 300, height: 20)),
+                             ])
+        for candidate in [toolbarOnly, unrelated] {
+            XCTAssertThrowsError(try FinderParser().parse(candidate, context: context("sample"))) {
+                XCTAssertEqual($0 as? ParserRefusal,
+                               ParserRefusal(reason: "unmatched-finder-window"))
+            }
+        }
     }
 
     func testSourceParserSuppliesTheKeyAndTheGenericKind() throws {
@@ -174,5 +199,26 @@ final class FinderStructuredTests: XCTestCase {
         assertGolden(try XCTUnwrap(FinderParser().parse(try fixture("finder-offset-copy"),
                                                        context: context("sample"))),
                      matches: "finder-offset-copy-golden")
+    }
+
+    func testFinderOutputNeverLeaksSelectedTextFromAFocusedSecureField() throws {
+        let secret = "reviewer-secret-selected-text"
+        let secureField = node(
+            "AXTextField", value: secret, subrole: "AXSecureTextField", selectedText: secret,
+            focused: true, frame: CGRect(x: 260, y: 100, width: 300, height: 20)
+        )
+        let finder = node("AXWindow", title: "Passwords",
+                          frame: CGRect(x: 0, y: 0, width: 1200, height: 800), children: [
+            node("AXTable", frame: CGRect(x: 240, y: 40, width: 960, height: 760), children: [
+                node("AXRow", frame: CGRect(x: 240, y: 100, width: 960, height: 20),
+                     children: [secureField]),
+            ]),
+        ])
+        let content = try XCTUnwrap(FinderParser().parse(finder, context: context("Passwords")))
+        guard case .generic(let page) = content else { return XCTFail("expected generic page") }
+        XCTAssertFalse(ContentRenderer.render(content, style: .full).contains(secret))
+        XCTAssertNil(page.focused?.value)
+        XCTAssertNil(page.focused?.selectedText)
+        XCTAssertTrue(page.focused?.isSecure == true)
     }
 }

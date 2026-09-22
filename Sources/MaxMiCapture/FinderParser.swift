@@ -40,6 +40,13 @@ public struct FinderParser: SourceParser, StructuredParser {
         AXQuery.findAll("//AXSplitGroup//AXOutline//AXRow", in: snapshot)
     }
 
+    /// Finder's source list is an outline and its file listing is a table. A toolbar alone is
+    /// common to unrelated utility windows, so it must not claim those as Finder content.
+    static func hasExpectedShape(in snapshot: AXNode) -> Bool {
+        !AXQuery.findAll("//AXOutline", in: snapshot).isEmpty
+            || !AXQuery.findAll("//AXTable", in: snapshot).isEmpty
+    }
+
     static func key(fromPath path: String?, windowTitle: String?) -> String {
         if let path, !path.isEmpty { return "finder:\(path.lowercased())" }
         let title = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -47,6 +54,9 @@ public struct FinderParser: SourceParser, StructuredParser {
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        guard Self.hasExpectedShape(in: snapshot) else {
+            throw ParserRefusal(reason: "unmatched-finder-window")
+        }
         var options = GenericPageExtractor.Options()
         // The v2 structured path preserves every block. Its consumer applies the configured
         // capture bound; the v1 bridge below performs that same bound before rendering.
