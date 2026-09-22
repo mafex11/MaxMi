@@ -41,6 +41,7 @@ public enum SafeLogEventName: String, Sendable {
     case activityStateWriteFailed = "activity_state_write_failed"
     case activityCaptureFailed = "activity_capture_failed"
     case actionItemsReadFailed = "action_items_read_failed"
+    case reminderNotificationFailed = "reminder_notification_failed"
     case recentCapturesReadFailed = "recent_captures_read_failed"
     case meetingHistoryReadFailed = "meeting_history_read_failed"
     case captureHealthReadFailed = "capture_health_read_failed"

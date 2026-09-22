@@ -25,13 +25,12 @@ private actor ReminderSchedulerState {
         if blocksDueLookup {
             await withCheckedContinuation { lookupRelease = $0 }
         }
-        let current = due
-        due = []
-        return current
+        return due
     }
 
     func mark(id: String, nowMs: EpochMs) {
         marked.append((id, nowMs))
+        due.removeAll { $0.id == id }
     }
 
     func post(id: String, title: String, body: String) {
@@ -82,13 +81,14 @@ private struct ReminderSchedulerRepositoryFake: ReminderRepository {
 private struct ReminderSchedulerNotifierFake: ReminderNotifier {
     let state: ReminderSchedulerState
 
-    func post(id: String, title: String, body: String) async {
+    func post(id: String, title: String, body: String) async -> ReminderPostOutcome {
         await state.post(id: id, title: title, body: body)
+        return .posted
     }
 }
 
 final class ReminderSchedulerTests: XCTestCase {
-    func testTickPostsOnceAndMarksReminderThenSecondTickDoesNothing() async {
+    func testPostedNotifierMarksReminderThenSecondTickDoesNothing() async {
         let state = ReminderSchedulerState()
         let nowMs: EpochMs = 1_800_000_000_000
         await state.setDue([
@@ -113,7 +113,7 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(marks.map(\.1), [nowMs])
     }
 
-    func testDeniedNotifierStillMarksReminder() async {
+    func testDeniedNotifierLeavesReminderPendingAndRetriesOnNextTick() async {
         let state = ReminderSchedulerState()
         let nowMs: EpochMs = 1_800_000_000_000
         await state.setDue([
@@ -121,16 +121,24 @@ final class ReminderSchedulerTests: XCTestCase {
         ])
         let scheduler = ReminderScheduler(
             repository: ReminderSchedulerRepositoryFake(state: state),
-            notifier: DeniedReminderNotifier(),
+            notifier: DeniedReminderNotifier(state: state),
             isActivitySynthesisEnabled: { true },
             clock: { nowMs }
         )
 
         await scheduler.tick()
 
-        let marks = await state.marks()
-        XCTAssertEqual(marks.map(\.0), ["denied"])
-        XCTAssertEqual(marks.map(\.1), [nowMs])
+        let firstTickPosts = await state.posts()
+        let firstTickMarks = await state.marks()
+        XCTAssertEqual(firstTickPosts.map(\.0), ["denied"])
+        XCTAssertTrue(firstTickMarks.isEmpty)
+
+        await scheduler.tick()
+
+        let secondTickPosts = await state.posts()
+        let secondTickMarks = await state.marks()
+        XCTAssertEqual(secondTickPosts.map(\.0), ["denied", "denied"])
+        XCTAssertTrue(secondTickMarks.isEmpty)
     }
 
     func testDisabledSynthesisDoesNoRepositoryOrNotifierWork() async {
@@ -179,9 +187,10 @@ final class ReminderSchedulerTests: XCTestCase {
 }
 
 private struct DeniedReminderNotifier: ReminderNotifier {
-    func post(id: String, title: String, body: String) async {
-        _ = id
-        _ = title
-        _ = body
+    let state: ReminderSchedulerState
+
+    func post(id: String, title: String, body: String) async -> ReminderPostOutcome {
+        await state.post(id: id, title: title, body: body)
+        return .denied
     }
 }

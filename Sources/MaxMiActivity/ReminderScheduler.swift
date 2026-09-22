@@ -19,8 +19,14 @@ public protocol ReminderRepository: Sendable {
     func markReminded(_ id: String, nowMs: EpochMs) async
 }
 
+public enum ReminderPostOutcome: Sendable, Equatable {
+    case posted
+    case denied
+    case failed
+}
+
 public protocol ReminderNotifier: Sendable {
-    func post(id: String, title: String, body: String) async
+    func post(id: String, title: String, body: String) async -> ReminderPostOutcome
 }
 
 public actor ReminderScheduler {
@@ -54,12 +60,23 @@ public actor ReminderScheduler {
         for item in await repository.dueReminders(nowMs: nowMs) {
             let sourceApp = item.sourceApp ?? "MaxMi"
             let age = Self.ageDescription(detectedAtMs: item.detectedAtMs, nowMs: nowMs)
-            await notifier.post(
+            let outcome = await notifier.post(
                 id: item.id,
                 title: item.title,
                 body: "\(sourceApp) · \(age)"
             )
-            await repository.markReminded(item.id, nowMs: nowMs)
+            switch outcome {
+            case .posted:
+                await repository.markReminded(item.id, nowMs: nowMs)
+            case .denied:
+                break
+            case .failed:
+                SafeLogger.shared.log(
+                    .warning,
+                    subsystem: .activity,
+                    event: .reminderNotificationFailed
+                )
+            }
         }
     }
 

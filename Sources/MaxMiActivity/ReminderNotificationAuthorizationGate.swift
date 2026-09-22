@@ -10,13 +10,13 @@ public final class ReminderNotificationAuthorizationGate {
 
     public init() {}
 
-    public func allowsPosting(
+    public func postOutcome(
         using requester: any ReminderNotificationAuthorizationRequester
-    ) async -> Bool {
+    ) async -> ReminderPostOutcome {
         if !authorizationRequested {
             authorizationRequested = true
             authorizationGranted = await requester.requestAuthorization()
         }
-        return authorizationGranted
+        return authorizationGranted ? .posted : .denied
     }
 }

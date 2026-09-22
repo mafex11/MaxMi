@@ -18,9 +18,10 @@ final class UNUserNotificationCenterNotifier: NSObject, ReminderNotifier, UNUser
         center.delegate = self
     }
 
-    func post(id: String, title: String, body: String) async {
+    func post(id: String, title: String, body: String) async -> ReminderPostOutcome {
         let requester = UserNotificationAuthorizationRequester(center: center)
-        guard await authorizationGate.allowsPosting(using: requester) else { return }
+        let authorizationOutcome = await authorizationGate.postOutcome(using: requester)
+        guard authorizationOutcome == .posted else { return authorizationOutcome }
 
         let content = UNMutableNotificationContent()
         content.title = title
@@ -31,7 +32,12 @@ final class UNUserNotificationCenterNotifier: NSObject, ReminderNotifier, UNUser
             content: content,
             trigger: nil
         )
-        try? await center.add(request)
+        do {
+            try await center.add(request)
+            return .posted
+        } catch {
+            return .failed
+        }
     }
 
     nonisolated func userNotificationCenter(

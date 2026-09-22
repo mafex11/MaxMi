@@ -3,15 +3,15 @@ import XCTest
 
 @MainActor
 final class ReminderNotificationAuthorizationGateTests: XCTestCase {
-    func testDeniedAuthorizationOnlyRequestsOnceAndNeverAllowsPosting() async {
+    func testDeniedAuthorizationOnlyRequestsOnceAndReturnsDenied() async {
         let requester = DeniedAuthorizationRequester()
         let gate = ReminderNotificationAuthorizationGate()
 
-        let firstAttempt = await gate.allowsPosting(using: requester)
-        let secondAttempt = await gate.allowsPosting(using: requester)
+        let firstAttempt = await gate.postOutcome(using: requester)
+        let secondAttempt = await gate.postOutcome(using: requester)
 
-        XCTAssertFalse(firstAttempt)
-        XCTAssertFalse(secondAttempt)
+        XCTAssertEqual(firstAttempt, .denied)
+        XCTAssertEqual(secondAttempt, .denied)
         XCTAssertEqual(requester.requestCount, 1)
     }
 }
