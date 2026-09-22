@@ -5,10 +5,10 @@ import MaxMiCore
 final class LinkedInMessagingParserTests: XCTestCase {
     func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
               domClassList: [String]? = nil, url: String? = nil, frame: CGRect? = nil,
-              children: [AXNode] = []) -> AXNode {
+              subrole: String? = nil, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: title, url: url,
                frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
-               children: children, identifier: nil, label: label, subrole: nil,
+               children: children, identifier: nil, label: label, subrole: subrole,
                headingLevel: nil, selected: false, placeholder: nil, selectedText: nil,
                hidden: false, domClassList: domClassList, domIdentifier: nil)
     }
@@ -198,6 +198,34 @@ final class LinkedInMessagingParserTests: XCTestCase {
         XCTAssertEqual(draft.sender, "You")
         XCTAssertEqual(draft.text, "on my way")
         XCTAssertEqual(c.messages.count, 4)
+    }
+
+    func testSecureTextInAReadingBodyIsAbsentFromCapturedContentAndRendering() throws {
+        let secret = "linkedin secure body"
+        let body = node("AXGroup", domClassList: ["msg-s-event-listitem__body"],
+                        frame: CGRect(x: 400, y: 120, width: 500, height: 40), children: [
+            text("Visible body.", nil, y: 120),
+            node("AXTextArea", value: secret,
+                 frame: CGRect(x: 400, y: 140, width: 500, height: 20),
+                 subrole: "CustomSecureField", children: [
+                    text(secret, nil, y: 140),
+                 ]),
+        ])
+        let window = node("AXWindow", title: "Messaging | LinkedIn",
+                          frame: CGRect(x: 0, y: 0, width: 1440, height: 900), children: [
+            text("Ada", ["msg-entity-lockup__entity-title"], y: 60),
+            node("AXGroup", domClassList: ["msg-s-message-list__event"],
+                 frame: CGRect(x: 400, y: 100, width: 500, height: 80), children: [
+                text("Ada", ["msg-s-message-group__name"], y: 100),
+                text("10:14 AM", ["msg-s-message-group__timestamp"], y: 100, x: 600),
+                body,
+            ]),
+        ])
+
+        let captured = try XCTUnwrap(LinkedInMessagingParser().parse(window, context: context()))
+        let conversation = try conversation(captured)
+        XCTAssertFalse(conversation.messages.contains { $0.text.contains(secret) })
+        XCTAssertFalse(ContentRenderer.render(captured, style: .full).contains(secret))
     }
 
     func testAMessagingPageWithNoEventsIsNotHandled() throws {

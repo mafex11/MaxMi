@@ -73,7 +73,9 @@ public extension AXQuery {
         var found: [AXNode] = []
         func visit(_ current: AXNode) {
             if menuRoles.contains(current.role) || current.hidden { return }
-            if current.subrole == GenericPageExtractor.secureSubrole { return }
+            // Match the extractor's complete secure-node policy. A secure role or any secure
+            // subrole ends the walk, so a static-text child cannot leak its value.
+            if GenericPageExtractor.isSecure(current) { return }
             if current.role == "AXStaticText" { found.append(current) }
             for child in current.children { visit(child) }
         }

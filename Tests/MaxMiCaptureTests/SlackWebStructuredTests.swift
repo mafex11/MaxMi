@@ -5,10 +5,10 @@ import MaxMiCore
 final class SlackWebStructuredTests: XCTestCase {
     func node(_ role: String, value: String? = nil, label: String? = nil,
               domClassList: [String]? = nil, url: String? = nil, frame: CGRect? = nil,
-              children: [AXNode] = []) -> AXNode {
+              subrole: String? = nil, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: url,
                frame: frame ?? CGRect(x: 0, y: 0, width: 300, height: 20), focused: false,
-               children: children, identifier: nil, label: label, subrole: nil,
+               children: children, identifier: nil, label: label, subrole: subrole,
                headingLevel: nil, selected: false, placeholder: nil, selectedText: nil,
                hidden: false, domClassList: domClassList, domIdentifier: nil)
     }
@@ -169,6 +169,37 @@ final class SlackWebStructuredTests: XCTestCase {
         XCTAssertTrue(draft.isDraft)
         XCTAssertTrue(draft.isUser)
         XCTAssertEqual(c.messages.count, 3)
+    }
+
+    func testSecureTextInAReadingBodyIsAbsentFromCapturedContentAndRendering() throws {
+        let secret = "slack secure body"
+        let window = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                          children: [
+            node("AXGroup", domClassList: ["c-message_list"],
+                 frame: CGRect(x: 260, y: 80, width: 900, height: 600), children: [
+                node("AXGroup", domClassList: ["c-virtual_list__item"],
+                     frame: CGRect(x: 260, y: 100, width: 900, height: 80), children: [
+                    node("AXGroup", domClassList: ["c-message_kit__background"],
+                         frame: CGRect(x: 260, y: 100, width: 900, height: 80), children: [
+                        text("Ada", ["c-message__sender"], y: 100, x: 260),
+                        text(nil, ["c-timestamp"], label: "10:14 AM", y: 100, x: 700),
+                        text("Visible body.", nil, y: 120, x: 260),
+                        node("AXTextArea", value: secret,
+                             frame: CGRect(x: 260, y: 140, width: 600, height: 20),
+                             subrole: "CustomSecureField", children: [
+                            text(secret, nil, y: 140, x: 260),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        let captured = try XCTUnwrap(SlackParser().parse(
+            window, context: context("general - Acme - Slack")
+        ))
+        let conversation = try conversation(captured)
+        XCTAssertFalse(conversation.messages.contains { $0.text.contains(secret) })
+        XCTAssertFalse(ContentRenderer.render(captured, style: .full).contains(secret))
     }
 
     func testTheSlackHostsStillRouteToSlackParser() {

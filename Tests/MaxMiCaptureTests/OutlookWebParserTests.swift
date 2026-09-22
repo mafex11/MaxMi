@@ -5,10 +5,10 @@ import MaxMiCore
 final class OutlookWebParserTests: XCTestCase {
     func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
               selected: Bool = false, domClassList: [String]? = nil, domIdentifier: String? = nil,
-              frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
+              subrole: String? = nil, frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: title, url: nil,
                frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
-               children: children, identifier: nil, label: label, subrole: nil,
+               children: children, identifier: nil, label: label, subrole: subrole,
                headingLevel: nil, selected: selected, placeholder: nil, selectedText: nil,
                hidden: false, domClassList: domClassList, domIdentifier: domIdentifier)
     }
@@ -229,6 +229,38 @@ final class OutlookWebParserTests: XCTestCase {
         XCTAssertTrue(draft.isDraft)
         XCTAssertEqual(draft.text, "replying now")
         XCTAssertEqual(c.messages.count, 3)
+    }
+
+    func testSecureTextInAReadingBodyIsAbsentFromCapturedContentAndRendering() throws {
+        let secret = "outlook secure body"
+        let window = node("AXWindow", title: "Subject - Outlook",
+                          frame: CGRect(x: 0, y: 0, width: 1600, height: 900), children: [
+            node("AXHeading", value: "Subject", domClassList: ["outlook-subject"],
+                 frame: CGRect(x: 500, y: 60, width: 500, height: 24)),
+            node("AXGroup", label: "Message From: Ada, Sent: 10:14 AM",
+                 domClassList: ["outlook-message-card"],
+                 frame: CGRect(x: 500, y: 100, width: 800, height: 120), children: [
+                node("AXGroup", label: "Message From: Ada, Sent: 10:14 AM",
+                     domClassList: ["outlook-message-header"],
+                     frame: CGRect(x: 500, y: 100, width: 800, height: 20), children: [
+                    text("Ada", y: 100),
+                    text("10:14 AM", y: 100, x: 650),
+                ]),
+                node("AXGroup", domClassList: ["outlook-message-body"],
+                     frame: CGRect(x: 500, y: 130, width: 800, height: 80), children: [
+                    text("Visible body.", y: 130),
+                    node("AXTextArea", value: secret, subrole: "CustomSecureField",
+                         frame: CGRect(x: 500, y: 150, width: 600, height: 20), children: [
+                        text(secret, y: 150),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        let captured = try XCTUnwrap(OutlookWebParser().parse(window, context: context("Subject - Outlook")))
+        let conversation = try conversation(captured)
+        XCTAssertFalse(conversation.messages.contains { $0.text.contains(secret) })
+        XCTAssertFalse(ContentRenderer.render(captured, style: .full).contains(secret))
     }
 
     func testAStandaloneComposeWindowIsTheDraftAlone() throws {

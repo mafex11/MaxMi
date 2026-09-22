@@ -105,7 +105,7 @@ extension SlackParser: StructuredParser {
         var found: [TextNode] = []
         func visit(_ node: AXNode, path: [Int]) {
             if AXQuery.menuRoles.contains(node.role) || node.hidden
-                || node.subrole == GenericPageExtractor.secureSubrole {
+                || GenericPageExtractor.isSecure(node) {
                 return
             }
             if node.role == "AXStaticText",
@@ -213,7 +213,6 @@ extension SlackParser: StructuredParser {
     /// The composer's live text. A draft is the one message Slack's tree marks as the user's.
     static func draftMessage(in snapshot: AXNode) -> Message? {
         if let composer = AXQuery.find("//*[domClass*=\"\(composerClass)\"]", in: snapshot) {
-            guard composer.subrole != GenericPageExtractor.secureSubrole else { return nil }
             return WebHostParsing.draft(in: composer)
         }
         // Preserve the established native composer predicate when Slack has not exposed DOM

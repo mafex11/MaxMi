@@ -8,6 +8,7 @@ enum WebHostParsing {
     /// The readable text of an anchor node. `label` is consulted last because it is
     /// `AXDescription ?? AXHelp` (spec §12 Q1) and is often a verbose restatement.
     static func text(of node: AXNode) -> String? {
+        guard !GenericPageExtractor.isSecure(node) else { return nil }
         let raw = node.value ?? node.title ?? node.label
         guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty
         else { return nil }
@@ -17,6 +18,7 @@ enum WebHostParsing {
     /// A composer's text: its own value, else the static texts a contenteditable exposes as
     /// children (every one of these five composers is a contenteditable, not a text field).
     static func editorText(in node: AXNode) -> String {
+        guard !GenericPageExtractor.isSecure(node) else { return "" }
         if let value = node.value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
             return value
         }
@@ -27,7 +29,7 @@ enum WebHostParsing {
     /// The composer's live text as the user's draft. nil for a missing OR empty composer, which
     /// is what makes "compose-only window with an empty draft" decidable.
     static func draft(in composer: AXNode?) -> Message? {
-        guard let composer else { return nil }
+        guard let composer, !GenericPageExtractor.isSecure(composer) else { return nil }
         let text = editorText(in: composer)
         guard !text.isEmpty else { return nil }
         return Message(id: Message.makeID(sender: "You", timeString: nil, text: text),

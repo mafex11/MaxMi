@@ -6,10 +6,10 @@ final class TeamsWebParserTests: XCTestCase {
     func node(_ role: String, value: String? = nil, label: String? = nil,
               identifier: String? = nil, domClassList: [String]? = nil,
               domIdentifier: String? = nil, placeholder: String? = nil,
-              frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
+              subrole: String? = nil, frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: nil,
                frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
-               children: children, identifier: identifier, label: label, subrole: nil,
+               children: children, identifier: identifier, label: label, subrole: subrole,
                headingLevel: nil, selected: false, placeholder: placeholder, selectedText: nil,
                hidden: false, domClassList: domClassList, domIdentifier: domIdentifier)
     }
@@ -190,6 +190,33 @@ final class TeamsWebParserTests: XCTestCase {
         XCTAssertTrue(draft.isUser)
         XCTAssertEqual(draft.text, "joining now")
         XCTAssertEqual(c.messages.count, 3)
+    }
+
+    func testSecureTextInAReadingBodyIsAbsentFromCapturedContentAndRendering() throws {
+        let secret = "teams secure body"
+        let window = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1500, height: 900),
+                          children: [
+            node("AXHeading", value: "Platform team",
+                 frame: CGRect(x: 400, y: 40, width: 400, height: 24)),
+            node("AXGroup", domClassList: ["fui-ChatMessage"],
+                 frame: CGRect(x: 400, y: 100, width: 700, height: 80), children: [
+                text("Ada", ["message-author-name"], y: 100),
+                text("10:14 AM", ["message-timestamp"], y: 100, x: 700),
+                node("AXGroup", domClassList: ["fui-ChatMessage__body"],
+                     frame: CGRect(x: 400, y: 120, width: 700, height: 40), children: [
+                    text("Visible body.", nil, y: 120),
+                    node("AXTextArea", value: secret, subrole: "CustomSecureField",
+                         frame: CGRect(x: 400, y: 140, width: 500, height: 20), children: [
+                        text(secret, nil, y: 140),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        let captured = try XCTUnwrap(TeamsWebParser().parse(window, context: context()))
+        let conversation = try conversation(captured)
+        XCTAssertFalse(conversation.messages.contains { $0.text.contains(secret) })
+        XCTAssertFalse(ContentRenderer.render(captured, style: .full).contains(secret))
     }
 
     func testATeamsPageWithNoMessageContainerIsNotHandled() throws {

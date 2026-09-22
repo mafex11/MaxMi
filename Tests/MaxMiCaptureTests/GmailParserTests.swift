@@ -5,10 +5,10 @@ import MaxMiCore
 final class GmailParserTests: XCTestCase {
     func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
               selected: Bool = false, domClassList: [String]? = nil, url: String? = nil,
-              frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
+              subrole: String? = nil, frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: title, url: url,
                frame: frame ?? CGRect(x: 0, y: 0, width: 400, height: 20), focused: false,
-               children: children, identifier: nil, label: label, subrole: nil,
+               children: children, identifier: nil, label: label, subrole: subrole,
                headingLevel: nil, selected: selected, placeholder: nil, selectedText: nil,
                hidden: false, domClassList: domClassList, domIdentifier: nil)
     }
@@ -226,6 +226,33 @@ final class GmailParserTests: XCTestCase {
         XCTAssertEqual(c.messages.count, 2, "the draft is appended, never replacing a message")
         XCTAssertTrue(ContentRenderer.render(.conversation(c), style: .full)
             .contains("(From: You (draft)): Sending the summary now"))
+    }
+
+    func testSecureTextInAReadingBodyIsAbsentFromCapturedContentAndRendering() throws {
+        let secret = "gmail secure body"
+        let body = node("AXGroup", domClassList: ["a3s"],
+                        frame: CGRect(x: 300, y: 130, width: 900, height: 80), children: [
+            text("Visible body.", nil, y: 130),
+            node("AXTextArea", value: secret, subrole: "CustomSecureField",
+                 frame: CGRect(x: 300, y: 150, width: 500, height: 20), children: [
+                    text(secret, nil, y: 150),
+                 ]),
+        ])
+        let window = node("AXWindow", title: "Subject - Gmail",
+                          frame: CGRect(x: 0, y: 0, width: 1440, height: 900), children: [
+            heading("Subject", y: 60),
+            node("AXGroup", domClassList: ["adn"],
+                 frame: CGRect(x: 300, y: 100, width: 900, height: 120), children: [
+                text("Ada", ["gD"], y: 100),
+                text("10:14 AM", ["g3"], y: 100, x: 1100),
+                body,
+            ]),
+        ])
+
+        let captured = try XCTUnwrap(GmailParser().parse(window, context: context("Subject - Gmail")))
+        let conversation = try conversation(captured)
+        XCTAssertFalse(conversation.messages.contains { $0.text.contains(secret) })
+        XCTAssertFalse(ContentRenderer.render(captured, style: .full).contains(secret))
     }
 
     func testAStandaloneComposeWindowIsTheDraftAlone() throws {
