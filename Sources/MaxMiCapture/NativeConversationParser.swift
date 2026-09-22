@@ -5,12 +5,11 @@ public struct WhatsAppParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
-        return CaptureAccumulator.boundHard(unbounded, to: NativeConversationExtraction.contentCap)
+        try parse(window, context: ParseContext(app: app))
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
+        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
         let content = CaptureAccumulator.boundHard(unbounded, to: NativeConversationExtraction.contentCap)
         guard case .conversation(let conversation) = content else { return nil }
         return ParsedCapture(
@@ -459,23 +458,48 @@ extension WhatsAppParser: StructuredParser {
         return (texts.dropLast().joined(separator: " "), last)
     }
 
+    /// A bubble cell can expose its entire accessible payload as `"Name: text"`. This is a
+    /// structural cell-label convention, not a re-split of unanchored message text.
+    static func splitCombinedCellLabel(_ label: String) -> (sender: String, text: String)? {
+        guard let separator = label.range(of: ": ") else { return nil }
+        let sender = String(label[..<separator.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = String(label[separator.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sender.isEmpty, !text.isEmpty else { return nil }
+        return (sender, text)
+    }
+
+    /// The bubble cell is the sender container. A separate label is paired with the rendered
+    /// body through `senderLabel`; a combined cell label is structurally split first and then
+    /// uses that same helper. A one-label non-combined cell remains unattributed.
+    static func labeledBubble(
+        _ cell: AXNode,
+        staticTexts: [String]
+    ) -> (sender: String?, text: String, timeString: String?)? {
+        let split = splitBubbleTexts(staticTexts)
+        let label = cell.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let label, !label.isEmpty else {
+            return split.body.isEmpty ? nil : (nil, split.body, split.timeString)
+        }
+        if let combined = splitCombinedCellLabel(label) {
+            let text = split.body.isEmpty ? combined.text : split.body
+            let sender = NativeConversationExtraction.senderLabel([combined.sender, text])
+            return (sender, text, split.timeString)
+        }
+        guard !split.body.isEmpty else {
+            return (nil, label, split.timeString)
+        }
+        return (
+            NativeConversationExtraction.senderLabel([label, split.body]),
+            split.body,
+            split.timeString
+        )
+    }
+
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         let cells = AXQuery.findAll("//*[identifier=\"\(Self.bubbleCellIdentifier)\"]", in: snapshot)
-        guard !cells.isEmpty else {
-            // No bubble-cell anchor: an older build, a tree captured before AXManualAccessibility
-            // finished waking, or a non-chat surface. The Phase A walk still applies AND it owns
-            // both refusals, so this is a delegation, not a second content path.
-            return try NativeConversationExtraction.extract(
-                window: snapshot,
-                app: context.app,
-                sourceApp: "WhatsApp",
-                keyPrefix: "whatsapp",
-                requiresConversationIdentity: true,
-                allowsFallback: false,
-                usesWhatsAppSenderLabels: true,
-                boundsContent: false
-            ).content
-        }
+        guard !cells.isEmpty else { return nil }
         // Without a confirmed chat header there is no thread to attribute these bubbles to, and a
         // generic capture would store the sidebar list of every unopened chat. Refuse (F13).
         guard let channel = NativeConversationExtraction.conversationName(
@@ -483,28 +507,18 @@ extension WhatsAppParser: StructuredParser {
         ) else {
             throw ParserRefusal(reason: "unconfirmed-conversation-identity")
         }
-        // Participants this walk can vouch for, same set the Phase A walk builds: the user plus
-        // the contact in a 1:1 chat. `split` only fires for a prefix naming one of them.
-        let known: Set<String> = ["you", channel.lowercased()]
         let messages = AXQuery.sortedByVisualOrder(cells, relativeTo: snapshot.frame)
             .compactMap { cell -> Message? in
-                let split = Self.splitBubbleTexts(AXQuery.collectStaticTexts(in: cell))
-                guard !split.body.isEmpty else { return nil }
+                guard let bubble = Self.labeledBubble(
+                    cell, staticTexts: AXQuery.collectStaticTexts(in: cell)
+                ) else { return nil }
                 let isUser = MessagesParser.isUserBubble(cell, window: snapshot)
-                let labelSender = (cell.label?.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .flatMap { $0.isEmpty ? nil : $0 }
-                // A group bubble arrives as ONE label ("Alex: text") with no sender node, so the
-                // Phase A known-participant split is what recovers the sender (ruling F24).
-                let resolved = NativeConversationExtraction.split(
-                    (sender: isUser ? "You" : labelSender, text: split.body),
-                    byKnownParticipant: known
-                )
-                let sender = resolved.sender ?? channel
+                let sender = isUser ? "You" : (bubble.sender ?? channel)
                 return Message(
-                    id: Message.makeID(sender: sender, timeString: split.timeString,
-                                       text: resolved.text),
-                    sender: sender, text: resolved.text, timestamp: nil,
-                    timeString: split.timeString, isUser: isUser, isDraft: false
+                    id: Message.makeID(sender: sender, timeString: bubble.timeString,
+                                       text: bubble.text),
+                    sender: sender, text: bubble.text, timestamp: nil,
+                    timeString: bubble.timeString, isUser: isUser, isDraft: false
                 )
             }
         guard !messages.isEmpty else {

@@ -3,27 +3,11 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class NativeConversationParserTests: XCTestCase {
-    func testWhatsAppExtractsConversationAndAtomicMessages() throws {
+    func testWhatsAppDoesNotReadTheUnanchoredLegacyFixture() throws {
         let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp")
-        let capture = try XCTUnwrap(try WhatsAppParser().parse(
-            window: fixture("whatsapp-conversation"), app: app
-        ))
-        XCTAssertEqual(capture.sourceApp, "WhatsApp")
-        XCTAssertEqual(capture.sourceKey, "whatsapp:project-group")
-        XCTAssertEqual(capture.sourceTitle, "Project Group")
-        XCTAssertEqual(capture.content,
-                       "(From: Alex): Morning update\n(From: You): I am reviewing it")
-        XCTAssertEqual(capture.contentKind, .conversation)
-        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
-        XCTAssertEqual(capture.parserVersion, 2)
-    }
-
-    func testSidebarRowsAreExcluded() throws {
-        let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: nil)
-        let capture = try XCTUnwrap(try WhatsAppParser().parse(
-            window: fixture("whatsapp-conversation"), app: app
-        ))
-        XCTAssertFalse(capture.content.contains("Other Chat"))
+        let window = try fixture("whatsapp-conversation")
+        XCTAssertNil(try WhatsAppParser().parseStructured(window: window, app: app))
+        XCTAssertNil(try WhatsAppParser().parse(window: window, app: app))
     }
 
     func testSelfBoundingCaptureReportsTruncation() throws {
@@ -57,19 +41,15 @@ final class NativeConversationParserTests: XCTestCase {
         XCTAssertTrue(oversize.truncated)
     }
 
-    /// Refuses rather than returning nil: nil would let the generic extractor store the sidebar
-    /// chat list instead (spec 4f rule 3, refusal case).
-    func testEmptyConversationRefusesInsteadOfFallingThrough() throws {
+    func testEmptyConversationIsNotHandled() throws {
         let empty = AXNode(role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
                            frame: CGRect(x: 0, y: 0, width: 1000, height: 700),
                            focused: false, children: [])
         let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp")
-        XCTAssertThrowsError(try WhatsAppParser().parse(window: empty, app: app)) { error in
-            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "no-conversation-content"))
-        }
+        XCTAssertNil(try WhatsAppParser().parse(window: empty, app: app))
     }
 
-    func testWhatsAppReadsElectronSemanticButtonAndHeadingLabels() throws {
+    func testWhatsAppDoesNotReadUnanchoredSemanticButtons() throws {
         let window = AXNode(
             role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
             frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
@@ -95,21 +75,10 @@ final class NativeConversationParserTests: XCTestCase {
             bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp"
         )
 
-        let capture = try XCTUnwrap(try WhatsAppParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.sourceKey, "whatsapp:controlled-group")
-        // Each bubble is ONE accessible label, so a label is split only on a KNOWN participant.
-        // This window titles the conversation "Controlled Group", so "Alex" is not vouched for
-        // and stays part of the text; "You" always is.
-        XCTAssertEqual(
-            capture.content,
-            """
-            (From: unknown): Alex: First controlled message
-            (From: You): Second controlled message
-            """
-        )
+        XCTAssertNil(try WhatsAppParser().parse(window: window, app: app))
     }
 
-    func testWhatsAppRejectsMainPaneFallbackWithoutChatHeaderAndMessageSemantics() throws {
+    func testWhatsAppDoesNotReadMainPaneTextWithoutBubbleCells() throws {
         let window = AXNode(
             role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
             frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
@@ -132,9 +101,7 @@ final class NativeConversationParserTests: XCTestCase {
             bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp", windowTitle: "WhatsApp"
         )
 
-        XCTAssertThrowsError(try WhatsAppParser().parse(window: window, app: app)) { error in
-            XCTAssertEqual(error as? ParserRefusal, ParserRefusal(reason: "no-conversation-content"))
-        }
+        XCTAssertNil(try WhatsAppParser().parse(window: window, app: app))
     }
 
     func testWhatsAppRejectsPinnedHeadingWithoutExplicitChatHeaderSemantics() throws {

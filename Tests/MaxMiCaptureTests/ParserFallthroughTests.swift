@@ -99,19 +99,17 @@ final class ParserFallthroughTests: XCTestCase {
         XCTAssertEqual(capture.content, "readable body")
     }
 
-    /// The gate this protects in production is `AppWiring.whatsAppIdentity`, which rejects a
-    /// `.parsedByFallback` confirmation. That method is private to the MaxMi app target and reads
-    /// `NSWorkspace.frontmostApplication` and `AXReader`, so it is not reachable from
-    /// MaxMiCaptureTests. What IS testable — and what makes the gate moot for the shipping
-    /// parser — is that WhatsApp refuses instead of falling through in the first place.
-    func testWhatsAppWithNoChatIdentityRefusesRatherThanBeingRekeyedByTheFallback() {
+    func testWhatsAppWithoutBubbleCellsFallsThroughToTheGenericExtractor() {
         let win = window([text("Archived"), text("Some Contact", y: 60)], title: "WhatsApp")
         let app = AppInfo(bundleID: ParserRegistry.whatsAppBundleIDs[0], name: "WhatsApp",
                           windowTitle: "WhatsApp")
-        XCTAssertEqual(
-            CaptureDispatch.parseDetailed(window: win, app: app, registry: ParserRegistry()),
-            .noContent
-        )
+        guard case .parsedByFallback(let capture, let failedParser) = CaptureDispatch.parseDetailed(
+            window: win, app: app, registry: ParserRegistry()
+        ) else {
+            return XCTFail("expected the generic fallback")
+        }
+        XCTAssertEqual(failedParser, "WhatsAppParser")
+        XCTAssertEqual(capture.content, "Archived\nSome Contact")
     }
 
     func testNoContentIsStillReportedWhenEvenTheGenericPathFindsNothing() {

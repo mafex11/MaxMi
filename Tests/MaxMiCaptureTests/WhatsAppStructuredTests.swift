@@ -9,9 +9,13 @@ final class WhatsAppStructuredTests: XCTestCase {
                children: children, identifier: identifier, label: label)
     }
 
-    func bubble(_ body: String, time: String?, x: CGFloat, y: CGFloat, label: String? = nil) -> AXNode {
-        var kids = [node("AXStaticText", value: body,
-                         frame: CGRect(x: x, y: y, width: 260, height: 18))]
+    func bubble(_ body: String? = nil, time: String?, x: CGFloat, y: CGFloat,
+                label: String? = nil) -> AXNode {
+        var kids: [AXNode] = []
+        if let body {
+            kids.append(node("AXStaticText", value: body,
+                             frame: CGRect(x: x, y: y, width: 260, height: 18)))
+        }
         if let time {
             kids.append(node("AXStaticText", value: time,
                              frame: CGRect(x: x + 220, y: y + 20, width: 40, height: 12)))
@@ -30,7 +34,7 @@ final class WhatsAppStructuredTests: XCTestCase {
             node("AXGroup", label: "Chats", frame: CGRect(x: x, y: y, width: 300, height: 700),
                  children: [node("AXStaticText", value: "Archived",
                                  frame: CGRect(x: x + 10, y: y + 20, width: 100, height: 16))]),
-            node("AXHeading", value: "Ada Lovelace", label: "conversation title",
+            node("AXHeading", value: "Priya Vantar", label: "conversation title",
                  frame: CGRect(x: x + 340, y: y + 20, width: 200, height: 22)),
             bubble("are we still on for 4", time: "16:02", x: x + 340, y: y + 100),
             bubble("yes, see you then", time: "16:04", x: x + 660, y: y + 160),
@@ -83,13 +87,13 @@ final class WhatsAppStructuredTests: XCTestCase {
     func testBubbleSideDecidesIsUser() throws {
         let c = try conversation(WhatsAppParser().parse(window(), context: context("WhatsApp")))
         XCTAssertEqual(c.messages.map(\.isUser), [false, true])
-        XCTAssertEqual(c.messages.map(\.sender), ["Ada Lovelace", "You"])
+        XCTAssertEqual(c.messages.map(\.sender), ["Priya Vantar", "You"])
     }
 
     func testChannelComesFromTheConversationHeaderNotTheWindowTitle() throws {
         // WhatsApp's window title is just "WhatsApp"; the header carries the identity.
         let c = try conversation(WhatsAppParser().parse(window(), context: context("WhatsApp")))
-        XCTAssertEqual(c.channel, "Ada Lovelace")
+        XCTAssertEqual(c.channel, "Priya Vantar")
     }
 
     func testResultIsIdenticalAtANonzeroWindowOrigin() throws {
@@ -98,26 +102,28 @@ final class WhatsAppStructuredTests: XCTestCase {
                                               context: context("WhatsApp")))
     }
 
-    func testAGroupBubbleLabelBecomesTheSender() throws {
+    func testCombinedGroupCellLabelsProduceNamedSenders() throws {
         let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1000, height: 700), children: [
             node("AXHeading", value: "Weekend Plans", label: "conversation title",
                  frame: CGRect(x: 340, y: 20, width: 200, height: 22)),
-            bubble("bringing snacks", time: "16:02", x: 340, y: 100, label: "Grace"),
+            bubble(nil, time: nil, x: 340, y: 100, label: "Mira: bringing snacks"),
+            bubble(nil, time: nil, x: 340, y: 150, label: "Niko: arranging rides"),
+            bubble(nil, time: nil, x: 660, y: 200, label: "You: I will bring drinks"),
         ])
         let c = try conversation(WhatsAppParser().parse(win, context: context("WhatsApp")))
-        XCTAssertEqual(c.messages.map(\.sender), ["Grace"])
+        XCTAssertTrue(c.isGroup)
+        XCTAssertEqual(c.messages.map(\.sender), ["Mira", "Niko", "You"])
+        XCTAssertEqual(c.messages.map(\.text),
+                       ["bringing snacks", "arranging rides", "I will bring drinks"])
+        XCTAssertEqual(c.messages.map(\.isUser), [false, false, true],
+                       "outgoing status comes from the bubble side, not the label text")
     }
 
-    func testNoBubbleCellsDelegatesToThePhaseAWalkWhichRefusesThisShape() {
+    func testNoBubbleCellsAreNotHandledSoTheRegistryCanFallThrough() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1000, height: 700),
                         children: [node("AXStaticText", value: "Use WhatsApp on your phone",
                                         frame: CGRect(x: 400, y: 300, width: 200, height: 16))])
-        // No bubble anchor: the Phase A walk takes over, and for a banner with no chat header it
-        // REFUSES — a generic capture here would store the sidebar list of every unopened chat.
-        // This is the branch that keeps `NativeConversationParserTests`' six WhatsApp tests green.
-        XCTAssertThrowsError(try WhatsAppParser().parse(bare, context: context("WhatsApp"))) { error in
-            XCTAssertTrue(error is ParserRefusal, "expected a refusal, got \(error)")
-        }
+        XCTAssertNil(try WhatsAppParser().parse(bare, context: context("WhatsApp")))
     }
 
     func testBubblesWithNoConfirmedChatHeaderAreRefusedRatherThanStored() {
@@ -147,5 +153,23 @@ final class WhatsAppStructuredTests: XCTestCase {
         assertGolden(try XCTUnwrap(WhatsAppParser().parse(try fixture("whatsapp-offset-bubbles"),
                                                         context: context("WhatsApp"))),
                      matches: "whatsapp-offset-bubbles-golden")
+    }
+
+    func testGroupSenderFixtureMatchesItsGolden() throws {
+        assertGolden(try XCTUnwrap(WhatsAppParser().parse(try fixture("whatsapp-group-senders"),
+                                                        context: context("WhatsApp"))),
+                     matches: "whatsapp-group-senders-golden")
+    }
+
+    func testDirectSenderFixtureUsesBubbleSideForTheUser() throws {
+        let content = try XCTUnwrap(WhatsAppParser().parse(
+            try fixture("whatsapp-direct-senders"), context: context("WhatsApp")
+        ))
+        assertGolden(content, matches: "whatsapp-direct-senders-golden")
+        guard case .conversation(let conversation) = content else {
+            return XCTFail("expected .conversation")
+        }
+        XCTAssertFalse(conversation.isGroup)
+        XCTAssertEqual(conversation.messages.map(\.isUser), [false, true])
     }
 }

@@ -36,6 +36,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `whatsapp-bubbles-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-bubbles.json` | `WhatsAppParser` conversation output |
 | `whatsapp-offset-bubbles.json` | Hand-authored WhatsApp bubble-cell thread at a nonzero origin with the same semantic content | `WhatsAppParser` window-relative authorship |
 | `whatsapp-offset-bubbles-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-offset-bubbles.json` | `WhatsAppParser` conversation output |
+| `whatsapp-group-senders.json` | Hand-authored WhatsApp group chat with combined named bubble-cell labels | `WhatsAppParser` structural sender attribution |
+| `whatsapp-group-senders-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-group-senders.json` | `WhatsAppParser` group conversation output |
+| `whatsapp-direct-senders.json` | Hand-authored WhatsApp 1:1 chat for invented Priya Vantar, with left and right bubble cells | `WhatsAppParser` bubble-side user attribution |
+| `whatsapp-direct-senders-golden.json` | Golden `CapturedContentEnvelope` for `whatsapp-direct-senders.json` | `WhatsAppParser` direct conversation output |
 <!-- // lane-b end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the

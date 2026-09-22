@@ -95,23 +95,26 @@ final class StructuredConversationParserTests: XCTestCase {
     func testWhatsAppFixtureProducesTypedMessagesAndKeepsItsKey() throws {
         let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
                           windowTitle: "WhatsApp")
-        let window = try fixture("whatsapp-conversation")
+        let window = try fixture("whatsapp-direct-senders")
         let structured = try WhatsAppParser().parseStructured(window: window, app: app)
         guard case .conversation(let conversation) = try XCTUnwrap(structured) else {
             return XCTFail("expected .conversation")
         }
-        XCTAssertEqual(conversation.channel, "Project Group")
-        XCTAssertFalse(conversation.isGroup, "no group marker is exposed by the AX walk yet")
-        XCTAssertEqual(conversation.messages.map(\.sender), ["Alex", "You"])
-        XCTAssertEqual(conversation.messages.map(\.text), ["Morning update", "I am reviewing it"])
+        XCTAssertEqual(conversation.channel, "Priya Vantar")
+        XCTAssertFalse(conversation.isGroup)
+        XCTAssertEqual(conversation.messages.map(\.sender), ["Priya Vantar", "You"])
+        XCTAssertEqual(conversation.messages.map(\.text), ["are we still on for 4", "yes, see you then"])
         XCTAssertEqual(conversation.messages.map(\.isUser), [false, true],
-                       "WhatsApp labels the user's own bubbles \"You\", which is a real signal")
+                       "WhatsApp identifies outgoing messages by bubble side")
 
         let capture = try XCTUnwrap(try WhatsAppParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.sourceKey, "whatsapp:project-group")
-        XCTAssertEqual(capture.sourceTitle, "Project Group")
+        XCTAssertEqual(capture.sourceKey, "whatsapp:priya-vantar")
+        XCTAssertEqual(capture.sourceTitle, "Priya Vantar")
         XCTAssertEqual(capture.content,
-                       "(From: Alex): Morning update\n(From: You): I am reviewing it")
+                       """
+                       (From: Priya Vantar)(sent 16:02): are we still on for 4
+                       (From: You)(sent 16:04): yes, see you then
+                       """)
         XCTAssertEqual(capture.contentKind, .conversation)
     }
 
@@ -128,78 +131,6 @@ final class StructuredConversationParserTests: XCTestCase {
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
                           windowTitle: "general - Acme - Slack")
         XCTAssertNil(try SlackParser().parseStructured(window: window, app: app))
-    }
-
-    /// A one-label bubble must not be split on ": ": "Note: check the doc" is a message, not a
-    /// message from someone called "Note". Only a bubble that exposes a separate sender label
-    /// gets an attributed sender.
-    func testWhatsAppAttributesSendersOnlyWhereTheBubbleExposesOne() throws {
-        func bubble(_ id: String, _ y: CGFloat, _ texts: [String]) -> AXNode {
-            AXNode(role: "AXGroup", value: nil, title: nil, url: nil,
-                   frame: CGRect(x: 400, y: y, width: 500, height: 40), focused: false,
-                   children: texts.enumerated().map { offset, text in
-                       AXNode(role: "AXStaticText", value: text, title: nil, url: nil,
-                              frame: CGRect(x: 420 + CGFloat(offset) * 120, y: y,
-                                            width: 100, height: 20),
-                              focused: false, children: [])
-                   },
-                   identifier: id)
-        }
-        let window = AXNode(
-            role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
-            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
-            children: [
-                AXNode(role: "AXHeading", value: "Project Group", title: nil, url: nil,
-                       frame: CGRect(x: 400, y: 20, width: 300, height: 30), focused: false,
-                       children: [], identifier: "conversation-header"),
-                bubble("message-1", 200, ["Note: check the doc"]),
-                bubble("message-2", 260, ["Alice", "hi"]),
-                bubble("message-3", 320, ["You", "on it"]),
-            ]
-        )
-        let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
-                          windowTitle: "WhatsApp")
-        let messages = try messages(try WhatsAppParser().parseStructured(window: window, app: app))
-        XCTAssertEqual(messages.map(\.sender), ["unknown", "Alice", "You"])
-        XCTAssertEqual(messages.map(\.text), ["Note: check the doc", "hi", "on it"])
-        XCTAssertEqual(messages.map(\.isUser), [false, false, true])
-        let capture = try XCTUnwrap(try WhatsAppParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.content, """
-            (From: unknown): Note: check the doc
-            (From: Alice): hi
-            (From: You): on it
-            """)
-    }
-
-    /// WhatsApp exposes a whole bubble as ONE label reading "<participant>: <body>". It is split
-    /// only when the prefix names a participant this walk can vouch for — the user ("You") or,
-    /// in a 1:1 chat, the contact (the conversation title). "Note: check the doc" is not a
-    /// speaker, so it stays whole.
-    func testWhatsAppSplitsSingleLabelBubblesOnlyForKnownParticipants() throws {
-        func bubble(_ id: String, _ y: CGFloat, _ label: String) -> AXNode {
-            AXNode(role: "AXButton", value: nil, title: nil, url: nil,
-                   frame: CGRect(x: 400, y: y, width: 500, height: 40), focused: false,
-                   children: [], identifier: id, label: label)
-        }
-        let window = AXNode(
-            role: "AXWindow", value: nil, title: "WhatsApp", url: nil,
-            frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
-            children: [
-                AXNode(role: "AXHeading", value: "Alex", title: nil, url: nil,
-                       frame: CGRect(x: 400, y: 20, width: 300, height: 30), focused: false,
-                       children: [], identifier: "conversation-header"),
-                bubble("message-1", 200, "Alex: First controlled message"),
-                bubble("message-2", 260, "You: on my way"),
-                bubble("message-3", 320, "Note: check the doc"),
-            ]
-        )
-        let app = AppInfo(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
-                          windowTitle: "WhatsApp")
-        let messages = try messages(try WhatsAppParser().parseStructured(window: window, app: app))
-        XCTAssertEqual(messages.map(\.sender), ["Alex", "You", "unknown"])
-        XCTAssertEqual(messages.map(\.text),
-                       ["First controlled message", "on my way", "Note: check the doc"])
-        XCTAssertEqual(messages.map(\.isUser), [false, true, false])
     }
 
     /// Teams has no such label convention, so a single-label row is never split.
