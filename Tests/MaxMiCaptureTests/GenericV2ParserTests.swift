@@ -116,10 +116,24 @@ final class GenericV2ParserTests: XCTestCase {
 
     func testMessagesKeepsBubbleOrderAsATypedConversation() throws {
         let window = body([
-            AXNode(role: "AXTextArea", value: "call me", title: nil, url: nil,
-                   frame: CGRect(x: 300, y: 300, width: 400, height: 20), focused: false, children: []),
-            AXNode(role: "AXTextArea", value: "hey are you free", title: nil, url: nil,
-                   frame: CGRect(x: 300, y: 100, width: 400, height: 20), focused: false, children: []),
+            AXNode(role: "AXList", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 260, y: 80, width: 800, height: 500), focused: false,
+                   children: [
+                AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                       frame: CGRect(x: 300, y: 300, width: 400, height: 20), focused: false,
+                       children: [
+                    AXNode(role: "AXTextArea", value: "call me", title: nil, url: nil,
+                           frame: CGRect(x: 300, y: 300, width: 400, height: 20),
+                           focused: false, children: []),
+                ]),
+                AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                       frame: CGRect(x: 300, y: 100, width: 400, height: 20), focused: false,
+                       children: [
+                    AXNode(role: "AXTextArea", value: "hey are you free", title: nil, url: nil,
+                           frame: CGRect(x: 300, y: 100, width: 400, height: 20),
+                           focused: false, children: []),
+                ]),
+            ], identifier: "message-list"),
         ], title: "Harnish")
         let app = AppInfo(bundleID: ParserRegistry.messagesBundleID, name: "Messages",
                           windowTitle: "Harnish")

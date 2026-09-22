@@ -50,6 +50,8 @@ extension MessagesParser: StructuredParser {
     )
 
     static let bubbleRoles: Set<String> = ["AXTextArea", "AXStaticText"]
+    static let transcriptRole = "AXList"
+    static let transcriptIdentifier = "message-list"
 
     static func chatName(fromTitle title: String?) -> String {
         let name = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -65,18 +67,28 @@ extension MessagesParser: StructuredParser {
         return bubbleFrame.midX > windowFrame.midX
     }
 
-    static func bubbles(in snapshot: AXNode) -> [AXNode] {
-        let found = AXQuery.all(in: snapshot) {
+    /// The transcript is the common container of the bubble rows. Do not search the whole
+    /// window: Messages exposes contact names and search text in adjacent sidebar chrome.
+    static func transcript(in snapshot: AXNode) -> AXNode? {
+        AXQuery.find(
+            "//\(transcriptRole)[identifier=\"\(transcriptIdentifier)\"]",
+            in: snapshot
+        )
+    }
+
+    static func bubbles(in transcript: AXNode) -> [AXNode] {
+        let found = AXQuery.all(in: transcript) {
             bubbleRoles.contains($0.role)
                 && !$0.isSecureField
                 && ($0.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
         }
-        return AXQuery.sortedByVisualOrder(found, relativeTo: snapshot.frame)
+        return AXQuery.sortedByVisualOrder(found, relativeTo: transcript.frame)
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        guard let transcript = Self.transcript(in: snapshot) else { return nil }
         let chat = Self.chatName(fromTitle: context.windowTitle)
-        let messages = Self.bubbles(in: snapshot).compactMap { bubble -> Message? in
+        let messages = Self.bubbles(in: transcript).compactMap { bubble -> Message? in
             guard let text = bubble.value?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !text.isEmpty else { return nil }
             let isUser = Self.isUserBubble(bubble, window: snapshot)

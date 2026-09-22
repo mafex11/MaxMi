@@ -4,9 +4,10 @@ import MaxMiCore
 
 final class MessagesStructuredTests: XCTestCase {
     func node(_ role: String, value: String? = nil, label: String? = nil,
+              identifier: String? = nil,
               frame: CGRect, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: nil, frame: frame, focused: false,
-               children: children, identifier: nil, label: label)
+               children: children, identifier: identifier, label: label)
     }
 
     /// Window 900 wide: incoming bubbles on the left (midX < window midX), outgoing on the right.
@@ -16,13 +17,25 @@ final class MessagesStructuredTests: XCTestCase {
         return node("AXWindow", frame: CGRect(origin: origin,
                                               size: CGSize(width: 900, height: 700)),
                     children: [
-            node("AXTextArea", value: "are we still on for 4",
-                 label: groupSenderLabels ? "Ada" : nil,
-                 frame: CGRect(x: x + 40, y: y + 100, width: 300, height: 40)),
-            node("AXTextArea", value: "yes, see you then",
-                 frame: CGRect(x: x + 540, y: y + 160, width: 300, height: 40)),
-            node("AXStaticText", value: "Delivered",
-                 frame: CGRect(x: x + 700, y: y + 205, width: 100, height: 14)),
+            node("AXList", identifier: "message-list",
+                 frame: CGRect(x: x + 20, y: y + 80, width: 860, height: 500), children: [
+                node("AXRow", frame: CGRect(x: x + 40, y: y + 100, width: 300, height: 40),
+                     children: [
+                    node("AXTextArea", value: "are we still on for 4",
+                         label: groupSenderLabels ? "Ada" : nil,
+                         frame: CGRect(x: x + 40, y: y + 100, width: 300, height: 40)),
+                ]),
+                node("AXRow", frame: CGRect(x: x + 540, y: y + 160, width: 300, height: 40),
+                     children: [
+                    node("AXTextArea", value: "yes, see you then",
+                         frame: CGRect(x: x + 540, y: y + 160, width: 300, height: 40)),
+                ]),
+                node("AXRow", frame: CGRect(x: x + 700, y: y + 205, width: 100, height: 14),
+                     children: [
+                    node("AXStaticText", value: "Delivered",
+                         frame: CGRect(x: x + 700, y: y + 205, width: 100, height: 14)),
+                ]),
+            ]),
         ])
     }
 
@@ -107,6 +120,15 @@ final class MessagesStructuredTests: XCTestCase {
         XCTAssertNil(try MessagesParser().parse(bare, context: context("Priya Vantar")))
     }
 
+    func testUnanchoredBubblesAreNotHandled() throws {
+        let unanchored = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 900, height: 700),
+                              children: [
+            node("AXTextArea", value: "sidebar preview",
+                 frame: CGRect(x: 40, y: 100, width: 300, height: 40)),
+        ])
+        XCTAssertNil(try MessagesParser().parse(unanchored, context: context("Priya Vantar")))
+    }
+
     func testRenderedOutputUsesYouAndNeverTheInternalUserMarker() throws {
         let rendered = ContentRenderer.render(
             try XCTUnwrap(MessagesParser().parse(window(), context: context("Priya Vantar"))),
@@ -119,6 +141,14 @@ final class MessagesStructuredTests: XCTestCase {
         assertGolden(try XCTUnwrap(MessagesParser().parse(try fixture("messages-thread"),
                                                         context: context("Priya Vantar"))),
                      matches: "messages-thread-golden")
+    }
+
+    func testMessagesFixtureExcludesSidebarAndSearchText() throws {
+        let conversation = try conversation(MessagesParser().parse(
+            try fixture("messages-thread"), context: context("Priya Vantar")
+        ))
+        XCTAssertFalse(conversation.messages.contains { $0.text.contains("Sidebar contact") })
+        XCTAssertFalse(conversation.messages.contains { $0.text.contains("Search conversations") })
     }
 
     func testOffsetMessagesFixtureMatchesItsGolden() throws {
