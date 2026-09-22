@@ -144,6 +144,44 @@ final class TodoPanelViewModelTests: XCTestCase {
         XCTAssertEqual(emptyViewModel.checkinFirstLine, "You reviewed the release plan.")
     }
 
+    func testRowRenderingStateShowsOnlyUnremindedClockAndFormatsAge() {
+        let pending = TodoPanelItem(
+            id: "reminder",
+            title: "Prepare the customer migration proposal before the review meeting",
+            details: "The row must render this as a title, not notification body content.",
+            sourceApp: "Mail",
+            detectedAtMs: 1_789_996_400_000,
+            remindAtMs: 1_790_000_000_000,
+            remindedAtMs: nil
+        )
+        let delivered = TodoPanelItem(
+            id: "delivered",
+            title: "A reminder already delivered",
+            details: nil,
+            sourceApp: "Mail",
+            detectedAtMs: 1_789_827_200_000,
+            remindAtMs: 1_789_900_000_000,
+            remindedAtMs: 1_789_900_000_000
+        )
+
+        XCTAssertTrue(TodoPanelRowState.showsPendingReminder(for: pending))
+        XCTAssertFalse(TodoPanelRowState.showsPendingReminder(for: delivered))
+        XCTAssertEqual(
+            TodoPanelRowState.ageDescription(
+                detectedAtMs: pending.detectedAtMs,
+                nowMs: 1_790_007_200_000
+            ),
+            "3h"
+        )
+        XCTAssertEqual(
+            TodoPanelRowState.ageDescription(
+                detectedAtMs: delivered.detectedAtMs,
+                nowMs: 1_790_000_000_000
+            ),
+            "2d"
+        )
+    }
+
     private func item(id: String, detectedAtMs: EpochMs) -> TodoPanelItem {
         TodoPanelItem(
             id: id,
