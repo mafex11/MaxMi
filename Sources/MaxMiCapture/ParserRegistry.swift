@@ -73,6 +73,7 @@ public struct ParserRegistry: Sendable {
             EditorParser(),
             NotesParser(),
             NotionParser(),
+            ObsidianParser(),
             // lane-a end
         ]
         var byBundle: [String: any StructuredParser] = [:]

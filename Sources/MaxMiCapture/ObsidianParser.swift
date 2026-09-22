@@ -10,23 +10,21 @@ public struct ObsidianParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        GenericV2Content.page(window: window,
-                              budget: StructuredEntityExtraction.pageBudget,
-                              offscreenPolicy: Self.offscreen)?.content
+        try parse(window, context: ParseContext(app: app))
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let page = GenericV2Content.page(window: window,
-                                              budget: StructuredEntityExtraction.pageBudget,
-                                              offscreenPolicy: Self.offscreen) else { return nil }
+        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
+        let structured = CaptureAccumulator.boundHard(
+            unbounded, to: StructuredEntityExtraction.pageBudget)
         return ParsedCapture(sourceApp: "Obsidian", sourceKey: key(fromTitle: app.windowTitle),
                              sourceTitle: app.windowTitle,
-                             content: ContentRenderer.render(page.content, style: .full),
+                             content: ContentRenderer.render(structured, style: .full),
                              contentKind: .document, parserVersion: 2,
                              accumulationPolicy: .replace,
                              offscreenPolicy: Self.offscreen,
-                             structured: page.content,
-                             truncated: page.truncated)
+                             structured: structured,
+                             truncated: structured != unbounded)
     }
     func key(fromTitle title: String?) -> String {
         guard let title, !title.isEmpty else { return "obsidian:unknown" }
@@ -38,5 +36,59 @@ public struct ObsidianParser: SourceParser {
             return "obsidian:\(docSlug(vault))/\(docSlug(note))"
         }
         return "obsidian:\(docSlug(title))"
+    }
+}
+
+extension ObsidianParser: StructuredParser {
+    public static let config = ParserConfig(
+        app: "Obsidian",
+        bundleIDs: [ParserRegistry.obsidianBundleID],
+        // Obsidian is Electron and does not always expose an AXWebArea above the vault view.
+        attributeSet: ["AXDOMClassList"],
+        // The existing constant: 3 scroll steps with a 32_000 ceiling.
+        offscreenPolicy: ObsidianParser.offscreen
+    )
+
+    /// CodeMirror's editor root (edit mode) and the rendered pane (reading mode).
+    static let editorClass = "cm-editor"
+    static let previewClass = "markdown-preview-view"
+
+    /// "<note> - <vault> - Obsidian <version>" -> "<note>". Same split `key(fromTitle:)` uses:
+    /// parsed from the end, because a note name may itself contain " - ".
+    static func noteName(fromTitle title: String?) -> String {
+        guard let title, !title.isEmpty else { return "untitled" }
+        let parts = title.components(separatedBy: " - ")
+        if parts.count >= 3, parts.last?.hasPrefix("Obsidian") == true {
+            return parts.dropLast(2).joined(separator: " - ")
+        }
+        return title
+    }
+
+    /// Edit mode wins over reading mode: in split view, the editor is what the user is changing.
+    static func paneRoot(in snapshot: AXNode) -> AXNode? {
+        AXQuery.find("//*[domClass*=\"\(editorClass)\"]", in: snapshot)
+            ?? AXQuery.find("//*[domClass*=\"\(previewClass)\"]", in: snapshot)
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        guard let pane = Self.paneRoot(in: snapshot) else { return nil }
+        let texts = AXQuery.all(in: pane) {
+            ($0.role == "AXHeading" || $0.role == "AXStaticText")
+                && !$0.hidden
+                && $0.subrole != GenericPageExtractor.secureSubrole
+        }
+        var seen = Set<String>()
+        let blocks = AXQuery.sortedByVisualOrder(texts, relativeTo: pane.frame)
+            .compactMap { node -> Block? in
+                guard let text = node.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !text.isEmpty, seen.insert(text).inserted else { return nil }
+                let type: BlockType = node.role == "AXHeading"
+                    ? .heading(level: min(max(node.headingLevel ?? 2, 1), 6))
+                    : .paragraph
+                return Block(type: type, text: text, authoredByUser: false)
+            }
+        guard !blocks.isEmpty else { return nil }
+        return .document(Document(title: Self.noteName(fromTitle: context.windowTitle),
+                                  blocks: blocks, author: .user, url: nil))
     }
 }

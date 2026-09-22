@@ -23,7 +23,6 @@ final class GenericV2ParserTests: XCTestCase {
             text("body line", y: 40),
         ], title: nil)
         let cases: [(parser: any SourceParser, app: AppInfo, kind: CaptureContentKind, label: String)] = [
-            (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Welcome - My Vault - Obsidian v1.5"), .document, "Obsidian"),
             (WordParser(), AppInfo(bundleID: "com.microsoft.Word", name: "Word", windowTitle: "Brief - Microsoft Word"), .document, "Word"),
             (PagesParser(), AppInfo(bundleID: "com.apple.iWork.Pages", name: "Pages", windowTitle: "Brief - Pages"), .document, "Pages"),
             (OutlookParser(), AppInfo(bundleID: "com.microsoft.Outlook", name: "Outlook", windowTitle: "Project update"), .email, "Outlook"),
@@ -75,6 +74,23 @@ final class GenericV2ParserTests: XCTestCase {
         XCTAssertEqual(capture.sourceKey, "com.apple.Notes:Groceries")
     }
 
+    func testObsidianWithoutPaneFallsThroughToGenericPageExtractor() throws {
+        let window = body([
+            AXNode(role: "AXHeading", value: "Roadmap", title: nil, url: nil,
+                   frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
+                   children: [], headingLevel: 2),
+            text("ship the index rebuild", y: 40),
+        ], title: "Roadmap")
+        let app = AppInfo(bundleID: "md.obsidian", name: "Obsidian",
+                          windowTitle: "Roadmap - Research - Obsidian v1.5")
+        XCTAssertNil(try ObsidianParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "md.obsidian:Roadmap - Research - Obsidian v1.5")
+    }
+
     func testDiscordKeepsItsOwnChromeFilteringWrappedInGenericBlocks() throws {
         let window = body([
             text("Add Reaction", y: 10),
@@ -123,14 +139,23 @@ final class GenericV2ParserTests: XCTestCase {
     /// A note is a document, and the 8_000 default would trim one at a length Pages and Word
     /// keep whole. The three note apps therefore declare the same page budget and scroll ceiling.
     func testNoteAppsUseTheDocumentPageBudget() throws {
-        let long = body((0..<400).map { index in
+        let paragraphs = (0..<400).map { index in
             text("paragraph \(index) " + String(repeating: "x", count: 40), y: CGFloat(20 * index))
-        }, title: "Long note")
-        let cases: [(parser: any SourceParser, app: AppInfo, label: String)] = [
-            (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Long note - My Vault - Obsidian v1.5"), "Obsidian"),
+        }
+        let obsidian = body([
+            AXNode(role: "AXGroup", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 0, y: 0, width: 1_200, height: 8_000), focused: false,
+                   children: paragraphs, domClassList: ["cm-editor"]),
+        ], title: "Long note")
+        let cases: [(parser: any SourceParser, window: AXNode, app: AppInfo, label: String)] = [
+            (ObsidianParser(), obsidian,
+             AppInfo(bundleID: "md.obsidian", name: "Obsidian",
+                     windowTitle: "Long note - My Vault - Obsidian v1.5"),
+             "Obsidian"),
         ]
         for entry in cases {
-            let capture = try XCTUnwrap(try entry.parser.parse(window: long, app: entry.app), entry.label)
+            let capture = try XCTUnwrap(try entry.parser.parse(window: entry.window, app: entry.app),
+                                        entry.label)
             XCTAssertEqual(capture.offscreenPolicy.maxCharacters,
                            StructuredEntityExtraction.pageBudget, entry.label)
             XCTAssertGreaterThan(capture.content.count, 8_000,

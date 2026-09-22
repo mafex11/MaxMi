@@ -43,6 +43,10 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `notion-page-golden.json` | Expected `CapturedContent` for `notion-page.json` | golden comparison |
 | `notion-offset-peek.json` | Hand-authored Notion peek renderer at a nonzero origin with page properties and right-margin chrome retained | `NotionParser` origin invariance |
 | `notion-offset-peek-golden.json` | Expected `CapturedContent` for `notion-offset-peek.json` | golden comparison |
+| `obsidian-editor.json` | Hand-authored Obsidian CodeMirror editor at the origin with navigator chrome retained | `ObsidianParser` editor anchor |
+| `obsidian-editor-golden.json` | Expected `CapturedContent` for `obsidian-editor.json` | golden comparison |
+| `obsidian-offset-preview.json` | Hand-authored Obsidian reading pane at a nonzero origin with navigator chrome retained | `ObsidianParser` preview anchor and origin invariance |
+| `obsidian-offset-preview-golden.json` | Expected `CapturedContent` for `obsidian-offset-preview.json` | golden comparison |
 | <!-- // lane-a end --> |  |  |
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the

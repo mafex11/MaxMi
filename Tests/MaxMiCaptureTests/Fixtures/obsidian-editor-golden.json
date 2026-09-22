@@ -1,0 +1,1 @@
+{"content":{"document":{"_0":{"author":{"user":{}},"blocks":[{"authoredByUser":false,"text":"Index rebuild","type":{"heading":{"level":2}}},{"authoredByUser":false,"text":"Normalize vectors before comparison.","type":{"paragraph":{}}},{"authoredByUser":false,"text":"Keep the local cache warm.","type":{"paragraph":{}}}],"title":"Index rebuild"}}},"v":1}
