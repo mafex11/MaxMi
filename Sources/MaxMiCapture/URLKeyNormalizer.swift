@@ -51,6 +51,7 @@ public enum URLKeyNormalizer {
         if host == "www.linkedin.com" || host == "linkedin.com" {
             if comps.path.hasPrefix("/messaging/thread/") {
                 comps.path = pathPrefix(comps.path, componentCount: 3)
+                comps.query = nil
             }
         }
         if host.contains("google.") {
