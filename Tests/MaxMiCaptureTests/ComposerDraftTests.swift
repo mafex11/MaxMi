@@ -3,14 +3,6 @@ import XCTest
 import MaxMiCore
 
 final class ComposerDraftTests: XCTestCase {
-    /// Same loader shape as `GenericPageBudgetTests.fixture`.
-    private func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     private func node(role: String, value: String?, identifier: String? = nil,
                       focused: Bool = false, subrole: String? = nil,
                       children: [AXNode] = []) -> AXNode {
@@ -45,7 +37,7 @@ final class ComposerDraftTests: XCTestCase {
     func testNoDraftForASecureField() {
         let window = node(role: "AXWindow", value: nil, children: [
             node(role: "AXTextField", value: "hunter2", identifier: "password", focused: true,
-                 subrole: GenericPageExtractor.secureSubrole),
+                 subrole: "AXSecureTextField"),
         ])
         XCTAssertNil(ComposerDraft.draft(window: window))
     }

@@ -22,10 +22,19 @@ public struct ParserRegistry: Sendable {
     public static let pagesBundleIDs = ["com.apple.iWork.Pages"]
     public static let outlookBundleIDs = ["com.microsoft.Outlook"]
     public static let sparkBundleIDs = ["com.readdle.smartemail-Mac", "com.readdle.SparkDesktop"]
+    public static let finderBundleID = "com.apple.finder"
+    public static let cursorBundleID = "com.todesktop.230313mzl4w4u92"
+    public static let vsCodeBundleID = "com.microsoft.VSCode"
+    public static let editorBundleIDs = [cursorBundleID, vsCodeBundleID]
     // Terminal emulators — all share TerminalParser (single-AXTextArea scrollback shape).
     public static let terminalBundleIDs = ["dev.warp.Warp-Stable", "dev.warp.Warp",
                                            "com.apple.Terminal", "com.googlecode.iterm2"]
     private let parsers: [String: any SourceParser]
+    let structuredParsers: [String: any StructuredParser]
+    /// All parsers claiming a bundle ID. `structuredParsers` keeps the selected parser for
+    /// routing; this preserves every declaration needed while the AX snapshot is being read.
+    let structuredParserClaims: [String: [any StructuredParser]]
+    let hostParsers: [String: any StructuredParser]
 
     public init() {
         var p: [String: any SourceParser] = [
@@ -51,6 +60,43 @@ public struct ParserRegistry: Sendable {
         for bid in Self.pagesBundleIDs { p[bid] = PagesParser() }
         for bid in Self.outlookBundleIDs { p[bid] = OutlookParser() }
         for bid in Self.sparkBundleIDs { p[bid] = SparkParser() }
+        for bid in Self.editorBundleIDs { p[bid] = EditorParser() }
+        p[Self.finderBundleID] = FinderParser()
+        // Structured (v2) parsers. Each one declares the bundle IDs and hosts it claims, so the
+        // two maps below are derived, never hand-maintained in parallel with the list. Tasks 7-26
+        // append to this ONE list; by the end of Phase D it holds the seventeen entries written
+        // out in this task's Interfaces block, and `PhaseDCoverageTests` asserts that.
+        var structured: [any StructuredParser] = [
+            TerminalParser(),
+            EditorParser(),
+            NotesParser(),
+            NotionParser(),
+            ObsidianParser(),
+            GmailParser(),
+            SlackParser(),
+        ]
+        structured.append(contentsOf: [DiscordParser(), MessagesParser(), WhatsAppParser(), LinkedInMessagingParser(), TeamsWebParser()] as [any StructuredParser])
+        structured.append(contentsOf: [
+            FinderParser(),
+            CalendarParser(),
+            FantasticalParser(),
+            RemindersParser(),
+            OutlookWebParser(),
+        ] as [any StructuredParser])
+        var byBundle: [String: any StructuredParser] = [:]
+        var bundleClaims: [String: [any StructuredParser]] = [:]
+        var byHost: [String: any StructuredParser] = [:]
+        for parser in structured {
+            let config = type(of: parser).config
+            for bundleID in config.bundleIDs {
+                byBundle[bundleID] = parser
+                bundleClaims[bundleID, default: []].append(parser)
+            }
+            for host in config.hosts { byHost[host.lowercased()] = parser }
+        }
+        structuredParsers = byBundle
+        structuredParserClaims = bundleClaims
+        hostParsers = byHost
         parsers = p
     }
 
@@ -59,10 +105,44 @@ public struct ParserRegistry: Sendable {
     /// things, and no shipping parser throws a non-refusal error to borrow for that.
     init(parsers: [String: any SourceParser]) {
         self.parsers = parsers
+        // A seam registry exercises the v1 dispatch branches only; it registers no v2 parser.
+        self.structuredParsers = [:]
+        self.structuredParserClaims = [:]
+        self.hostParsers = [:]
+    }
+
+    /// Routing tests build a registry with exactly the parsers under test, so a future
+    /// registration cannot silently change what a routing assertion is measuring.
+    init(structuredParsers: [any StructuredParser], hostParsers: [any StructuredParser]) {
+        parsers = [:]
+        var byBundle: [String: any StructuredParser] = [:]
+        var bundleClaims: [String: [any StructuredParser]] = [:]
+        var byHost: [String: any StructuredParser] = [:]
+        for parser in structuredParsers {
+            for bundleID in type(of: parser).config.bundleIDs {
+                byBundle[bundleID] = parser
+                bundleClaims[bundleID, default: []].append(parser)
+            }
+        }
+        for parser in hostParsers {
+            for host in type(of: parser).config.hosts { byHost[host.lowercased()] = parser }
+        }
+        self.structuredParsers = byBundle
+        self.structuredParserClaims = bundleClaims
+        self.hostParsers = byHost
     }
 
     public func parser(for bundleID: String) -> (any SourceParser)? {
         parsers[bundleID]
+    }
+
+    /// The union of the legacy bundle map and both structured routing maps. Kept internal so
+    /// coverage tests derive their expected parser set from the same registry that dispatches.
+    var registeredParserTypeNames: Set<String> {
+        let legacy = Set(parsers.values.map { String(describing: type(of: $0)) })
+        let structured = Set(structuredParsers.values.map { String(describing: type(of: $0)) })
+        let hosts = Set(hostParsers.values.map { String(describing: type(of: $0)) })
+        return legacy.union(structured).union(hosts)
     }
 }
 

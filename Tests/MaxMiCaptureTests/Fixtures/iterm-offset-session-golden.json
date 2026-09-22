@@ -1,0 +1,1 @@
+{"content":{"terminal":{"_0":{"cwd":"~/code/sample","segments":[{"command":"echo example","isRunning":false,"output":"first output line\nsecond output line"},{"command":"git status","isRunning":false,"output":"working tree clean"}]}}},"v":1}

@@ -3,13 +3,6 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class StructuredEntityTypedTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func testCalendarEventFixtureBecomesATypedEvent() throws {
         let app = AppInfo(bundleID: "com.apple.iCal", name: "Calendar", windowTitle: "Calendar")
         let structured = try CalendarParser().parseStructured(window: try fixture("calendar-event"), app: app)
@@ -24,8 +17,7 @@ final class StructuredEntityTypedTests: XCTestCase {
         XCTAssertEqual(events[0].notes, "Review the interaction flow.",
                        "the leftover detail text becomes CalendarEvent.notes")
         XCTAssertFalse(events[0].hasConference)
-        XCTAssertNil(events[0].start)
-        XCTAssertNil(events[0].end)
+        XCTAssertFalse(events[0].allDay)
     }
 
     func testCalendarCaptureKeepsItsKeyKindAndPolicyAndRendersTheEvent() throws {
@@ -140,12 +132,16 @@ final class StructuredEntityTypedTests: XCTestCase {
         }
     }
 
-    func testUnparseableWindowStillReturnsNil() throws {
+    func testUnmatchedCalendarAndRemindersWindowsRefuse() throws {
         let window = AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
                             frame: CGRect(x: 0, y: 0, width: 800, height: 600), focused: false,
                             children: [])
         let app = AppInfo(bundleID: "com.apple.iCal", name: "Calendar", windowTitle: nil)
-        XCTAssertNil(try CalendarParser().parseStructured(window: window, app: app))
-        XCTAssertNil(try RemindersParser().parseStructured(window: window, app: app))
+        XCTAssertThrowsError(try CalendarParser().parseStructured(window: window, app: app)) {
+            XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-calendar-window"))
+        }
+        XCTAssertThrowsError(try RemindersParser().parseStructured(window: window, app: app)) {
+            XCTAssertEqual($0 as? ParserRefusal, ParserRefusal(reason: "unmatched-reminders-window"))
+        }
     }
 }

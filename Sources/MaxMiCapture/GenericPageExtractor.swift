@@ -39,7 +39,6 @@ public enum GenericPageExtractor {
         "AXButton", "AXLink", "AXMenuItem", "AXCheckBox", "AXRadioButton", "AXImage",
     ]
     static let listContainerRoles: Set<String> = ["AXList", "AXOutline"]
-    static let secureSubrole = "AXSecureTextField"
     static let secureMask = "«secure field»"
     static let dialogRoles: Set<String> = ["AXSheet", "AXDialog", "AXPopover"]
     static let dialogSubroles: Set<String> = ["AXDialog", "AXSystemDialog"]
@@ -155,7 +154,7 @@ public enum GenericPageExtractor {
         if var block = block(for: node, listDepth: listDepth) {
             // The block the user is typing into. `dedupKey` intentionally ignores authorship, so
             // marking a block cannot change dedup behaviour.
-            if node.focused, inputRoles.contains(node.role), node.subrole != secureSubrole {
+            if node.focused, inputRoles.contains(node.role), !node.isSecureField {
                 block = Block(type: block.type, text: block.text, authoredByUser: true)
             }
             let entryOrder = order
@@ -191,7 +190,7 @@ public enum GenericPageExtractor {
 
     static func block(for node: AXNode, listDepth: Int) -> Block? {
         // Checked first and at any role: a secure field's value is never read.
-        if node.subrole == secureSubrole {
+        if node.isSecureField {
             return Block(type: .input(placeholder: nil), text: secureMask)
         }
         if node.role == "AXHeading" {
@@ -261,7 +260,7 @@ public enum GenericPageExtractor {
             if menuRoles.contains(current.role) || current.hidden { return }
             // A cell is not a loophole around the secure-field rule: the value is never read here
             // either, and the subtree is not descended into.
-            if current.subrole == secureSubrole { return }
+            if current.isSecureField { return }
             if roles.contains(current.role) {
                 let text = readableText(current)
                 if !text.isEmpty {
@@ -367,13 +366,14 @@ public enum GenericPageExtractor {
 
     static func makeFocusedElement(from node: AXNode?) -> FocusedElement? {
         guard let node else { return nil }
-        let isSecure = node.subrole == secureSubrole
+        let isSecure = node.isSecureField
         return FocusedElement(
             role: node.role,
             identifier: node.identifier,
             value: isSecure ? nil : node.value,
-            selectedText: node.selectedText,
+            selectedText: isSecure ? nil : node.selectedText,
             isSecure: isSecure
         )
     }
+
 }

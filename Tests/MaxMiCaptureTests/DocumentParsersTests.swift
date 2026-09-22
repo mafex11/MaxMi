@@ -7,43 +7,74 @@ final class DocumentParsersTests: XCTestCase {
                frame: CGRect(x: 0, y: y, width: 10, height: 10), focused: false, children: kids)
     }
     func win(_ body: [AXNode]) -> AXNode { n("AXWindow", nil, 0, body) }
+    func genericWindow(_ body: [AXNode]) -> AXNode {
+        AXNode(role: "AXWindow", value: nil, title: nil, url: nil,
+               frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+               focused: false, children: body)
+    }
+    func obsidianWindow(_ body: [AXNode]) -> AXNode {
+        genericWindow([
+            AXNode(role: "AXGroup", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 200, y: 40, width: 600, height: 520),
+                   focused: false, children: body, domClassList: ["cm-editor"]),
+        ])
+    }
 
-    func testNotionKeyFromTitleAndBody() throws {
+    func testNotionWithoutFrameFallsThroughToGenericCapture() throws {
         let app = AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "June LP")
-        let cap = try XCTUnwrap(try NotionParser().parse(window: win([n("AXTextArea", "Anime list", 10)]), app: app))
-        XCTAssertEqual(cap.sourceApp, "Notion")
-        XCTAssertEqual(cap.sourceKey, "notion:june-lp")
-        XCTAssertTrue(cap.content.contains("Anime list"))
+        let window = genericWindow([n("AXTextArea", "Anime list", 10)])
+        XCTAssertNil(try NotionParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "notion.id:June LP")
     }
     func testObsidianKeyFromTitleParts() throws {
         let app = AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Welcome - My Vault - Obsidian 1.12.7")
-        let cap = try XCTUnwrap(try ObsidianParser().parse(window: win([n("AXStaticText", "note body", 10)]), app: app))
+        let cap = try XCTUnwrap(try ObsidianParser().parse(
+            window: obsidianWindow([n("AXStaticText", "note body", 10)]), app: app))
         XCTAssertEqual(cap.sourceApp, "Obsidian")
         XCTAssertEqual(cap.sourceKey, "obsidian:my-vault/welcome")
     }
-    func testObsidianUnexpectedTitleFallsBack() throws {
+    func testObsidianWithoutPaneFallsThroughToGenericCapture() throws {
         let app = AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Obsidian")
-        let cap = try XCTUnwrap(try ObsidianParser().parse(window: win([n("AXStaticText", "x", 10)]), app: app))
-        XCTAssertEqual(cap.sourceKey, "obsidian:obsidian")
+        let window = genericWindow([n("AXStaticText", "x", 10)])
+        XCTAssertNil(try ObsidianParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "md.obsidian:Obsidian")
     }
     func testObsidianNoteTitleWithDashes() throws {
         let app = AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Meeting - Q4 - Work Vault - Obsidian 1.7")
-        let cap = try XCTUnwrap(try ObsidianParser().parse(window: win([n("AXStaticText", "notes", 10)]), app: app))
+        let cap = try XCTUnwrap(try ObsidianParser().parse(
+            window: obsidianWindow([n("AXStaticText", "notes", 10)]), app: app))
         XCTAssertEqual(cap.sourceKey, "obsidian:work-vault/meeting---q4")
     }
-    func testNotesKeyFromTitle() throws {
+    func testNotesWithoutBodyAnchorFallsThroughToGenericCapture() throws {
         let app = AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Groceries")
-        let cap = try XCTUnwrap(try NotesParser().parse(window: win([n("AXStaticText", "milk eggs", 10)]), app: app))
-        XCTAssertEqual(cap.sourceApp, "Notes")
-        XCTAssertEqual(cap.sourceKey, "notes:groceries")
+        let window = genericWindow([n("AXStaticText", "milk eggs", 10)])
+        XCTAssertNil(try NotesParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "com.apple.Notes:Groceries")
     }
     func testEmptyBodyReturnsNil() throws {
         let app = AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Empty")
         XCTAssertNil(try NotionParser().parse(window: win([n("AXButton")]), app: app))
     }
-    func testNilTitleStillKeys() throws {
+    func testNotesWithoutBodyAnchorAndTitleFallsThroughToGenericCapture() throws {
         let app = AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: nil)
-        let cap = try XCTUnwrap(try NotesParser().parse(window: win([n("AXStaticText", "x", 10)]), app: app))
-        XCTAssertTrue(cap.sourceKey.hasPrefix("notes:"))
+        let window = genericWindow([n("AXStaticText", "x", 10)])
+        XCTAssertNil(try NotesParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "com.apple.Notes:window")
     }
 }

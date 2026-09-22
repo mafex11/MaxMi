@@ -1,0 +1,1 @@
+{"content":{"terminal":{"_0":{"cwd":"~/code/sample","segments":[{"command":"swift build","isRunning":false,"output":"Compiling sample\nBuild complete"},{"command":"swift test","isRunning":false,"output":"Executed sample checks"}]}}},"v":1}

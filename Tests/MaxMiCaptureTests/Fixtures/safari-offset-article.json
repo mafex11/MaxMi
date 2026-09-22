@@ -1,0 +1,67 @@
+{
+  "role": "AXWindow", "value": null, "title": "One", "url": null,
+  "frame": {"x":1440,"y":220,"width":1280,"height":860}, "focused": false,
+  "children": [
+    {
+      "role": "AXToolbar", "value": null, "title": null, "url": null,
+      "frame": {"x":1440,"y":220,"width":1280,"height":40}, "focused": false,
+      "children": [
+        {
+          "role": "AXTextField", "value": "example.com/posts/one",
+          "title": "Address and search", "url": null,
+          "frame": {"x":1680,"y":226,"width":700,"height":28}, "focused": false, "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXWebArea", "value": null, "title": "One", "url": "https://example.com/posts/one",
+      "frame": {"x":1440,"y":260,"width":1280,"height":820}, "focused": false,
+      "children": [
+        {
+          "role": "AXGroup", "value": null, "title": null, "url": null,
+          "subrole": "AXLandmarkNavigation",
+          "frame": {"x":1720,"y":278,"width":840,"height":18}, "focused": false,
+          "children": [
+            {
+              "role": "AXLink", "value": null, "title": "Articles", "url": null,
+              "frame": {"x":1720,"y":278,"width":80,"height":18}, "focused": false, "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXGroup", "value": null, "title": null, "url": null,
+          "subrole": "AXLandmarkMain",
+          "frame": {"x":1720,"y":300,"width":840,"height":680}, "focused": false,
+          "children": [
+            {
+              "role": "AXHeading", "value": "A Small Article", "title": null, "url": null,
+              "headingLevel": 1,
+              "frame": {"x":1720,"y":300,"width":500,"height":28}, "focused": false, "children": []
+            },
+            {
+              "role": "AXStaticText", "value": "The first paragraph uses invented content.",
+              "title": null, "url": null,
+              "frame": {"x":1720,"y":344,"width":680,"height":20}, "focused": false, "children": []
+            },
+            {
+              "role": "AXStaticText", "value": "The second paragraph confirms the offset.",
+              "title": null, "url": null,
+              "frame": {"x":1720,"y":372,"width":680,"height":20}, "focused": false, "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXGroup", "value": null, "title": null, "url": null,
+          "subrole": "AXLandmarkComplementary",
+          "frame": {"x":1480,"y":300,"width":200,"height":680}, "focused": false,
+          "children": [
+            {
+              "role": "AXStaticText", "value": "Related notes", "title": null, "url": null,
+              "frame": {"x":1480,"y":300,"width":180,"height":20}, "focused": false, "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

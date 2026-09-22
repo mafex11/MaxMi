@@ -2,11 +2,6 @@ import XCTest
 @testable import MaxMiCapture
 
 final class StructuredNativeParserTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
     func testCalendarEventExtractsStructuredFields() throws {
         let app = AppInfo(bundleID: "com.apple.iCal", name: "Calendar", windowTitle: "Calendar")
         let capture = try XCTUnwrap(try CalendarParser().parse(

@@ -2,14 +2,6 @@ import XCTest
 @testable import MaxMiCapture
 
 final class GenericAXParserTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name,
-            withExtension: "json",
-            subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
     func node(_ role: String, value: String? = nil, frame: CGRect? = nil, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: nil, frame: frame, focused: false, children: children)
     }

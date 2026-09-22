@@ -1658,8 +1658,14 @@ final class AppWiring {
         // it must NOT run on the main thread, or it freezes the menu-bar UI. Read off-main, then
         // resume on the main actor for the DB commit. AXNode is Sendable so the snapshot crosses
         // the actor boundary safely.
+        // Electron trees (Slack, Notion, Obsidian) do not reliably expose an AXWebArea above
+        // their DOM, so the claiming v2 parser's ParserConfig.attributeSet forces the two DOM
+        // reads for the whole tree. Every other app forces nothing and pays nothing (spec §8).
+        let forcedAttributes = registry.forcedAttributes(for: app.bundleID)
         Task.detached(priority: .utility) { [weak self] in
-            let snapshot = AXReader.snapshotFrontmostWindow(pid: pid)
+            let snapshot = AXReader.snapshotFrontmostWindow(
+                pid: pid, forcedAttributes: forcedAttributes
+            )
             let confirmationSnapshot: (window: AXNode, title: String?)?
             if ParserRegistry.whatsAppBundleIDs.contains(app.bundleID),
                trigger == .appActivated || trigger == .conversationChanged {
@@ -1667,7 +1673,9 @@ final class AppWiring {
                 // vice versa). Re-read once after a short settle and only commit a stable
                 // WhatsApp identity below.
                 try? await Task.sleep(for: .milliseconds(350))
-                confirmationSnapshot = AXReader.snapshotFrontmostWindow(pid: pid)
+                confirmationSnapshot = AXReader.snapshotFrontmostWindow(
+                    pid: pid, forcedAttributes: forcedAttributes
+                )
             } else {
                 confirmationSnapshot = nil
             }
@@ -1730,7 +1738,7 @@ final class AppWiring {
             // Browsers: engine-aware URL extraction followed by semantic web-app routing.
             if let browser = ApplicationRegistry.browser(for: app.bundleID) {
                 let result = try BrowserCapturePipeline.parse(
-                    window: window, windowTitle: title, browser: browser
+                    window: window, windowTitle: title, browser: browser, registry: registry
                 )
                 effectiveParserName = result.parserID
                 browserTruncated = result.truncated
@@ -1959,6 +1967,20 @@ final class AppWiring {
                     startedAtMs: startedAtMs
                 )
             }
+        } catch let refusal as ParserRefusal {
+            // A refusing structured parser has explicitly said this window must not be stored.
+            // It is a normal skip, never a generic failure or a fallback capture.
+            SafeLogger.shared.log(
+                .info, subsystem: .capture, event: .parserRefused,
+                fields: SafeLogFields(
+                    parserID: SafeLogToken(validating: effectiveParserName),
+                    outcome: SafeLogToken(validating: refusal.reason)
+                )
+            )
+            recordCaptureHealth(
+                app: appInfo, trigger: trigger, parser: effectiveParserName,
+                outcome: .skipped(.parserNoContent), startedAtMs: startedAtMs
+            )
         } catch ExtractionError.addressFieldFocused {
             recordCaptureHealth(
                 app: appInfo, trigger: trigger, parser: effectiveParserName,

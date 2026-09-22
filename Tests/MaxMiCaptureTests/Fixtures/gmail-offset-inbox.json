@@ -1,0 +1,126 @@
+{
+  "role": "AXWindow",
+  "title": "Inbox (3) - Gmail",
+  "focused": false,
+  "frame": { "x": 1440, "y": 220, "width": 1440, "height": 900 },
+  "children": [
+    {
+      "role": "AXHeading",
+      "value": "Main menu",
+      "focused": false,
+      "frame": { "x": 1460, "y": 230, "width": 200, "height": 24 },
+      "children": []
+    },
+    {
+      "role": "AXRow",
+      "focused": false,
+      "selected": true,
+      "frame": { "x": 1740, "y": 320, "width": 1100, "height": 28 },
+      "domClassList": ["zA", "yO"],
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Ilya Venn",
+          "focused": false,
+          "frame": { "x": 1760, "y": 320, "width": 160, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "Telemetry cache review",
+          "focused": false,
+          "frame": { "x": 1940, "y": 320, "width": 240, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "The sampled blocks are stable.",
+          "focused": false,
+          "frame": { "x": 2180, "y": 320, "width": 260, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "08:17 AM",
+          "focused": false,
+          "frame": { "x": 2740, "y": 320, "width": 80, "height": 16 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXRow",
+      "focused": false,
+      "selected": false,
+      "frame": { "x": 1740, "y": 360, "width": 1100, "height": 28 },
+      "domClassList": ["zA", "yO"],
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Moro Quill",
+          "focused": false,
+          "frame": { "x": 1760, "y": 360, "width": 160, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "Staging gate",
+          "focused": false,
+          "frame": { "x": 1940, "y": 360, "width": 180, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "The final probe is green.",
+          "focused": false,
+          "frame": { "x": 2180, "y": 360, "width": 240, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "07:54 AM",
+          "focused": false,
+          "frame": { "x": 2740, "y": 360, "width": 80, "height": 16 },
+          "children": []
+        }
+      ]
+    },
+    {
+      "role": "AXRow",
+      "focused": false,
+      "selected": false,
+      "frame": { "x": 1740, "y": 400, "width": 1100, "height": 28 },
+      "domClassList": ["zA", "yO"],
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "Pera Noll",
+          "focused": false,
+          "frame": { "x": 1760, "y": 400, "width": 160, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "Index notes",
+          "focused": false,
+          "frame": { "x": 1940, "y": 400, "width": 180, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "I reserved a short review slot.",
+          "focused": false,
+          "frame": { "x": 2180, "y": 400, "width": 260, "height": 16 },
+          "children": []
+        },
+        {
+          "role": "AXStaticText",
+          "value": "Jul 8",
+          "focused": false,
+          "frame": { "x": 2740, "y": 400, "width": 80, "height": 16 },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

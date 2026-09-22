@@ -1,0 +1,89 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 20, "width": 400, "x": 1460, "y": 232},
+              "role": "AXStaticText",
+              "value": "Reference plan"
+            }
+          ],
+          "domClassList": ["notion-topbar"],
+          "focused": false,
+          "frame": {"height": 44, "width": 1400, "x": 1440, "y": 220},
+          "role": "AXGroup"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "focused": false,
+                  "frame": {"height": 20, "width": 400, "x": 1740, "y": 280},
+                  "role": "AXStaticText",
+                  "value": "Status: Ready"
+                }
+              ],
+              "domClassList": ["notion-page-properties"],
+              "focused": false,
+              "frame": {"height": 30, "width": 400, "x": 1740, "y": 280},
+              "role": "AXGroup"
+            },
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 30, "width": 400, "x": 1740, "y": 320},
+              "headingLevel": 3,
+              "role": "AXHeading",
+              "value": "Delivery checklist"
+            },
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 20, "width": 400, "x": 1740, "y": 370},
+              "role": "AXStaticText",
+              "value": "Confirm parser routing."
+            },
+            {
+              "children": [],
+              "focused": false,
+              "frame": {"height": 20, "width": 400, "x": 1740, "y": 400},
+              "role": "AXStaticText",
+              "value": "Compare captured blocks."
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "focused": false,
+                  "frame": {"height": 20, "width": 240, "x": 2540, "y": 320},
+                  "role": "AXStaticText",
+                  "value": "Activity"
+                }
+              ],
+              "domClassList": ["layout-margin-right"],
+              "focused": false,
+              "frame": {"height": 700, "width": 280, "x": 2540, "y": 320},
+              "role": "AXGroup"
+            }
+          ],
+          "domClassList": ["notion-peek-renderer"],
+          "focused": false,
+          "frame": {"height": 856, "width": 1400, "x": 1440, "y": 264},
+          "role": "AXGroup"
+        }
+      ],
+      "focused": false,
+      "frame": {"height": 900, "width": 1400, "x": 1440, "y": 220},
+      "role": "AXWebArea"
+    }
+  ],
+  "focused": false,
+  "frame": {"height": 900, "width": 1400, "x": 1440, "y": 220},
+  "role": "AXWindow"
+}

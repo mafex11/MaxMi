@@ -3,31 +3,20 @@ import MaxMiCore
 @testable import MaxMiCapture
 
 final class WebAppStructuredTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = try XCTUnwrap(Bundle.module.url(
-            forResource: name, withExtension: "json", subdirectory: "Fixtures"
-        ))
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
-
-    func testSlackWebProducesTypedConversationMessages() throws {
+    func testSlackWebWithoutAHostParserProducesAGenericPage() throws {
         let browser = try XCTUnwrap(ApplicationRegistry.browser(for: "app.zen-browser.zen"))
         let result = try BrowserCapturePipeline.parse(
             window: try fixture("gecko-slack-chat"),
             windowTitle: "Slack", browser: browser
         )
-        guard case .conversation(let conversation) = try XCTUnwrap(result.capture.structured) else {
-            return XCTFail("expected .conversation")
+        guard case .generic(let page) = try XCTUnwrap(result.capture.structured) else {
+            return XCTFail("expected .generic")
         }
-        XCTAssertEqual(conversation.channel, "Slack")
-        XCTAssertFalse(conversation.isGroup, "no group signal survives the web walk")
-        XCTAssertEqual(conversation.messages.map(\.sender), ["Alex", "Sam"])
-        XCTAssertEqual(conversation.messages.map(\.text),
-                       ["Morning update", "Reviewing the browser parser"])
-        XCTAssertEqual(conversation.messages.map(\.isUser), [false, false])
+        XCTAssertEqual(page.url,
+                       "https://app.slack.com/fixture/workspace-alpha/channel-general/thread-placeholder?source=fixture")
+        XCTAssertFalse(page.regions.isEmpty)
         XCTAssertEqual(result.capture.contentKind, .conversation)
-        XCTAssertEqual(result.capture.content,
-                       "(From: Alex): Morning update\n(From: Sam): Reviewing the browser parser")
+        XCTAssertEqual(result.capture.content, ContentRenderer.render(.generic(page), style: .full))
         XCTAssertTrue(result.parserID.contains("gecko/slack/webArea/quality-high"))
     }
 
@@ -67,7 +56,7 @@ final class WebAppStructuredTests: XCTestCase {
         let webArea = BrowserTabExtractor.primaryWebArea(
             in: try fixture("chrome-article"), windowTitle: "How SQLite Works", engine: .chromium)
         XCTAssertEqual(webArea?.role, "AXWebArea")
-        XCTAssertEqual(webArea?.url, "https://sqlite.org/arch.html")
+        XCTAssertEqual(webArea?.url, "https://docs.invalid/architecture")
     }
 
     func testPrimaryWebAreaIsNilWhenTheWindowExposesNone() throws {
@@ -75,7 +64,7 @@ final class WebAppStructuredTests: XCTestCase {
             in: try fixture("safari-domain-only"), windowTitle: "Example Article", engine: .webkit))
     }
 
-    func testWebAreaAbsentFallsBackToTheWholeWindow() throws {
+    func testWebAreaAbsentFallsBackToTheWindowWithoutBrowserChrome() throws {
         let window = AXNode(role: "AXWindow", value: nil, title: "No web area", url: nil,
                             frame: CGRect(x: 0, y: 0, width: 800, height: 600), focused: false,
                             children: [
@@ -84,8 +73,7 @@ final class WebAppStructuredTests: XCTestCase {
         ])
         let tab = TabCapture(url: "https://example.com/x", title: "x", content: "chrome only",
                              urlSource: .addressBar, quality: .fallback, truncated: false)
-        let result = try WebAppCaptureParser.parse(tab: tab, window: window)
-        guard case .generic(let page) = try XCTUnwrap(result.capture.structured) else {
+        guard case .generic(let page) = WebPageParser.parse(window: window, tab: tab) else {
             return XCTFail("expected .generic")
         }
         XCTAssertEqual(page.regions[0].blocks.map(\.text), ["chrome only"])
@@ -125,59 +113,17 @@ final class WebAppStructuredTests: XCTestCase {
         XCTAssertTrue(result.truncated)
     }
 
-    func testConversationTruncationIsReportedWhenBoundingDropsMessages() throws {
-        func text(_ value: String, y: CGFloat) -> AXNode {
-            AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
-                   frame: CGRect(x: 0, y: y, width: 300, height: 16), focused: false, children: [])
-        }
-        func row(_ sender: String, _ body: String, y: CGFloat) -> AXNode {
-            AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                   frame: CGRect(x: 0, y: y, width: 400, height: 30), focused: false,
-                   children: [text(sender, y: y), text(body, y: y + 1)])
-        }
+    func testWebAppMetadataKeepsConversationIdentityWithoutSelectingItsShape() throws {
         let window = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
-                            focused: false,
-                            children: [row("Alex", "first", y: 100), row("Sam", "second", y: 200)])
+                            focused: false, children: [])
         let tab = TabCapture(url: "https://app.slack.com/client/T/C", title: "general",
-                             content: "unused", urlSource: .webArea, quality: .high,
+                             content: "first\nsecond", urlSource: .webArea, quality: .high,
                              truncated: false)
 
-        let whole = try WebAppCaptureParser.parse(tab: tab, window: window)
-        XCTAssertEqual(whole.capture.content, "(From: Alex): first\n(From: Sam): second")
-        XCTAssertFalse(whole.truncated)
-
-        let bounded = try WebAppCaptureParser.parse(tab: tab, window: window, contentBudget: 30)
-        XCTAssertEqual(bounded.capture.content, "(From: Sam): second")
-        XCTAssertTrue(bounded.truncated, "a message was shed off the front")
+        let result = try WebAppCaptureParser.parse(tab: tab, window: window)
+        XCTAssertEqual(result.capture.contentKind, .conversation)
+        XCTAssertEqual(result.capture.accumulationPolicy, .appendItems)
+        XCTAssertNil(result.capture.structured)
     }
 
-    func testMessageLinesHelperIsUnchanged() {
-        func text(_ value: String, y: CGFloat) -> AXNode {
-            AXNode(role: "AXStaticText", value: value, title: nil, url: nil,
-                   frame: CGRect(x: 0, y: y, width: 100, height: 16), focused: false, children: [])
-        }
-        let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                         frame: CGRect(x: 0, y: 100, width: 400, height: 30), focused: false,
-                         children: [text("Alex", y: 100), text("yes", y: 101)])
-        let root = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
-                          focused: false, children: [row])
-        XCTAssertEqual(WebAppCaptureParser.messageLines(in: root), ["Alex: yes"])
-        XCTAssertEqual(WebAppCaptureParser.messages(in: root).map(\.sender), ["Alex"])
-        XCTAssertEqual(WebAppCaptureParser.messages(in: root).map(\.text), ["yes"])
-    }
-
-    /// A one-label bubble is never re-split on ": ": that fabricates a sender.
-    func testSingleLabelContainerKeepsItsWholeTextAsAnUnattributedMessage() {
-        let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
-                         frame: CGRect(x: 0, y: 100, width: 400, height: 30), focused: false,
-                         children: [
-            AXNode(role: "AXStaticText", value: "Note: check the doc", title: nil, url: nil,
-                   frame: CGRect(x: 0, y: 100, width: 300, height: 16), focused: false, children: []),
-        ])
-        let root = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil,
-                          focused: false, children: [row])
-        let messages = WebAppCaptureParser.messages(in: root)
-        XCTAssertEqual(messages.map(\.sender), ["unknown"])
-        XCTAssertEqual(messages.map(\.text), ["Note: check the doc"])
-    }
 }

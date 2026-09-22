@@ -1,4 +1,5 @@
 import XCTest
+import MaxMiCore
 @testable import MaxMiCapture
 
 final class DiscordParserTests: XCTestCase {
@@ -23,16 +24,24 @@ final class DiscordParserTests: XCTestCase {
         XCTAssertEqual(DiscordParser().key(fromTitle: nil), "discord:unknown")
     }
 
-    // ── Message extraction: real message text kept, UI chrome filtered (no x-band: Discord
-    //    frames unreliable, so identity comes from the title key, not spatial filtering) ──
+    // ── Message extraction: a transcript list is the only anchor; Discord frames are unreliable. ──
     func testExtractsMessagesFiltersChrome() throws {
         let win = node("AXWindow", nil, x: 230, [
-            node("AXGroup", nil, x: 460, [
-                node("AXStaticText", "Shukudai given by Afton senpai is completed.", x: 462),
-                node("AXStaticText", "Add Reaction", x: 462),   // chrome -> dropped
-                node("AXStaticText", "Great work everyone!", x: 462),
-                node("AXStaticText", "Message", x: 462),         // chrome -> dropped
-            ]),
+            AXNode(
+                role: "AXList", value: nil, title: nil, url: nil,
+                frame: CGRect(x: 460, y: 0, width: 10, height: 10), focused: false,
+                children: [
+                    node("AXGroup", nil, x: 460, [
+                        AXNode(role: "AXHeading", value: "Afton", title: nil, url: nil,
+                               frame: nil, focused: false, children: []),
+                        node("AXStaticText", "Shukudai given by Afton senpai is completed.", x: 462),
+                        node("AXStaticText", "Add Reaction", x: 462),   // chrome -> dropped
+                        node("AXStaticText", "Great work everyone!", x: 462),
+                        node("AXStaticText", "Message", x: 462),         // chrome -> dropped
+                    ]),
+                ],
+                label: "Messages in 宿題"
+            ),
         ])
         let cap = try XCTUnwrap(try DiscordParser().parse(window: win, app: app("#宿題 | にほん - Discord")))
         XCTAssertEqual(cap.sourceApp, "Discord")
@@ -50,31 +59,65 @@ final class DiscordParserTests: XCTestCase {
     }
 
     func testFramelessTextKept() throws {
-        // frames are unreliable in Discord; a frameless text node must still be captured
+        // Frames are unreliable in Discord; an anchored frameless text node must still be captured.
         let win = AXNode(role: "AXWindow", value: nil, title: nil, url: nil, frame: nil, focused: false, children: [
-            AXNode(role: "AXStaticText", value: "message with no frame", title: nil, url: nil, frame: nil, focused: false, children: [])
+            AXNode(role: "AXList", value: nil, title: nil, url: nil, frame: nil, focused: false,
+                   children: [
+                    AXNode(role: "AXGroup", value: nil, title: nil, url: nil, frame: nil,
+                           focused: false, children: [
+                            AXNode(role: "AXStaticText", value: "message with no frame",
+                                   title: nil, url: nil, frame: nil, focused: false, children: []),
+                           ]),
+                   ], identifier: nil, label: "Messages in c")
         ])
         let cap = try XCTUnwrap(try DiscordParser().parse(window: win, app: app("#c | s - Discord")))
         XCTAssertTrue(cap.content.contains("message with no frame"))
     }
 
-    func testSelfBoundingCaptureReportsTruncation() throws {
+    func testV2ParseHardBoundsOversizeContent() throws {
         func conversationWindow(_ messages: [String]) -> AXNode {
-            node("AXWindow", nil, x: 230, messages.map {
-                node("AXStaticText", $0, x: 460)
-            })
+            node("AXWindow", nil, x: 230, [
+                AXNode(
+                    role: "AXList", value: nil, title: nil, url: nil,
+                    frame: nil, focused: false,
+                    children: messages.enumerated().map { index, message in
+                        AXNode(
+                            role: "AXGroup", value: nil, title: nil, url: nil,
+                            frame: nil, focused: false,
+                            children: [
+                                AXNode(
+                                    role: "AXHeading", value: "Mira", title: nil, url: nil,
+                                    frame: nil, focused: false, children: []
+                                ),
+                                node("AXStaticText", message, x: 460),
+                            ]
+                        )
+                    },
+                    identifier: nil, label: "Messages in general"
+                ),
+            ])
         }
 
-        let small = try XCTUnwrap(try DiscordParser().parse(
+        let parser = DiscordParser()
+        let small = try XCTUnwrap(try parser.parse(
             window: conversationWindow(["A short message"]), app: app("#general | Acme - Discord")))
         XCTAssertFalse(small.truncated)
 
-        let oversize = try XCTUnwrap(try DiscordParser().parse(
-            window: conversationWindow((0..<120).map {
-                "message \($0) " + String(repeating: "discord body ", count: 10)
-            }),
-            app: app("#general | Acme - Discord")
+        let oversizedWindow = conversationWindow((0..<120).map {
+            "message \($0) " + String(repeating: "discord body ", count: 10)
+        })
+        let direct = try XCTUnwrap(try parser.parse(
+            oversizedWindow, context: ParseContext(app: app("#general | Acme - Discord"))
+        ))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(direct, style: .full).count,
+            DiscordParser.contentCap
+        )
+
+        let oversize = try XCTUnwrap(try parser.parse(
+            window: oversizedWindow, app: app("#general | Acme - Discord")
         ))
         XCTAssertTrue(oversize.truncated)
+        XCTAssertLessThanOrEqual(oversize.content.count, DiscordParser.contentCap)
     }
 }

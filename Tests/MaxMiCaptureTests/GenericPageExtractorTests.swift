@@ -6,11 +6,12 @@ final class GenericPageExtractorTests: XCTestCase {
     func node(_ role: String, value: String? = nil, title: String? = nil, label: String? = nil,
               identifier: String? = nil, subrole: String? = nil, headingLevel: Int? = nil,
               selected: Bool = false, placeholder: String? = nil, hidden: Bool = false,
-              frame: CGRect? = nil, focused: Bool = false, children: [AXNode] = []) -> AXNode {
+              selectedText: String? = nil, frame: CGRect? = nil, focused: Bool = false,
+              children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: title, url: nil, frame: frame, focused: focused,
                children: children, identifier: identifier, label: label, subrole: subrole,
                headingLevel: headingLevel, selected: selected, placeholder: placeholder,
-               selectedText: nil, hidden: hidden)
+               selectedText: selectedText, hidden: hidden)
     }
 
     func text(_ value: String, y: CGFloat = 0, x: CGFloat = 0) -> AXNode {
@@ -279,11 +280,25 @@ final class GenericPageExtractorTests: XCTestCase {
             children: [
                 AXNode(role: "AXTextField", value: nil, title: nil, url: nil,
                        frame: CGRect(x: 0, y: 0, width: 200, height: 18), focused: true,
-                       children: [], subrole: GenericPageExtractor.secureSubrole),
+                       children: [], subrole: "AXSecureTextField"),
             ])
         let blocks = GenericPageExtractor.extract(window: window, focusedElement: nil, url: nil)
             .page.regions.flatMap(\.blocks)
         XCTAssertEqual(blocks.map(\.text), [GenericPageExtractor.secureMask])
         XCTAssertFalse(blocks[0].authoredByUser)
+    }
+
+    func testFocusedSecureRoleRedactsValueAndSelectedTextAtTheExtractorBoundary() {
+        let secret = "secure-selected-text"
+        let window = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 400, height: 200),
+                          children: [
+            node("AXSecureTextField", value: secret, selectedText: secret,
+                 frame: CGRect(x: 20, y: 20, width: 240, height: 20), focused: true),
+        ])
+        let page = GenericPageExtractor.extract(window: window, focusedElement: nil, url: nil).page
+        XCTAssertFalse(ContentRenderer.render(.generic(page), style: .full).contains(secret))
+        XCTAssertNil(page.focused?.value)
+        XCTAssertNil(page.focused?.selectedText)
+        XCTAssertTrue(page.focused?.isSecure == true)
     }
 }

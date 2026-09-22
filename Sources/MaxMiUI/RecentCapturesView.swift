@@ -154,19 +154,18 @@ public struct RecentCapturesView: View {
     /// Neutral glyph shown for any capture whose source app can't be resolved to an installed app.
     private static let fallbackSymbol = "brain.head.profile"
 
-    /// Known label → app-display-name fixups for cases where the captured source label doesn't match
-    /// the installed app's name (e.g. Chrome reports as "Chrome" but installs as "Google Chrome").
+    /// Known label → bundle-ID fixups for cases where the captured source label does not match the
+    /// installed app's display name.
     private static let nameAliases: [String: String] = [
-        "chrome": "Google Chrome",
-        "google chrome": "Google Chrome",
-        "code": "Visual Studio Code",
-        "vscode": "Visual Studio Code",
-        "vs code": "Visual Studio Code",
+        "chrome": "com.google.Chrome",
+        "google chrome": "com.google.Chrome",
+        "code": "com.microsoft.VSCode",
+        "vscode": "com.microsoft.VSCode",
+        "vs code": "com.microsoft.VSCode",
     ]
 
-    /// Resolves a source-app label to an installed app's path. Works for ANY app the user has, since
-    /// LaunchServices resolves by display name; tries, in order: bundle ID, an alias fixup, the raw
-    /// name, and finally an exact match against currently-running apps. Returns nil if nothing matches.
+    /// Resolves a source-app label to an installed app's path. Tries a bundle ID, known aliases and
+    /// registered display names before an exact match against currently-running apps.
     private static func applicationPath(for label: String) -> String? {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -175,11 +174,18 @@ public struct RecentCapturesView: View {
             return url.path
         }
         if let alias = nameAliases[trimmed.lowercased()],
-           let path = NSWorkspace.shared.fullPath(forApplication: alias) {
-            return path
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: alias) {
+            return url.path
         }
-        if let path = NSWorkspace.shared.fullPath(forApplication: trimmed) {
-            return path
+        let descriptors = ApplicationRegistry.browsers
+            + ApplicationRegistry.nativeMeetingApps
+            + ApplicationRegistry.highValueApps
+        if let descriptor = descriptors.first(where: {
+            $0.displayName.caseInsensitiveCompare(trimmed) == .orderedSame
+        }), let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: descriptor.bundleID
+        ) {
+            return url.path
         }
         // Exact (case-insensitive) match against running apps — catches renamed/variant labels
         // without the false positives a prefix match would introduce.

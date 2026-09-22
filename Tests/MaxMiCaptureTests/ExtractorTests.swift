@@ -2,13 +2,10 @@ import XCTest
 @testable import MaxMiCapture
 
 final class ExtractorTests: XCTestCase {
-    func fixture(_ name: String) throws -> AXNode {
-        let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")!
-        return try JSONDecoder().decode(AXNode.self, from: Data(contentsOf: url))
-    }
     func testWebAreaURLWinsOverAddressBar() throws {
         let cap = try BrowserTabExtractor.extract(window: try fixture("zen-meet"), windowTitle: "Meet - Daily Sync")
-        XCTAssertEqual(cap.url, "https://meet.google.com/abc-defg-hij", "AXURL, not the scheme-less combo box")
+        XCTAssertEqual(cap.url, "https://meeting.invalid/fixture-room",
+                       "AXURL, not the scheme-less combo box")
         XCTAssertEqual(cap.title, "Meet - Daily Sync")
     }
     func testVisualOrderTopToBottomThenLeft() throws {

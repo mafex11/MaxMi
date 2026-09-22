@@ -131,15 +131,17 @@ final class MenuBarController {
         quit.setAction { onQuit() }
         menu.addItem(quit)
 
-        // Install click handler: statusItem.menu stays nil; we popUpMenu directly on right-click
+        // Install click handler: statusItem.menu stays nil; right-click presents the menu directly.
         statusItem = item
         if let button = item.button {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             let handler = ClickHandler(
                 onLeftClick: { [weak self] in self?.togglePopover() },
-                onRightClick: { @MainActor [weak item] in
-                    guard let item else { return }
-                    item.popUpMenu(menu)
+                onRightClick: { @MainActor [weak button] in
+                    guard let button else { return }
+                    menu.popUp(positioning: nil,
+                               at: NSPoint(x: 0, y: button.bounds.height),
+                               in: button)
                 }
             )
             self.clickHandler = handler

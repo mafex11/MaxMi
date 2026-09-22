@@ -121,14 +121,14 @@ public enum ApplicationRegistry {
             bundleID: "com.todesktop.230313mzl4w4u92",
             displayName: "Cursor",
             kind: .document,
-            captureStrategy: .genericAX,
+            captureStrategy: .nativeParser,
             needsAccessibilityWarmup: true
         ),
         ApplicationDescriptor(
             bundleID: "com.microsoft.VSCode",
             displayName: "Visual Studio Code",
             kind: .document,
-            captureStrategy: .genericAX,
+            captureStrategy: .nativeParser,
             needsAccessibilityWarmup: true
         ),
         ApplicationDescriptor(

@@ -1,0 +1,86 @@
+{
+  "role": "AXWindow",
+  "title": "Priya Vantar",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 900, "height": 700 },
+  "children": [
+    {
+      "role": "AXStaticText",
+      "value": "Search conversations",
+      "focused": false,
+      "frame": { "x": 20, "y": 20, "width": 160, "height": 20 },
+      "children": []
+    },
+    {
+      "role": "AXOutline",
+      "focused": false,
+      "frame": { "x": 0, "y": 60, "width": 220, "height": 640 },
+      "children": [
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 20, "y": 100, "width": 180, "height": 20 },
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "Sidebar contact",
+              "focused": false,
+              "frame": { "x": 20, "y": 100, "width": 160, "height": 20 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXList",
+      "identifier": "message-list",
+      "focused": false,
+      "frame": { "x": 240, "y": 80, "width": 640, "height": 560 },
+      "children": [
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 40, "y": 100, "width": 300, "height": 40 },
+          "children": [
+            {
+              "role": "AXTextArea",
+              "value": "review has begun",
+              "focused": false,
+              "frame": { "x": 40, "y": 100, "width": 300, "height": 40 },
+              "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 540, "y": 160, "width": 300, "height": 40 },
+          "children": [
+            {
+              "role": "AXTextArea",
+              "value": "noted, I will verify",
+              "focused": false,
+              "frame": { "x": 540, "y": 160, "width": 300, "height": 40 },
+              "children": []
+            }
+          ]
+        },
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 700, "y": 205, "width": 100, "height": 14 },
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "Delivered",
+              "focused": false,
+              "frame": { "x": 700, "y": 205, "width": 100, "height": 14 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

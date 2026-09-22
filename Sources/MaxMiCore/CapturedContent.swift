@@ -170,6 +170,7 @@ public struct CalendarEvent: Codable, Sendable, Equatable {
     public let dateString: String
     public let start: Date?
     public let end: Date?
+    public let allDay: Bool
     public let organizer: String?
     public let location: String?
     public let hasConference: Bool
@@ -178,14 +179,44 @@ public struct CalendarEvent: Codable, Sendable, Equatable {
 
     public init(title: String, dateString: String, start: Date?, end: Date?,
                 organizer: String?, location: String?, hasConference: Bool, notes: String?) {
+        self.init(
+            title: title, dateString: dateString, start: start, end: end,
+            organizer: organizer, location: location, hasConference: hasConference, notes: notes,
+            allDay: false
+        )
+    }
+
+    public init(title: String, dateString: String, start: Date?, end: Date?,
+                organizer: String?, location: String?, hasConference: Bool, notes: String?,
+                allDay: Bool) {
         self.title = title
         self.dateString = dateString
         self.start = start
         self.end = end
+        self.allDay = allDay
         self.organizer = organizer
         self.location = location
         self.hasConference = hasConference
         self.notes = notes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title, dateString, start, end, allDay, organizer, location, hasConference, notes
+    }
+
+    /// `allDay` was added after the first persisted structured-content schema. Old envelopes
+    /// decode as timed/unknown rather than becoming unreadable.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decode(String.self, forKey: .title)
+        dateString = try container.decode(String.self, forKey: .dateString)
+        start = try container.decodeIfPresent(Date.self, forKey: .start)
+        end = try container.decodeIfPresent(Date.self, forKey: .end)
+        allDay = try container.decodeIfPresent(Bool.self, forKey: .allDay) ?? false
+        organizer = try container.decodeIfPresent(String.self, forKey: .organizer)
+        location = try container.decodeIfPresent(String.self, forKey: .location)
+        hasConference = try container.decode(Bool.self, forKey: .hasConference)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
     }
 }
 

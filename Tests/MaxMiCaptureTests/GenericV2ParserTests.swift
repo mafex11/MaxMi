@@ -15,7 +15,7 @@ final class GenericV2ParserTests: XCTestCase {
     }
 
     /// Every parser here keeps a contentKind that the `.generic` shape cannot imply.
-    func testSevenPageParsersProduceGenericStructureWithTheirOwnKind() throws {
+    func testPageParsersProduceGenericStructureWithTheirOwnKind() throws {
         let document = body([
             AXNode(role: "AXHeading", value: "Heading one", title: nil, url: nil,
                    frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
@@ -23,9 +23,6 @@ final class GenericV2ParserTests: XCTestCase {
             text("body line", y: 40),
         ], title: nil)
         let cases: [(parser: any SourceParser, app: AppInfo, kind: CaptureContentKind, label: String)] = [
-            (NotesParser(), AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Groceries"), .document, "Notes"),
-            (NotionParser(), AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "June LP"), .document, "Notion"),
-            (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Welcome - My Vault - Obsidian v1.5"), .document, "Obsidian"),
             (WordParser(), AppInfo(bundleID: "com.microsoft.Word", name: "Word", windowTitle: "Brief - Microsoft Word"), .document, "Word"),
             (PagesParser(), AppInfo(bundleID: "com.apple.iWork.Pages", name: "Pages", windowTitle: "Brief - Pages"), .document, "Pages"),
             (OutlookParser(), AppInfo(bundleID: "com.microsoft.Outlook", name: "Outlook", windowTitle: "Project update"), .email, "Outlook"),
@@ -45,7 +42,23 @@ final class GenericV2ParserTests: XCTestCase {
         }
     }
 
-    func testDocumentParsersNowSeeHeadingsAndKeepTheirKeys() throws {
+    func testNotionWithoutFrameFallsThroughToGenericPageExtractor() throws {
+        let window = body([
+            AXNode(role: "AXHeading", value: "Roadmap", title: nil, url: nil,
+                   frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
+                   children: [], headingLevel: 2),
+            text("ship the index rebuild", y: 40),
+        ], title: "Roadmap")
+        let app = AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Roadmap")
+        XCTAssertNil(try NotionParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "notion.id:Roadmap")
+    }
+
+    func testNotesWithoutBodyAnchorFallsThroughToGenericPageExtractor() throws {
         let window = body([
             AXNode(role: "AXHeading", value: "Groceries", title: nil, url: nil,
                    frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
@@ -53,14 +66,32 @@ final class GenericV2ParserTests: XCTestCase {
             text("milk", y: 40),
         ], title: "Groceries")
         let app = AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Groceries")
-        let capture = try XCTUnwrap(try NotesParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.sourceKey, "notes:groceries")
-        XCTAssertEqual(capture.content, "## Groceries\nmilk",
-                       "generic v2 sees the heading level DocumentExtraction threw away")
-        XCTAssertEqual(capture.accumulationPolicy, .replace)
+        XCTAssertNil(try NotesParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "com.apple.Notes:Groceries")
     }
 
-    func testDiscordKeepsItsOwnChromeFilteringWrappedInGenericBlocks() throws {
+    func testObsidianWithoutPaneFallsThroughToGenericPageExtractor() throws {
+        let window = body([
+            AXNode(role: "AXHeading", value: "Roadmap", title: nil, url: nil,
+                   frame: CGRect(x: 300, y: 10, width: 400, height: 24), focused: false,
+                   children: [], headingLevel: 2),
+            text("ship the index rebuild", y: 40),
+        ], title: "Roadmap")
+        let app = AppInfo(bundleID: "md.obsidian", name: "Obsidian",
+                          windowTitle: "Roadmap - Research - Obsidian v1.5")
+        XCTAssertNil(try ObsidianParser().parse(window: window, app: app))
+        let expected = try XCTUnwrap(try GenericAXParser().parse(window: window, app: app))
+        let capture = try XCTUnwrap(CaptureDispatch.parse(
+            window: window, app: app, registry: ParserRegistry()))
+        XCTAssertEqual(capture, expected)
+        XCTAssertEqual(capture.sourceKey, "md.obsidian:Roadmap - Research - Obsidian v1.5")
+    }
+
+    func testDiscordWithoutATranscriptAnchorFallsThroughToGenericV2() throws {
         let window = body([
             text("Add Reaction", y: 10),
             text("Ana", y: 30),
@@ -68,56 +99,80 @@ final class GenericV2ParserTests: XCTestCase {
         ], title: "#general | Acme - Discord")
         let app = AppInfo(bundleID: ParserRegistry.discordBundleID, name: "Discord",
                           windowTitle: "#general | Acme - Discord")
-        let capture = try XCTUnwrap(try DiscordParser().parse(window: window, app: app))
-        XCTAssertEqual(capture.contentKind, .conversation)
-        XCTAssertFalse(capture.content.contains("Add Reaction"),
-                       "the app-specific chrome filter is preserved")
+        let result = CaptureDispatch.parseDetailed(window: window, app: app, registry: ParserRegistry())
+        guard case .parsedByFallback(let capture, let failedParser) = result else {
+            return XCTFail("expected the generic fallback, got \(result)")
+        }
+        XCTAssertEqual(failedParser, "DiscordParser")
+        XCTAssertEqual(capture.contentKind, .generic)
+        XCTAssertTrue(capture.content.contains("Add Reaction"))
         XCTAssertTrue(capture.content.contains("Great work everyone!"))
-        guard case .generic(let page) = try XCTUnwrap(capture.structured) else {
+        guard case .generic = try XCTUnwrap(capture.structured) else {
             return XCTFail("expected .generic")
         }
-        XCTAssertEqual(page.regions.map(\.kind), [.main])
-        XCTAssertEqual(page.regions[0].blocks.map(\.type),
-                       Array(repeating: BlockType.paragraph, count: page.regions[0].blocks.count))
         XCTAssertEqual(capture.content, ContentRenderer.render(capture.structured!, style: .full))
-        // Task 9's accumulation bridge keys on this pair, which is what keeps cross-window
-        // appending alive until the anchored parser lands in Phase D.
-        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
-        XCTAssertEqual(capture.accumulationPolicy, .appendItems)
+        XCTAssertEqual(capture.accumulationPolicy, .replace)
     }
 
-    func testMessagesKeepsBubbleOrderWrappedInGenericBlocks() throws {
+    func testMessagesKeepsBubbleOrderAsATypedConversation() throws {
         let window = body([
-            AXNode(role: "AXTextArea", value: "call me", title: nil, url: nil,
-                   frame: CGRect(x: 300, y: 300, width: 400, height: 20), focused: false, children: []),
-            AXNode(role: "AXTextArea", value: "hey are you free", title: nil, url: nil,
-                   frame: CGRect(x: 300, y: 100, width: 400, height: 20), focused: false, children: []),
+            AXNode(role: "AXList", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 260, y: 80, width: 800, height: 500), focused: false,
+                   children: [
+                AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                       frame: CGRect(x: 300, y: 300, width: 400, height: 20), focused: false,
+                       children: [
+                    AXNode(role: "AXTextArea", value: "call me", title: nil, url: nil,
+                           frame: CGRect(x: 300, y: 300, width: 400, height: 20),
+                           focused: false, children: []),
+                ]),
+                AXNode(role: "AXRow", value: nil, title: nil, url: nil,
+                       frame: CGRect(x: 300, y: 100, width: 400, height: 20), focused: false,
+                       children: [
+                    AXNode(role: "AXTextArea", value: "hey are you free", title: nil, url: nil,
+                           frame: CGRect(x: 300, y: 100, width: 400, height: 20),
+                           focused: false, children: []),
+                ]),
+            ], identifier: "message-list"),
         ], title: "Harnish")
         let app = AppInfo(bundleID: ParserRegistry.messagesBundleID, name: "Messages",
                           windowTitle: "Harnish")
         let capture = try XCTUnwrap(try MessagesParser().parse(window: window, app: app))
         XCTAssertEqual(capture.sourceKey, "imessage:harnish")
         XCTAssertEqual(capture.contentKind, .conversation)
-        XCTAssertEqual(capture.content, "hey are you free\ncall me")
-        XCTAssertEqual(try XCTUnwrap(capture.structured).kind, .generic)
-        // Same Task 9 bridge precondition as Discord.
-        XCTAssertTrue(try XCTUnwrap(capture.structured).isLegacyShaped)
+        XCTAssertEqual(capture.content,
+                       ContentRenderer.render(try XCTUnwrap(capture.structured), style: .full))
+        guard case .conversation(let conversation) = try XCTUnwrap(capture.structured) else {
+            return XCTFail("expected .conversation")
+        }
+        XCTAssertEqual(conversation.channel, "Harnish")
+        XCTAssertEqual(conversation.messages.map(\.text), ["hey are you free", "call me"])
+        XCTAssertEqual(conversation.messages.map(\.sender), ["Harnish", "Harnish"])
+        XCTAssertEqual(conversation.messages.map(\.isUser), [false, false])
+        XCTAssertFalse(try XCTUnwrap(capture.structured).isLegacyShaped)
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 
     /// A note is a document, and the 8_000 default would trim one at a length Pages and Word
     /// keep whole. The three note apps therefore declare the same page budget and scroll ceiling.
     func testNoteAppsUseTheDocumentPageBudget() throws {
-        let long = body((0..<400).map { index in
+        let paragraphs = (0..<400).map { index in
             text("paragraph \(index) " + String(repeating: "x", count: 40), y: CGFloat(20 * index))
-        }, title: "Long note")
-        let cases: [(parser: any SourceParser, app: AppInfo, label: String)] = [
-            (NotesParser(), AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Long note"), "Notes"),
-            (NotionParser(), AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Long note"), "Notion"),
-            (ObsidianParser(), AppInfo(bundleID: "md.obsidian", name: "Obsidian", windowTitle: "Long note - My Vault - Obsidian v1.5"), "Obsidian"),
+        }
+        let obsidian = body([
+            AXNode(role: "AXGroup", value: nil, title: nil, url: nil,
+                   frame: CGRect(x: 0, y: 0, width: 1_200, height: 8_000), focused: false,
+                   children: paragraphs, domClassList: ["cm-editor"]),
+        ], title: "Long note")
+        let cases: [(parser: any SourceParser, window: AXNode, app: AppInfo, label: String)] = [
+            (ObsidianParser(), obsidian,
+             AppInfo(bundleID: "md.obsidian", name: "Obsidian",
+                     windowTitle: "Long note - My Vault - Obsidian v1.5"),
+             "Obsidian"),
         ]
         for entry in cases {
-            let capture = try XCTUnwrap(try entry.parser.parse(window: long, app: entry.app), entry.label)
+            let capture = try XCTUnwrap(try entry.parser.parse(window: entry.window, app: entry.app),
+                                        entry.label)
             XCTAssertEqual(capture.offscreenPolicy.maxCharacters,
                            StructuredEntityExtraction.pageBudget, entry.label)
             XCTAssertGreaterThan(capture.content.count, 8_000,
@@ -125,6 +180,59 @@ final class GenericV2ParserTests: XCTestCase {
             XCTAssertLessThanOrEqual(capture.content.count,
                                      StructuredEntityExtraction.pageBudget, entry.label)
         }
+        let notion = AXNode(
+            role: "AXWindow",
+            value: nil,
+            title: nil,
+            url: nil,
+            frame: CGRect(x: 0, y: 0, width: 1_200, height: 800),
+            focused: false,
+            children: [
+                AXNode(
+                    role: "AXGroup",
+                    value: nil,
+                    title: nil,
+                    url: nil,
+                    frame: CGRect(x: 0, y: 0, width: 1_200, height: 800),
+                    focused: false,
+                    children: (0..<400).map { index in
+                        text("paragraph \(index) " + String(repeating: "x", count: 40),
+                             y: CGFloat(20 * index))
+                    },
+                    domClassList: ["notion-frame"]
+                ),
+            ]
+        )
+        let notionApp = AppInfo(bundleID: "notion.id", name: "Notion", windowTitle: "Long note")
+        let notionCapture = try XCTUnwrap(try NotionParser().parse(window: notion, app: notionApp))
+        XCTAssertEqual(notionCapture.offscreenPolicy.maxCharacters,
+                       StructuredEntityExtraction.pageBudget, "Notion")
+        XCTAssertGreaterThan(notionCapture.content.count, 8_000,
+                             "Notion must not be trimmed at the 8_000 default")
+        XCTAssertLessThanOrEqual(notionCapture.content.count,
+                                 StructuredEntityExtraction.pageBudget, "Notion")
+        let notes = body([
+            AXNode(
+                role: "AXTextArea",
+                value: "Long note\n" + (0..<400).map {
+                    "paragraph \($0) " + String(repeating: "x", count: 40)
+                }.joined(separator: "\n"),
+                title: nil,
+                url: nil,
+                frame: CGRect(x: 300, y: 20, width: 400, height: 8_000),
+                focused: false,
+                children: [],
+                identifier: NotesParser.bodyIdentifier
+            ),
+        ], title: "Long note")
+        let notesApp = AppInfo(bundleID: "com.apple.Notes", name: "Notes", windowTitle: "Long note")
+        let notesCapture = try XCTUnwrap(try NotesParser().parse(window: notes, app: notesApp))
+        XCTAssertEqual(notesCapture.offscreenPolicy.maxCharacters,
+                       StructuredEntityExtraction.pageBudget, "Notes")
+        XCTAssertGreaterThan(notesCapture.content.count, 8_000,
+                             "Notes must not be trimmed at the 8_000 default")
+        XCTAssertLessThanOrEqual(notesCapture.content.count,
+                                 StructuredEntityExtraction.pageBudget, "Notes")
     }
 
     func testEmptyWindowsStillReturnNilEverywhere() throws {

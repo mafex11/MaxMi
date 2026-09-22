@@ -1,0 +1,24 @@
+{
+  "role": "AXWindow", "value": null, "title": "Workspace", "url": null,
+  "frame": {"x":320,"y":140,"width":1000,"height":700}, "focused": false,
+  "children": [
+    {"role": "AXWebArea", "value": null, "title": null, "url": "https://app.example.com/room/1",
+     "frame": {"x":320,"y":180,"width":1000,"height":660}, "focused": false,
+     "domIdentifier": "root", "children": [
+       {"role": "AXGroup", "value": null, "title": null, "url": null,
+        "frame": {"x":600,"y":200,"width":700,"height":600}, "focused": false,
+        "domClassList": ["c-message_list", "p-workspace__primary"], "children": [
+          {"role": "AXGroup", "value": null, "title": null, "url": null,
+           "frame": {"x":600,"y":220,"width":700,"height":40}, "focused": false,
+           "domClassList": ["c-virtual_list__item"], "domIdentifier": "msg-1", "children": [
+             {"role": "AXStaticText", "value": "Ada", "title": null, "url": null,
+              "frame": {"x":610,"y":220,"width":80,"height":16}, "focused": false,
+              "domClassList": ["c-message__sender"], "children": []},
+             {"role": "AXStaticText", "value": "index rebuilt", "title": null, "url": null,
+              "frame": {"x":610,"y":238,"width":300,"height":16}, "focused": false,
+              "children": []}
+           ]}
+        ]}
+     ]}
+  ]
+}

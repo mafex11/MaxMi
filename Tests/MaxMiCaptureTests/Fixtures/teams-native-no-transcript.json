@@ -1,0 +1,53 @@
+{
+  "role": "AXWindow",
+  "title": "Microsoft Teams",
+  "focused": false,
+  "frame": { "x": 0, "y": 0, "width": 1200, "height": 800 },
+  "children": [
+    {
+      "role": "AXTextField",
+      "value": "Search teams",
+      "label": "Search",
+      "focused": false,
+      "frame": { "x": 24, "y": 24, "width": 260, "height": 28 },
+      "children": []
+    },
+    {
+      "role": "AXList",
+      "identifier": "teams-chat-list",
+      "label": "Chats",
+      "focused": false,
+      "frame": { "x": 24, "y": 80, "width": 300, "height": 600 },
+      "children": [
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 24, "y": 100, "width": 300, "height": 28 },
+          "children": [
+            {
+              "role": "AXStaticText",
+              "value": "Release planning",
+              "focused": false,
+              "frame": { "x": 44, "y": 106, "width": 220, "height": 16 },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXRow",
+      "focused": false,
+      "frame": { "x": 400, "y": 180, "width": 680, "height": 40 },
+      "children": [
+        {
+          "role": "AXStaticText",
+          "value": "outside message row",
+          "focused": false,
+          "frame": { "x": 420, "y": 190, "width": 500, "height": 16 },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

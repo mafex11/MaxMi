@@ -9,6 +9,21 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMut
 public enum AXReader {
     /// Roles whose placeholder and selected-text are worth an extra AX round trip.
     static let textEntryRoles: Set<String> = ["AXTextArea", "AXTextField", "AXSearchField", "AXComboBox"]
+    /// The only two attribute names `ParserConfig.attributeSet` can force. Both are web-only,
+    /// so the default gate is "an AXWebArea ancestor was seen".
+    static let domAttributeNames: Set<String> = ["AXDOMClassList", "AXDOMIdentifier"]
+
+    /// Pure gate, so the cost policy in spec §8 is unit-testable without a live tree.
+    static func readsDOMAttributes(role: String, inWebArea: Bool, forced: Set<String>) -> Bool {
+        if inWebArea || role == "AXWebArea" { return true }
+        return !forced.intersection(domAttributeNames).isEmpty
+    }
+
+    /// The reader's security gate deliberately delegates to the shared AX-node policy. Keeping
+    /// the gate separately testable verifies that `convert` stops before secret-bearing reads.
+    static func stopsAtSecureField(_ metadata: AXNode) -> Bool {
+        metadata.isSecureField
+    }
 
     /// The CGWindowID of the app's currently focused window, or nil. Stable while the window lives.
     public static func focusedWindowID(pid: pid_t) -> UInt32? {
@@ -32,7 +47,10 @@ public enum AXReader {
         return title?.isEmpty == true ? nil : title
     }
 
-    public static func snapshotFrontmostWindow(pid: pid_t, maxNodes: Int = 20_000, maxDepth: Int = 40) -> (window: AXNode, title: String?)? {
+    public static func snapshotFrontmostWindow(
+        pid: pid_t, maxNodes: Int = 20_000, maxDepth: Int = 40,
+        forcedAttributes: Set<String> = []
+    ) -> (window: AXNode, title: String?)? {
         let app = AXUIElementCreateApplication(pid)
         // Chromium/Electron apps (Warp, Slack, Notion) keep their AX tree dormant until an
         // assistive client asks for it. Setting AXManualAccessibility wakes it; harmless for
@@ -50,7 +68,8 @@ public enum AXReader {
                 return nil
             }
             var budget = maxNodes
-            let node = convert(window, depth: 0, maxDepth: maxDepth, budget: &budget)
+            let node = convert(window, depth: 0, maxDepth: maxDepth, budget: &budget,
+                               inWebArea: false, forcedAttributes: forcedAttributes)
             let title = copyAttr(window, kAXTitleAttribute) as? String
             if attempt == 3 || !isDormant(node) {
                 return (node, title)
@@ -89,15 +108,23 @@ public enum AXReader {
         return nodeCount < 6 || !hasSignal
     }
 
-    private static func convert(_ el: AXUIElement, depth: Int, maxDepth: Int, budget: inout Int) -> AXNode {
+    private static func convert(_ el: AXUIElement, depth: Int, maxDepth: Int, budget: inout Int,
+                                inWebArea: Bool = false,
+                                forcedAttributes: Set<String> = []) -> AXNode {
         budget -= 1
         let role = copyAttr(el, kAXRoleAttribute) as? String ?? "?"
         // Read FIRST so a secure field's value, placeholder and selection are never read at all:
         // masking after the fact would still have put the secret in this process's memory and in
         // `AXNode`, where any consumer could pick it up.
         let subrole = copyAttr(el, kAXSubroleAttribute) as? String
-        let isSecure = subrole == GenericPageExtractor.secureSubrole
-        let rawValue = isSecure ? nil : copyAttr(el, kAXValueAttribute)
+        let metadata = AXNode(
+            role: role, value: nil, title: nil, url: nil, frame: nil, focused: false,
+            children: [], subrole: subrole
+        )
+        // Do not read value/selected text or descend into a secure node. Its children can expose
+        // the secret through static-text descendants even when the field itself is masked.
+        guard !stopsAtSecureField(metadata) else { return metadata }
+        let rawValue = copyAttr(el, kAXValueAttribute)
         let value = (rawValue as? String) ?? (rawValue as? NSNumber)?.stringValue
         let title = copyAttr(el, kAXTitleAttribute) as? String
         // AXURL (WebKit/Gecko) then AXDocument (Chromium) — spec §5 primary URL source.
@@ -117,9 +144,13 @@ public enum AXReader {
         let headingLevel = role == "AXHeading"
             ? (copyAttr(el, "AXHeadingLevel") as? NSNumber)?.intValue
             : nil
-        let isTextEntry = Self.textEntryRoles.contains(role) && !isSecure
+        let isTextEntry = Self.textEntryRoles.contains(role)
         let placeholder = isTextEntry ? copyAttr(el, kAXPlaceholderValueAttribute) as? String : nil
         let selectedText = isTextEntry ? copyAttr(el, kAXSelectedTextAttribute) as? String : nil
+        // Web/Electron DOM anchors. Gated so native subtrees pay nothing for them.
+        let readsDOM = readsDOMAttributes(role: role, inWebArea: inWebArea, forced: forcedAttributes)
+        let domClassList = readsDOM ? (copyAttr(el, "AXDOMClassList") as? [String]) : nil
+        let domIdentifier = readsDOM ? (copyAttr(el, "AXDOMIdentifier") as? String) : nil
         var frame: CGRect? = nil
         if let v = copyAttr(el, "AXFrame") {
             var r = CGRect.zero
@@ -130,14 +161,16 @@ public enum AXReader {
            let kids = copyAttr(el, kAXChildrenAttribute) as? [AXUIElement] {
             for kid in kids {
                 if budget <= 0 { break }
-                children.append(convert(kid, depth: depth + 1, maxDepth: maxDepth, budget: &budget))
+                children.append(convert(kid, depth: depth + 1, maxDepth: maxDepth, budget: &budget,
+                                        inWebArea: readsDOM, forcedAttributes: forcedAttributes))
             }
         }
         return AXNode(role: role, value: value, title: title, url: url,
                       frame: frame, focused: focused, children: children,
                       identifier: identifier, label: label,
                       subrole: subrole, headingLevel: headingLevel, selected: selected,
-                      placeholder: placeholder, selectedText: selectedText, hidden: hidden)
+                      placeholder: placeholder, selectedText: selectedText, hidden: hidden,
+                      domClassList: domClassList, domIdentifier: domIdentifier)
     }
 
     private static func copyAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {

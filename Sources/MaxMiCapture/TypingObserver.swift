@@ -194,8 +194,8 @@ public enum TypingDiff {
 
 /// Tracks the value of focused text fields and reports meaningful changes.
 ///
-/// **No `CGEventTap`. No global event monitor.** The only input is the accessibility value of the
-/// focused element, which the caller reads from the capture it already took or from
+/// **No system-wide event tap or global event monitor.** The only input is the accessibility
+/// value of the focused element, which the caller reads from the capture it already took or from
 /// `AXReader.focusedElementSnapshot(pid:)`.
 ///
 /// Nothing is persisted: the LRU is in-actor memory and is gone on quit.
@@ -286,7 +286,7 @@ extension FocusedElement {
             identifier: node.identifier,
             value: node.value,
             selectedText: node.selectedText,
-            isSecure: node.subrole == GenericPageExtractor.secureSubrole
+            isSecure: node.isSecureField
         )
     }
 }

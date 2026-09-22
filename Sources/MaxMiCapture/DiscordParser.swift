@@ -2,13 +2,8 @@ import Foundation
 import MaxMiCore
 
 /// Dedicated parser for the native Discord app (Electron; needs AXManualAccessibility, set by AXReader).
-/// Live-probed shape: title is "#<channel> | <server> - Discord"; messages are AXStaticText in the
-/// content area. NOTE: Discord's AXFrame values are UNRELIABLE — live probe showed message text and
-/// sidebar text at contradictory/overlapping x, and many nodes collapse to one y (virtualized list).
-/// So unlike Slack/Mail, we do NOT use an x-band sidebar split (it would wrongly drop real messages);
-/// instead we collect all AXStaticText in tree order, filter known UI chrome, and rely on the
-/// title-derived server/channel KEY for stable identity. Content may carry some channel-list noise —
-/// acceptable best-effort (the ThreadKeyDeriver + fingerprint dedup keep threads clean regardless).
+/// Discord's virtualised-list frames are unreliable, so this parser anchors on the transcript list
+/// and walks its groups in AX tree order without reading geometry.
 public struct DiscordParser: SourceParser {
     static let contentCap = 8000
     // UI chrome strings that appear as AXStaticText but aren't message content.
@@ -17,47 +12,26 @@ public struct DiscordParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        extract(window: window)?.content
+        try parse(window, context: ParseContext(app: app))
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let extracted = extract(window: window) else { return nil }
+        guard let outcome = parseOutcome(
+            window, context: ParseContext(app: app)
+        ) else { return nil }
+        let content = outcome.content
         return ParsedCapture(
             sourceApp: "Discord",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(extracted.content, style: .full),
+            content: ContentRenderer.render(content, style: .full),
             contentKind: .conversation,
             parserVersion: 2,
-            // Unchanged from v1: the wrapped `.lines` page is legacy-shaped, so accumulation
-            // still appends across windows until the anchored parser lands in Phase D.
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3),
-            structured: extracted.content,
-            truncated: extracted.truncated
+            structured: content,
+            truncated: outcome.truncated
         )
-    }
-
-    private func extract(window: AXNode) -> (content: CapturedContent, truncated: Bool)? {
-        let lines = messageLines(in: window)
-        guard !lines.isEmpty else { return nil }
-        var kept: [String] = []
-        var total = 0
-        var truncated = false
-        for line in lines.reversed() {
-            let add = line.count + 1
-            if total + add > Self.contentCap && !kept.isEmpty {
-                truncated = true
-                break
-            }
-            kept.insert(line, at: 0)
-            total += add
-        }
-        // Discord's own chrome filter and tree-order collection are kept: the generic v2 walk
-        // would re-emit "Add Reaction" and friends as labels, and Discord's AXFrame values are
-        // unreliable, so v2's frame-based rules are unsafe here. Phase D replaces this.
-        guard let content = GenericV2Content.lines(kept) else { return nil }
-        return (content, truncated)
     }
 
     /// "#<channel> | <server> - Discord" -> "discord:<server>/<channel>"; else "discord:<title>".
@@ -80,20 +54,125 @@ public struct DiscordParser: SourceParser {
         return "discord:\(slug(head))"
     }
 
-    /// Collect AXStaticText in tree order (Discord frames unreliable — no x-band), filtering UI chrome.
-    private func messageLines(in root: AXNode) -> [String] {
-        var out: [String] = []
-        collect(root, into: &out)
-        return out
+}
+
+extension DiscordParser: StructuredParser {
+    public static let config = ParserConfig(
+        app: "Discord",
+        bundleIDs: [ParserRegistry.discordBundleID],
+        hosts: ["discord.com", "www.discord.com"],
+        offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+        preferOverNative: true
+    )
+
+    static let messageListMarker = "Messages in"
+
+    private struct TextNode {
+        let path: [Int]
+        let role: String
+        let value: String
     }
 
-    private func collect(_ node: AXNode, into out: inout [String]) {
-        if node.role == "AXStaticText", let v = node.value {
-            let text = v.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty, !Self.chrome.contains(text), text.count > 1 {
-                out.append(text)
+    /// "#<channel> | <server> - Discord" -> "<channel>".
+    static func channelName(fromTitle title: String?) -> String {
+        guard let title, !title.isEmpty else { return "unknown" }
+        var head = title
+        if let range = head.range(of: " - Discord", options: .backwards) {
+            head = String(head[..<range.lowerBound])
+        }
+        let channel = head.components(separatedBy: " | ").first ?? head
+        return channel.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+    }
+
+    /// The transcript list is the only stable Discord anchor. Geometry is intentionally unused.
+    static func messageList(in snapshot: AXNode) -> AXNode? {
+        let byLabel = AXQuery.findAll("//AXList[label*=\"\(messageListMarker)\"]", in: snapshot)
+        if let list = byLabel.first { return list }
+        return AXQuery.findAll(
+            "//AXList[identifier*=\"\(messageListMarker)\"]",
+            in: snapshot
+        ).first
+    }
+
+    /// One message per body line, attributed to the group's heading. Groups without a heading
+    /// continue the preceding sender, matching Discord's grouped-message presentation.
+    static func messages(in list: AXNode) -> [Message] {
+        var result: [Message] = []
+        var lastSender: String?
+        for group in list.children {
+            let values = textNodesInTreeOrder(group)
+            let heading = values.first { $0.role == "AXHeading" }
+            let bodies = values.filter {
+                $0.role == "AXStaticText"
+                    && $0.path != heading?.path
+                    && !Self.chrome.contains($0.value)
+                    && $0.value.count > 1
+            }
+            let headingSender = heading.flatMap { heading in
+                NativeConversationExtraction.senderLabel(
+                    [heading.value] + bodies.prefix(1).map(\.value)
+                )
+            }
+            if let headingSender { lastSender = headingSender }
+            let sender = headingSender ?? lastSender ?? "unknown"
+            for body in bodies.map(\.value) {
+                result.append(Message(
+                    id: Message.makeID(sender: sender, timeString: nil, text: body),
+                    sender: sender,
+                    text: body,
+                    timestamp: nil,
+                    timeString: nil,
+                    isUser: false,
+                    isDraft: false
+                ))
             }
         }
-        for c in node.children { collect(c, into: &out) }
+        return result
+    }
+
+    private static func textNodesInTreeOrder(_ node: AXNode) -> [TextNode] {
+        var result: [TextNode] = []
+        func visit(_ current: AXNode, path: [Int]) {
+            guard !current.isSecureField else { return }
+            if ["AXStaticText", "AXHeading"].contains(current.role),
+               let value = (current.value ?? current.title)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                result.append(TextNode(path: path, role: current.role, value: value))
+            }
+            for (index, child) in current.children.enumerated() {
+                visit(child, path: path + [index])
+            }
+        }
+        visit(node, path: [])
+        return result
+    }
+
+    private static func unboundedContent(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) -> CapturedContent? {
+        guard let list = Self.messageList(in: snapshot) else { return nil }
+        let messages = Self.messages(in: list)
+        guard !messages.isEmpty else { return nil }
+        return .conversation(Conversation(
+            channel: Self.channelName(fromTitle: context.windowTitle),
+            isGroup: true,
+            messages: messages
+        ))
+    }
+
+    func parseOutcome(
+        _ snapshot: AXNode,
+        context: ParseContext
+    ) -> StructuredContentOutcome? {
+        guard let unbounded = Self.unboundedContent(snapshot, context: context) else { return nil }
+        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        return StructuredContentOutcome(content: content, truncated: content != unbounded)
+    }
+
+    public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        parseOutcome(snapshot, context: context)?.content
     }
 }
+
+extension DiscordParser: TruncationReportingStructuredParser {}

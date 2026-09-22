@@ -1,0 +1,37 @@
+{
+  "children" : [
+    {
+      "children" : [],
+      "focused" : false,
+      "frame" : {
+        "height" : 28,
+        "width" : 220,
+        "x" : 2180,
+        "y" : 264
+      },
+      "role" : "AXTextArea",
+      "value" : "find"
+    },
+    {
+      "children" : [],
+      "focused" : true,
+      "frame" : {
+        "height" : 540,
+        "width" : 920,
+        "x" : 1512,
+        "y" : 282
+      },
+      "role" : "AXTextArea",
+      "value" : "~/code/sample % echo example\nfirst output line\nsecond output line\n~/code/sample % git status\nworking tree clean\n~/code/sample %"
+    }
+  ],
+  "focused" : false,
+  "frame" : {
+    "height" : 580,
+    "width" : 920,
+    "x" : 1512,
+    "y" : 242
+  },
+  "role" : "AXWindow",
+  "title" : "~/code/sample — zsh"
+}

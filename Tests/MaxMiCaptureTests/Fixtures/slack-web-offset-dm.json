@@ -1,0 +1,125 @@
+{
+  "role": "AXWindow",
+  "focused": false,
+  "frame": { "x": 1440, "y": 220, "width": 1200, "height": 800 },
+  "children": [
+    {
+      "role": "AXStaticText",
+      "value": "Orbit Partner",
+      "focused": false,
+      "frame": { "x": 1700, "y": 260, "width": 300, "height": 16 },
+      "domClassList": ["p-view_header__channel_title"],
+      "children": []
+    },
+    {
+      "role": "AXGroup",
+      "focused": false,
+      "frame": { "x": 1700, "y": 300, "width": 900, "height": 600 },
+      "domClassList": ["c-message_list"],
+      "children": [
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 1700, "y": 320, "width": 900, "height": 40 },
+          "domClassList": ["c-virtual_list__item"],
+          "children": [
+            {
+              "role": "AXGroup",
+              "focused": false,
+              "frame": { "x": 1700, "y": 320, "width": 900, "height": 40 },
+              "domClassList": ["c-message_kit__background"],
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "Nori",
+                  "focused": false,
+                  "frame": { "x": 1700, "y": 320, "width": 120, "height": 16 },
+                  "domClassList": ["c-message__sender"],
+                  "children": []
+                },
+                {
+                  "role": "AXStaticText",
+                  "label": "03:20 PM",
+                  "focused": false,
+                  "frame": { "x": 2140, "y": 320, "width": 100, "height": 16 },
+                  "domClassList": ["c-timestamp"],
+                  "children": []
+                },
+                {
+                  "role": "AXGroup",
+                  "focused": false,
+                  "frame": { "x": 1700, "y": 338, "width": 600, "height": 16 },
+                  "domClassList": ["p-rich_text_section"],
+                  "children": [
+                    {
+                      "role": "AXStaticText",
+                      "value": "draft checklist posted",
+                      "focused": false,
+                      "frame": { "x": 1700, "y": 338, "width": 300, "height": 16 },
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "AXGroup",
+          "focused": false,
+          "frame": { "x": 1700, "y": 380, "width": 900, "height": 40 },
+          "domClassList": ["c-virtual_list__item"],
+          "children": [
+            {
+              "role": "AXGroup",
+              "focused": false,
+              "frame": { "x": 1700, "y": 380, "width": 900, "height": 40 },
+              "domClassList": ["c-message_kit__background"],
+              "children": [
+                {
+                  "role": "AXStaticText",
+                  "value": "[user]",
+                  "focused": false,
+                  "frame": { "x": 1700, "y": 380, "width": 120, "height": 16 },
+                  "domClassList": ["c-message__sender"],
+                  "children": []
+                },
+                {
+                  "role": "AXStaticText",
+                  "label": "03:24 PM",
+                  "focused": false,
+                  "frame": { "x": 2140, "y": 380, "width": 100, "height": 16 },
+                  "domClassList": ["c-timestamp"],
+                  "children": []
+                },
+                {
+                  "role": "AXGroup",
+                  "focused": false,
+                  "frame": { "x": 1700, "y": 398, "width": 600, "height": 16 },
+                  "domClassList": ["p-rich_text_section"],
+                  "children": [
+                    {
+                      "role": "AXStaticText",
+                      "value": "I linked the brief",
+                      "focused": false,
+                      "frame": { "x": 1700, "y": 398, "width": 300, "height": 16 },
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXTextArea",
+      "value": "I will add the links",
+      "focused": false,
+      "frame": { "x": 1700, "y": 920, "width": 900, "height": 60 },
+      "domClassList": ["ql-editor"],
+      "children": []
+    }
+  ]
+}

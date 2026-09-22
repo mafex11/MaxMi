@@ -1,0 +1,31 @@
+{
+  "role": "AXWindow",
+  "title": "Chat | Microsoft Teams",
+  "focused": false,
+  "frame": { "x": 1540, "y": 280, "width": 1500, "height": 900 },
+  "children": [
+    {
+      "role": "AXHeading",
+      "value": "Release review",
+      "focused": false,
+      "frame": { "x": 1940, "y": 320, "width": 400, "height": 24 },
+      "children": []
+    },
+    {
+      "role": "AXGroup",
+      "identifier": "chat-pane-message-62",
+      "label": "Rin Vale, 04:40 PM, deploy handoff confirmed",
+      "focused": false,
+      "frame": { "x": 1940, "y": 380, "width": 700, "height": 50 },
+      "children": []
+    },
+    {
+      "role": "AXTextArea",
+      "value": "I will join after the handoff.",
+      "focused": false,
+      "frame": { "x": 1940, "y": 880, "width": 700, "height": 60 },
+      "domIdentifier": "ckeditor",
+      "children": []
+    }
+  ]
+}

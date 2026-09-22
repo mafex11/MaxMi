@@ -47,6 +47,7 @@ let package = Package(
             .product(name: "GRDB", package: "GRDB.swift"),
         ]),
         .target(name: "MaxMiCapture", dependencies: ["MaxMiCore"]),
+        .executableTarget(name: "AXSnapshotRecord", dependencies: ["MaxMiCapture"]),
         .target(name: "MaxMiRelay", dependencies: ["MaxMiCore"]),
         .target(name: "MaxMiActivity", dependencies: ["MaxMiCore"]),
         .target(name: "MaxMiMeetings", dependencies: ["MaxMiCore", "CWhisper"]),
