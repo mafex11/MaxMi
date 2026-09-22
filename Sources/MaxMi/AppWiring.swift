@@ -1696,7 +1696,7 @@ final class AppWiring {
             // Browsers: engine-aware URL extraction followed by semantic web-app routing.
             if let browser = ApplicationRegistry.browser(for: app.bundleID) {
                 let result = try BrowserCapturePipeline.parse(
-                    window: window, windowTitle: title, browser: browser
+                    window: window, windowTitle: title, browser: browser, registry: registry
                 )
                 effectiveParserName = result.parserID
                 browserTruncated = result.truncated

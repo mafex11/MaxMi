@@ -117,7 +117,11 @@ final class WebPageParserTests: XCTestCase {
         // A browser can be showing a native error sheet with no web area at all. The parser must
         // still produce a page rather than nothing.
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 800, height: 600),
-                        children: [node("AXStaticText", value: "You are offline",
+                        children: [
+                            node("AXToolbar", children: [
+                                node("AXStaticText", value: "Reload page"),
+                            ]),
+                            node("AXStaticText", value: "You are offline",
                                         frame: CGRect(x: 0, y: 0, width: 200, height: 20))])
         let tab = TabCapture(url: "https://example.com/", title: nil, content: "")
         XCTAssertEqual(try page(WebPageParser.parse(window: bare, tab: tab))
