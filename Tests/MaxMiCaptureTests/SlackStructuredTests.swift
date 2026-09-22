@@ -47,21 +47,6 @@ final class SlackStructuredTests: XCTestCase {
                     children: children)
     }
 
-    /// The pre-DOM shape SlackParserTests already covers: AXRow message rows in an x band.
-    func geometryWindow(origin: CGPoint = .zero) -> AXNode {
-        let x = origin.x
-        let y = origin.y
-        return node("AXWindow",
-                    frame: CGRect(origin: origin, size: CGSize(width: 1200, height: 800)),
-                    children: [
-            node("AXRow", frame: CGRect(x: x + 10, y: y + 90, width: 200, height: 24),
-                 children: [text("random-channel", nil, y: y + 90, x: x + 10)]),
-            node("AXRow", frame: CGRect(x: x + 240, y: y + 100, width: 900, height: 40),
-                 children: [text("Ada", nil, y: y + 100, x: x + 240),
-                            text("index rebuilt", nil, y: y + 118, x: x + 240)]),
-        ])
-    }
-
     func context(_ title: String?, url: String? = nil) -> ParseContext {
         ParseContext(app: AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
                                   windowTitle: title), url: url)
@@ -88,16 +73,17 @@ final class SlackStructuredTests: XCTestCase {
 
     func testChannelNameIsTheFirstTitleComponent() {
         // The EXISTING helpers, reused rather than duplicated (there is no `channelName`).
-        XCTAssertEqual(SlackParser().channel(fromTitle: "general - Acme - Slack"), "general")
+        XCTAssertEqual(SlackParser().channel(fromTitle: "#general - Acme - Slack"), "general")
         XCTAssertEqual(SlackParser().channel(fromTitle: "Huddle"), "Huddle")
         XCTAssertEqual(SlackParser().channel(fromTitle: nil), "unknown")
-        XCTAssertTrue(SlackParser().isGroup(fromTitle: "general - Acme - Slack"))
+        XCTAssertTrue(SlackParser().isGroup(fromTitle: "#general - Acme - Slack"))
+        XCTAssertFalse(SlackParser().isGroup(fromTitle: "Mira - Acme - Slack"))
         XCTAssertFalse(SlackParser().isGroup(fromTitle: "Huddle"))
     }
 
     func testDOMAnchorsProduceSenderAttributedTimestampedMessages() throws {
         let c = try conversation(SlackParser().parse(domWindow(),
-                                                    context: context("general - Acme - Slack")))
+                                                    context: context("#general - Acme - Slack")))
         XCTAssertEqual(c.channel, "general")
         XCTAssertTrue(c.isGroup)
         XCTAssertEqual(c.messages.map(\.sender), ["Ada", "Grace"])
@@ -112,7 +98,7 @@ final class SlackStructuredTests: XCTestCase {
 
     func testComposerBecomesATrailingUserDraft() throws {
         let c = try conversation(SlackParser().parse(domWindow(draft: "shipping in five"),
-                                                    context: context("general - Acme - Slack")))
+                                                    context: context("#general - Acme - Slack")))
         let draft = try XCTUnwrap(c.messages.last)
         XCTAssertTrue(draft.isDraft)
         XCTAssertTrue(draft.isUser)
@@ -123,42 +109,25 @@ final class SlackStructuredTests: XCTestCase {
 
     func testAnEmptyComposerProducesNoDraft() throws {
         let c = try conversation(SlackParser().parse(domWindow(draft: "   "),
-                                                    context: context("general - Acme - Slack")))
+                                                    context: context("#general - Acme - Slack")))
         XCTAssertEqual(c.messages.count, 2)
         XCTAssertFalse(c.messages.contains { $0.isDraft })
     }
 
-    func testFallsBackToTheXBandHeuristicWhenNoDOMClassesAreExposed() throws {
-        let c = try conversation(SlackParser().parse(geometryWindow(),
-                                                    context: context("general - Acme - Slack")))
-        XCTAssertEqual(c.messages.map(\.sender), ["Ada"])
-        XCTAssertEqual(c.messages.map(\.text), ["index rebuilt"])
-        XCTAssertFalse(c.messages.contains { $0.text.contains("random-channel") },
-                       "the sidebar band is excluded in the fallback too")
-    }
-
-    func testTheXBandFallbackIsWindowRelative() throws {
-        let c = try conversation(SlackParser().parse(
-            geometryWindow(origin: CGPoint(x: 600, y: 120)),
-            context: context("general - Acme - Slack")))
-        XCTAssertEqual(c.messages.map(\.text), ["index rebuilt"],
-                       "a floated window must not turn every row into a sidebar row")
-    }
-
     func testDOMResultIsIdenticalAtANonzeroWindowOrigin() throws {
-        XCTAssertEqual(try SlackParser().parse(domWindow(), context: context("general - Acme - Slack")),
+        XCTAssertEqual(try SlackParser().parse(domWindow(), context: context("#general - Acme - Slack")),
                        try SlackParser().parse(domWindow(origin: CGPoint(x: 1440, y: 220)),
-                                           context: context("general - Acme - Slack")))
+                                           context: context("#general - Acme - Slack")))
     }
 
     func testAWindowWithNeitherAnchorIsNotHandled() throws {
         let bare = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        XCTAssertNil(try SlackParser().parse(bare, context: context("x - y - Slack")))
+        XCTAssertNil(try SlackParser().parse(bare, context: context("#x - y - Slack")))
     }
 
     func testRenderedConversationUsesYouForTheDraftAndNeverTheInternalUserMarker() throws {
         let content = try XCTUnwrap(SlackParser().parse(domWindow(draft: "shipping in five"),
-                                                       context: context("general - Acme - Slack")))
+                                                       context: context("#general - Acme - Slack")))
         let rendered = ContentRenderer.render(content, style: .full)
         XCTAssertTrue(rendered.contains("(From: You (draft)): shipping in five"))
         XCTAssertFalse(rendered.contains("[user]"))
@@ -166,13 +135,22 @@ final class SlackStructuredTests: XCTestCase {
 
     func testDOMFixtureMatchesItsGolden() throws {
         assertGolden(try XCTUnwrap(SlackParser().parse(try fixture("slack-dom-messages"),
-                                                      context: context("general - Acme - Slack"))),
+                                                      context: context("#general - Acme - Slack"))),
                      matches: "slack-dom-messages-golden")
     }
 
-    func testOffsetNoDOMFixtureMatchesItsGolden() throws {
-        assertGolden(try XCTUnwrap(SlackParser().parse(try fixture("slack-offset-no-dom"),
-                                                      context: context("general - Acme - Slack"))),
-                     matches: "slack-offset-no-dom-golden")
+    func testBodyMatchingTheSenderIsNotDropped() throws {
+        let win = node("AXWindow", frame: CGRect(x: 0, y: 0, width: 1_200, height: 800), children: [
+            node("AXGroup", domClassList: ["c-message_list"], children: [
+                node("AXGroup", domClassList: ["c-virtual_list__item"], children: [
+                    text("Mira", ["c-message__sender"], y: 100),
+                    text("10:14 AM", ["c-timestamp"], y: 100, x: 700),
+                    text("Mira", nil, y: 118),
+                ]),
+            ]),
+        ])
+        let c = try conversation(SlackParser().parse(win, context: context("Mira - Acme - Slack")))
+        XCTAssertEqual(c.messages.map(\.sender), ["Mira"])
+        XCTAssertEqual(c.messages.map(\.text), ["Mira"])
     }
 }

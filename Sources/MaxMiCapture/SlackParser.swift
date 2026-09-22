@@ -2,20 +2,18 @@ import Foundation
 import MaxMiCore
 
 /// Dedicated parser for the native Slack app. Window reached by the caller via
-/// AXReader's locator (Slack leaves AXWindows empty). DOM-class anchors identify Slack's
-/// virtual message list; AXRow geometry remains the fallback for older Electron trees.
+/// AXReader's locator (Slack leaves AXWindows empty). Verified DOM anchors are
+/// `c-message_list`, `c-virtual_list__item`, `c-message__sender`, `c-timestamp`, and `ql-editor`.
 public struct SlackParser: SourceParser {
     static let contentCap = 8000
-    static let sidebarMaxX: CGFloat = 240   // rows left of this are sidebar/nav chrome, not messages
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
-        return CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        try parse(window, context: ParseContext(app: app))
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
+        guard let unbounded = try parseStructured(window: window, app: app) else { return nil }
         let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
         return ParsedCapture(
             sourceApp: "Slack",
@@ -35,17 +33,18 @@ public struct SlackParser: SourceParser {
     func channel(fromTitle title: String?) -> String {
         guard let title, !title.isEmpty else { return "unknown" }
         let parts = title.components(separatedBy: " - ")
-        if parts.count >= 3, parts.last == "Slack" { return parts[0] }
+        if parts.count >= 3, parts.last == "Slack" {
+            return parts[0].trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        }
         return title
     }
 
-    /// A "<view> - <workspace> - Slack" title is a channel view and therefore multi-party. That
-    /// is the only group signal this AX walk exposes; Phase D's anchored parser reads the
-    /// member list instead.
+    /// Slack's title distinguishes a channel from a DM by the `#` prefix on its view component.
     func isGroup(fromTitle title: String?) -> Bool {
         guard let title else { return false }
         let parts = title.components(separatedBy: " - ")
         return parts.count >= 3 && parts.last == "Slack"
+            && parts[0].trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#")
     }
 
     /// "<view> - <workspace> - Slack" -> "slack:<workspace>/<view>"; else "slack:<title>".
@@ -53,7 +52,9 @@ public struct SlackParser: SourceParser {
         guard let title, !title.isEmpty else { return "slack:unknown" }
         let parts = title.components(separatedBy: " - ")
         func slug(_ s: String) -> String {
-            s.lowercased().trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "-")
+            s.lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+                .replacingOccurrences(of: " ", with: "-")
         }
         if parts.count >= 3, parts.last == "Slack" {
             let view = slug(parts[0]); let workspace = slug(parts[parts.count - 2])
@@ -83,21 +84,69 @@ extension SlackParser: StructuredParser {
     static let timestampClass = "c-timestamp"
     static let composerClass = "ql-editor"
 
+    private struct TextNode {
+        let path: [Int]
+        let node: AXNode
+        let value: String
+    }
+
+    /// The path distinguishes two otherwise-equal AX nodes, such as a sender named "Mira"
+    /// whose body is also "Mira".
+    private static func staticTextNodes(in root: AXNode) -> [TextNode] {
+        var found: [TextNode] = []
+        func visit(_ node: AXNode, path: [Int]) {
+            if AXQuery.menuRoles.contains(node.role) || node.hidden
+                || node.subrole == GenericPageExtractor.secureSubrole {
+                return
+            }
+            if node.role == "AXStaticText",
+               let value = node.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                found.append(TextNode(path: path, node: node, value: value))
+            }
+            for (index, child) in node.children.enumerated() {
+                visit(child, path: path + [index])
+            }
+        }
+        visit(root, path: [])
+        return found.enumerated().sorted { lhs, rhs in
+            let left = lhs.element.node.frame
+            let right = rhs.element.node.frame
+            let leftY = (left?.minY ?? root.frame?.minY ?? 0) - (root.frame?.minY ?? 0)
+            let rightY = (right?.minY ?? root.frame?.minY ?? 0) - (root.frame?.minY ?? 0)
+            if leftY != rightY { return leftY < rightY }
+            let leftX = (left?.minX ?? root.frame?.minX ?? 0) - (root.frame?.minX ?? 0)
+            let rightX = (right?.minX ?? root.frame?.minX ?? 0) - (root.frame?.minX ?? 0)
+            if leftX != rightX { return leftX < rightX }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
     static func domMessages(in snapshot: AXNode) -> [Message] {
         guard let list = AXQuery.find("//*[domClass*=\"\(messageListClass)\"]", in: snapshot)
         else { return [] }
         let items = AXQuery.findAll("//*[domClass*=\"\(messageItemClass)\"]", in: list)
         return AXQuery.sortedByVisualOrder(items, relativeTo: list.frame).compactMap { item in
-            let sender = AXQuery.find("//*[domClass*=\"\(senderClass)\"]", in: item)?
-                .value?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let timeString = AXQuery.find("//*[domClass*=\"\(timestampClass)\"]", in: item)?
-                .value?.trimmingCharacters(in: .whitespacesAndNewlines)
-            // The body is every static text that is not the sender line and not the timestamp.
-            let body = AXQuery.collectStaticTexts(in: item)
-                .filter { $0 != sender && $0 != timeString }
+            let texts = staticTextNodes(in: item)
+            let senderNode = texts.first {
+                ($0.node.domClassList ?? []).contains {
+                    $0.caseInsensitiveCompare(senderClass) == .orderedSame
+                }
+            }
+            let timestampNode = texts.first {
+                ($0.node.domClassList ?? []).contains {
+                    $0.caseInsensitiveCompare(timestampClass) == .orderedSame
+                }
+            }
+            let excluded = Set([senderNode?.path, timestampNode?.path].compactMap { $0 })
+            let body = texts.filter { !excluded.contains($0.path) }
+                .map(\.value)
                 .joined(separator: " ")
             guard !body.isEmpty else { return nil }
-            let resolvedSender = sender?.isEmpty == false ? sender! : "unknown"
+            let resolvedSender = senderNode.flatMap {
+                NativeConversationExtraction.senderLabel([$0.value, body])
+            } ?? "unknown"
+            let timeString = timestampNode?.value
             return Message(
                 id: Message.makeID(sender: resolvedSender, timeString: timeString, text: body),
                 sender: resolvedSender, text: body, timestamp: nil,
@@ -123,38 +172,11 @@ extension SlackParser: StructuredParser {
         return ComposerDraft.draft(window: snapshot)
     }
 
-    /// Today's x-band row heuristic, retyped. Used when Slack exposes no DOM classes at all
-    /// (older builds, and a tree captured before AXManualAccessibility fully woke).
-    static func geometryMessages(in snapshot: AXNode) -> [Message] {
-        let windowX = snapshot.frame?.minX ?? 0
-        let rows = AXQuery.findAll("//AXRow", in: snapshot)
-            .filter { row in
-                // Window-relative: AXFrame is global screen coordinates.
-                guard let x = row.frame?.minX else { return true }
-                return (x - windowX) >= sidebarMaxX
-            }
-        // Oldest first, exactly as the Phase A row walk sorted by y — `.appendItems` accumulation
-        // and the newest-anchored cap both depend on this order.
-        return AXQuery.sortedByVisualOrder(rows, relativeTo: snapshot.frame)
-            .compactMap { row -> Message? in
-                let texts = AXQuery.collectStaticTexts(in: row)
-                guard let first = texts.first else { return nil }
-                let sender = texts.count >= 2 ? first : "unknown"
-                let body = texts.count >= 2 ? texts.dropFirst().joined(separator: " ") : first
-                return Message(id: Message.makeID(sender: sender, timeString: nil, text: body),
-                               sender: sender, text: body, timestamp: nil, timeString: nil,
-                               isUser: false, isDraft: false)
-            }
-    }
-
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
         var messages = Self.domMessages(in: snapshot)
-        if messages.isEmpty { messages = Self.geometryMessages(in: snapshot) }
-        if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
         guard !messages.isEmpty else { return nil }
+        if let draft = Self.draftMessage(in: snapshot) { messages.append(draft) }
         return .conversation(Conversation(
-            // The existing title helpers, not new ones: they are asserted directly by
-            // StructuredConversationParserTests and Task 25 refines `isGroup` from the header.
             channel: channel(fromTitle: context.windowTitle),
             isGroup: isGroup(fromTitle: context.windowTitle),
             messages: messages

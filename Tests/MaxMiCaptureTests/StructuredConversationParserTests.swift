@@ -13,21 +13,22 @@ final class StructuredConversationParserTests: XCTestCase {
 
     func testSlackFixtureProducesSenderAttributedMessages() throws {
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
-                          windowTitle: "general - Acme - Slack")
-        let structured = try SlackParser().parseStructured(window: try fixture("slack-window"), app: app)
+                          windowTitle: "#general - Acme - Slack")
+        let structured = try SlackParser().parseStructured(
+            window: try fixture("slack-dom-messages"), app: app
+        )
         let messages = try messages(structured)
-        XCTAssertEqual(messages.map(\.sender), ["Alice", "Bob"])
-        XCTAssertEqual(messages.map(\.text), ["shipped the build", "deploy looks green"])
-        XCTAssertFalse(messages.contains { $0.isUser || $0.isDraft })
-        XCTAssertEqual(messages.map(\.id), messages.map {
-            Message.makeID(sender: $0.sender, timeString: nil, text: $0.text)
-        })
+        XCTAssertEqual(messages.map(\.sender), ["Arin", "Bela", "You"])
+        XCTAssertEqual(messages.map(\.text),
+                       ["cache warmup finished", "queue is clear", "I will verify the report"])
+        XCTAssertTrue(messages.last?.isUser == true)
+        XCTAssertTrue(messages.last?.isDraft == true)
     }
 
     func testSlackChannelAndGroupComeFromTheWindowTitle() {
         let parser = SlackParser()
-        XCTAssertEqual(parser.channel(fromTitle: "general - Acme - Slack"), "general")
-        XCTAssertTrue(parser.isGroup(fromTitle: "general - Acme - Slack"))
+        XCTAssertEqual(parser.channel(fromTitle: "#general - Acme - Slack"), "general")
+        XCTAssertTrue(parser.isGroup(fromTitle: "#general - Acme - Slack"))
         XCTAssertEqual(parser.channel(fromTitle: "Ana Ruiz"), "Ana Ruiz")
         XCTAssertFalse(parser.isGroup(fromTitle: "Ana Ruiz"))
         XCTAssertEqual(parser.channel(fromTitle: nil), "unknown")
@@ -36,10 +37,16 @@ final class StructuredConversationParserTests: XCTestCase {
 
     func testSlackCaptureContentIsTheRenderedConversation() throws {
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
-                          windowTitle: "general - Acme - Slack")
-        let capture = try XCTUnwrap(try SlackParser().parse(window: try fixture("slack-window"), app: app))
+                          windowTitle: "#general - Acme - Slack")
+        let capture = try XCTUnwrap(try SlackParser().parse(
+            window: try fixture("slack-dom-messages"), app: app
+        ))
         XCTAssertEqual(capture.content,
-                       "(From: Alice): shipped the build\n(From: Bob): deploy looks green")
+                       """
+                       (From: Arin)(sent 09:12 AM): cache warmup finished
+                       (From: Bela)(sent 09:14 AM): queue is clear
+                       (From: You (draft)): I will verify the report
+                       """)
         XCTAssertEqual(capture.content, ContentRenderer.render(
             try XCTUnwrap(capture.structured), style: .full))
         XCTAssertEqual(capture.contentKind, .conversation)
@@ -47,28 +54,36 @@ final class StructuredConversationParserTests: XCTestCase {
         XCTAssertEqual(capture.accumulationPolicy, .appendItems)
     }
 
-    func testSlackStructuredOutputIsCappedByDroppingOldestMessages() throws {
-        var rows: [AXNode] = []
+    func testSlackCaptureIsHardBoundedAfterTheStructuredParse() throws {
+        var items: [AXNode] = []
         for index in 0..<400 {
             let y = CGFloat(index) * 20
-            rows.append(AXNode(
-                role: "AXRow", value: nil, title: nil, url: nil,
+            items.append(AXNode(
+                role: "AXGroup", value: nil, title: nil, url: nil,
                 frame: CGRect(x: 400, y: y, width: 800, height: 20), focused: false,
                 children: [
                     AXNode(role: "AXStaticText", value: "Person\(index)", title: nil, url: nil,
                            frame: CGRect(x: 400, y: y, width: 100, height: 16), focused: false,
-                           children: []),
+                           children: [], domClassList: ["c-message__sender"]),
                     AXNode(role: "AXStaticText", value: String(repeating: "x", count: 60),
                            title: nil, url: nil,
                            frame: CGRect(x: 520, y: y, width: 400, height: 16), focused: false,
                            children: []),
-                ]))
+                ],
+                domClassList: ["c-virtual_list__item"]))
         }
         let window = AXNode(role: "AXWindow", value: nil, title: "general - Acme - Slack", url: nil,
                             frame: CGRect(x: 0, y: 0, width: 1_200, height: 800), focused: false,
-                            children: rows)
+                            children: [
+                                AXNode(role: "AXGroup", value: nil, title: nil, url: nil,
+                                       frame: CGRect(x: 400, y: 0, width: 800, height: 800),
+                                       focused: false, children: items,
+                                       domClassList: ["c-message_list"]),
+                            ])
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
-                          windowTitle: "general - Acme - Slack")
+                          windowTitle: "#general - Acme - Slack")
+        let structured = try XCTUnwrap(try SlackParser().parseStructured(window: window, app: app))
+        XCTAssertGreaterThan(ContentRenderer.render(structured, style: .full).count, SlackParser.contentCap)
         let capture = try XCTUnwrap(try SlackParser().parse(window: window, app: app))
         XCTAssertLessThanOrEqual(capture.content.count, SlackParser.contentCap)
         XCTAssertTrue(capture.content.contains("Person399"), "newest survives")
@@ -100,7 +115,7 @@ final class StructuredConversationParserTests: XCTestCase {
         XCTAssertEqual(capture.contentKind, .conversation)
     }
 
-    func testSingleTextRowBecomesAnUnknownSenderMessage() throws {
+    func testUnanchoredSlackRowsAreNotHandled() throws {
         let row = AXNode(role: "AXRow", value: nil, title: nil, url: nil,
                          frame: CGRect(x: 400, y: 10, width: 800, height: 20), focused: false,
                          children: [
@@ -112,9 +127,7 @@ final class StructuredConversationParserTests: XCTestCase {
                             children: [row])
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
                           windowTitle: "general - Acme - Slack")
-        let messages = try messages(try SlackParser().parseStructured(window: window, app: app))
-        XCTAssertEqual(messages.map(\.sender), ["unknown"])
-        XCTAssertEqual(messages.map(\.text), ["system joined the channel"])
+        XCTAssertNil(try SlackParser().parseStructured(window: window, app: app))
     }
 
     /// A one-label bubble must not be split on ": ": "Note: check the doc" is a message, not a
@@ -229,11 +242,11 @@ final class StructuredConversationParserTests: XCTestCase {
     }
 
     func testEmptyMessageAreaStillReturnsNilSoDispatchCanFallThrough() throws {
-        let window = AXNode(role: "AXWindow", value: nil, title: "general - Acme - Slack", url: nil,
+        let window = AXNode(role: "AXWindow", value: nil, title: "#general - Acme - Slack", url: nil,
                             frame: CGRect(x: 0, y: 0, width: 1_200, height: 800), focused: false,
                             children: [])
         let app = AppInfo(bundleID: ParserRegistry.slackBundleID, name: "Slack",
-                          windowTitle: "general - Acme - Slack")
+                          windowTitle: "#general - Acme - Slack")
         XCTAssertNil(try SlackParser().parseStructured(window: window, app: app))
         XCTAssertNil(try SlackParser().parse(window: window, app: app))
     }
