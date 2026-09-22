@@ -22,7 +22,8 @@ extension GenericPageExtractor {
     ///   therefore also what pays for a dialog that overflows its own share.
     ///
     /// Rest regions never grow past `restShare`: a long sidebar must not crowd out a short body.
-    static func applyBudgets(_ regions: [Region], options: Options) -> (regions: [Region], truncated: Bool) {
+    static func applyBudgets(_ regions: [Region], mainFocusAnchorIndex: Int? = nil,
+                             options: Options) -> (regions: [Region], truncated: Bool) {
         let total = max(1, options.totalBudget)
         let mainShare = budgetShare(total, options.mainShare)
         let dialogShare = budgetShare(total, options.dialogShare)
@@ -58,7 +59,11 @@ extension GenericPageExtractor {
         }
         mainAllowance = max(0, mainAllowance + restShare - restUsed)
 
-        let mainResult = trim(regions.first(where: { $0.kind == .main })?.blocks ?? [], to: mainAllowance)
+        // `.main` alone is viewport-anchored: chrome regions have no "where the user is looking"
+        // and their blocks are short enough that the top of the region is the right thing to keep.
+        let mainBlocks = regions.first(where: { $0.kind == .main })?.blocks ?? []
+        let mainResult = trimAnchored(mainBlocks, to: mainAllowance,
+                                      anchorIndex: mainFocusAnchorIndex)
         truncated = truncated || mainResult.truncated
 
         var out: [Region] = []
@@ -95,6 +100,38 @@ extension GenericPageExtractor {
             kept.append(block)
             used += cost
         }
+        return (kept, kept.count != blocks.count)
+    }
+
+    /// A nil or out-of-range anchor keeps Phase A's behaviour exactly: whole blocks dropped from
+    /// the END, so the top of the page survives. With an anchor, the contiguous window of blocks
+    /// AROUND the anchor survives instead — what the user is looking at, not what the page starts
+    /// with.
+    ///
+    /// Expansion alternates, forward first, so the anchor's continuation is preferred over its
+    /// preamble; it stops at the first neighbour that does not fit rather than hunting for a
+    /// smaller one further out, which keeps the kept range contiguous and the result
+    /// deterministic. The anchor block itself is always kept, even when it alone exceeds the
+    /// allowance — the same soft cap `trim` applies to a page's first block.
+    static func trimAnchored(_ blocks: [Block], to allowance: Int,
+                             anchorIndex: Int?) -> (blocks: [Block], truncated: Bool) {
+        guard let anchorIndex, blocks.indices.contains(anchorIndex) else {
+            return trim(blocks, to: allowance)
+        }
+        var low = anchorIndex
+        var high = anchorIndex
+        var used = ContentRenderer.renderBlock(blocks[anchorIndex]).count
+        var forward = true
+        while low > 0 || high < blocks.count - 1 {
+            let canGoForward = high < blocks.count - 1
+            let index = (forward && canGoForward) || low == 0 ? high + 1 : low - 1
+            let cost = ContentRenderer.renderBlock(blocks[index]).count + 1
+            if used + cost > allowance { break }
+            used += cost
+            if index > high { high = index } else { low = index }
+            forward.toggle()
+        }
+        let kept = Array(blocks[low...high])
         return (kept, kept.count != blocks.count)
     }
 }

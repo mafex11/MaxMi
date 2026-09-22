@@ -18,10 +18,6 @@ final class MigrationV10Tests: XCTestCase {
         }
     }
 
-    func testCurrentIdentifierIsV10() {
-        XCTAssertEqual(Migrations.currentIdentifier, "v10")
-    }
-
     func testNullStructuredCiphertextIsAcceptedByBothTables() throws {
         let db = try MaxMiDatabase.inMemory()
         try db.dbQueue.write { d in

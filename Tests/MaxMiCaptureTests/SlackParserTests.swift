@@ -30,6 +30,39 @@ final class SlackParserTests: XCTestCase {
         XCTAssertEqual(conversation.messages.count, 1, "the message is trimmed, never dropped")
     }
 
+    func testSelfBoundingCaptureReportsTruncation() throws {
+        func window(_ messages: [String]) -> AXNode {
+            AXNode(
+                role: "AXWindow", value: nil, title: "general - Acme - Slack", url: nil,
+                frame: CGRect(x: 0, y: 0, width: 1_000, height: 700), focused: false,
+                children: messages.enumerated().map { index, message in
+                    AXNode(
+                        role: "AXRow", value: nil, title: nil, url: nil,
+                        frame: CGRect(x: 240, y: CGFloat(index * 20), width: 500, height: 18),
+                        focused: false,
+                        children: [
+                            AXNode(
+                                role: "AXStaticText", value: message, title: nil, url: nil,
+                                frame: CGRect(x: 240, y: CGFloat(index * 20), width: 400, height: 18),
+                                focused: false, children: []
+                            ),
+                        ]
+                    )
+                }
+            )
+        }
+
+        let small = try XCTUnwrap(try SlackParser().parse(
+            window: window(["A short message"]), app: app("general - Acme - Slack")))
+        XCTAssertFalse(small.truncated)
+
+        let oversize = try XCTUnwrap(try SlackParser().parse(
+            window: window([String(repeating: "x", count: SlackParser.contentCap * 2)]),
+            app: app("general - Acme - Slack")
+        ))
+        XCTAssertTrue(oversize.truncated)
+    }
+
     func testKeyFromTitleAndSenderAttributedMessages() throws {
         let win = try fixture("slack-window")
         let cap = try XCTUnwrap(try SlackParser().parse(window: win, app: app("general - Acme - Slack")))

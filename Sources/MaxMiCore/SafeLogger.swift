@@ -55,6 +55,13 @@ public enum SafeLogEventName: String, Sendable {
     case capturePauseReadFailed = "capture_pause_read_failed"
     case capturePauseWriteFailed = "capture_pause_write_failed"
     case capturePolicyReadFailed = "capture_policy_read_failed"
+    /// A capture_events write failed. Never fatal — an event is a derived signal, not a memory.
+    case captureEventWriteFailed = "capture_event_write_failed"
+    /// A typing event was observed, but the activity gate or capture lifecycle changed before it
+    /// could be persisted.
+    case typingEventDropped = "typing_event_dropped"
+    /// The post-commit lookup that can associate a capture event with its thread failed.
+    case captureEventThreadLookupFailed = "capture_event_thread_lookup_failed"
     case modelDownloadFailed = "model_download_failed"
     case retryQueueReadFailed = "retry_queue_read_failed"
     case retryQueueWriteFailed = "retry_queue_write_failed"

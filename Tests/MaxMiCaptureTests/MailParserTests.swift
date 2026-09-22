@@ -34,6 +34,40 @@ final class MailParserTests: XCTestCase {
         XCTAssertFalse(cap.content.contains("number 1 "), "oldest dropped")
     }
 
+    func testSelfBoundingCaptureReportsTruncation() throws {
+        func selectedOutput(bodies: [String]) -> String {
+            let fs = MailParser.fieldSeparator
+            let records = bodies.enumerated().map { index, body in
+                "message-\(index)\(fs)Taylor\(fs)Project update\(fs)Tuesday\(fs)\(body)"
+            }
+            return MailParser.structuredHeader + "\n" + records.joined(separator: MailParser.recordSeparator)
+        }
+
+        let smallInbox = try XCTUnwrap(MailParser.makeCapture(
+            fromScriptOutput: "acct » Taylor | A short inbox subject", windowTitle: "Inbox"))
+        XCTAssertFalse(smallInbox.truncated)
+
+        let largeInbox = try XCTUnwrap(MailParser.makeCapture(
+            fromScriptOutput: (0..<120).map {
+                "acct » Sender \($0) | " + String(repeating: "inbox body ", count: 40)
+            }.joined(separator: "\n"),
+            windowTitle: "Inbox"
+        ))
+        XCTAssertTrue(largeInbox.truncated)
+
+        let smallThread = try XCTUnwrap(MailParser.makeCapture(
+            fromScriptOutput: selectedOutput(bodies: ["A short selected message"]), windowTitle: "Inbox"))
+        XCTAssertFalse(smallThread.truncated)
+
+        let largeThread = try XCTUnwrap(MailParser.makeCapture(
+            fromScriptOutput: selectedOutput(bodies: (0..<120).map {
+                "message \($0) " + String(repeating: "selected body ", count: 40)
+            }),
+            windowTitle: "Inbox"
+        ))
+        XCTAssertTrue(largeThread.truncated)
+    }
+
     func testBlankLinesFiltered() throws {
         let raw = "iCloud » A <a@x.com> | subj A\n\n\nExchange » B <b@y.com> | subj B\n"
         let cap = try XCTUnwrap(MailParser.makeCapture(fromScriptOutput: raw, windowTitle: nil))

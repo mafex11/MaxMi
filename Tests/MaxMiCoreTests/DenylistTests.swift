@@ -1,5 +1,5 @@
 import XCTest
-@testable import MaxMiCapture
+@testable import MaxMiCore
 
 final class DenylistTests: XCTestCase {
     func testUserBlockedDomainsMatchExactHostAndSubdomains() {

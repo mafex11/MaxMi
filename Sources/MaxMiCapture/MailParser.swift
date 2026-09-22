@@ -23,6 +23,7 @@ public struct MailParser: SourceParser {
         let content: CapturedContent
         let sourceKey: String
         let sourceTitle: String?
+        let truncated: Bool
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
@@ -52,7 +53,8 @@ public struct MailParser: SourceParser {
             offscreenPolicy: isThread
                 ? .accessibilityScroll(maxSteps: 4, maxCharacters: 64_000)
                 : .accessibilityScroll(maxSteps: 3),
-            structured: extracted.content
+            structured: extracted.content,
+            truncated: extracted.truncated
         )
     }
 
@@ -60,12 +62,17 @@ public struct MailParser: SourceParser {
         if raw.hasPrefix(structuredHeader) {
             return selectedMessageContent(fromScriptOutput: raw, windowTitle: windowTitle)
         }
-        guard let content = inboxContent(fromScriptOutput: raw) else { return nil }
-        return Extracted(content: content, sourceKey: "mail:inbox", sourceTitle: windowTitle)
+        guard let inbox = inboxContent(fromScriptOutput: raw) else { return nil }
+        return Extracted(
+            content: inbox.content,
+            sourceKey: "mail:inbox",
+            sourceTitle: windowTitle,
+            truncated: inbox.truncated
+        )
     }
 
     /// The per-account inbox listing: "account » sender | subject" per line.
-    static func inboxContent(fromScriptOutput raw: String) -> CapturedContent? {
+    static func inboxContent(fromScriptOutput raw: String) -> (content: CapturedContent, truncated: Bool)? {
         let lines = raw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         guard !lines.isEmpty else { return nil }
@@ -82,10 +89,14 @@ public struct MailParser: SourceParser {
                 isUser: false, isDraft: false
             )
         }
-        return CaptureAccumulator.bound(
-            .conversation(Conversation(channel: "Inbox", isGroup: false, messages: messages)),
+        let unbounded = CapturedContent.conversation(
+            Conversation(channel: "Inbox", isGroup: false, messages: messages)
+        )
+        let content = CaptureAccumulator.bound(
+            unbounded,
             to: contentCap
         )
+        return (content, content != unbounded)
     }
 
     /// One `Message` per `MailRecord`; `channel` is the subject (spec 4f).
@@ -114,10 +125,13 @@ public struct MailParser: SourceParser {
             isGroup: false,
             messages: messages
         )
+        let unbounded = CapturedContent.conversation(conversation)
+        let content = CaptureAccumulator.bound(unbounded, to: contentCap)
         return Extracted(
-            content: CaptureAccumulator.bound(.conversation(conversation), to: contentCap),
+            content: content,
             sourceKey: "mail:thread:\(String(ContentHash.sha256Hex(identities).prefix(24)))",
-            sourceTitle: subject ?? windowTitle
+            sourceTitle: subject ?? windowTitle,
+            truncated: content != unbounded
         )
     }
 

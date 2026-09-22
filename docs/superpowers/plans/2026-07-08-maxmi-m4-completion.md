@@ -379,7 +379,7 @@ git commit -m "fix(capture): exclude Slack sidebar chrome from message content"
 ```bash
 cd /Users/mafex/code/personal/MaxMi
 ./packaging/make-app.sh
-pkill -f "MaxMi.app/Contents/MacOS/MaxMi"; sleep 1; open MaxMi.app
+pkill -9 -x MaxMi; sleep 1; open MaxMi.app
 ```
 (Signing identity persists from M3; Accessibility grant should survive. Re-grant only if macOS prompts.)
 

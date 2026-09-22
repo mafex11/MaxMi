@@ -1,5 +1,4 @@
 import Foundation
-import MaxMiCore
 
 public enum Denylist {
     // Seeded from the host list pulled out of Minimi's binary (spec §5).

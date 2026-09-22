@@ -17,37 +17,47 @@ public struct DiscordParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        let lines = messageLines(in: window)
-        guard !lines.isEmpty else { return nil }
-        var kept: [String] = []
-        var total = 0
-        for line in lines.reversed() {
-            let add = line.count + 1
-            if total + add > Self.contentCap && !kept.isEmpty { break }
-            kept.insert(line, at: 0)
-            total += add
-        }
-        // Discord's own chrome filter and tree-order collection are kept: the generic v2 walk
-        // would re-emit "Add Reaction" and friends as labels, and Discord's AXFrame values are
-        // unreliable, so v2's frame-based rules are unsafe here. Phase D replaces this.
-        return GenericV2Content.lines(kept)
+        extract(window: window)?.content
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = try parseStructured(window: window, app: app) else { return nil }
+        guard let extracted = extract(window: window) else { return nil }
         return ParsedCapture(
             sourceApp: "Discord",
             sourceKey: key(fromTitle: app.windowTitle),
             sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(structured, style: .full),
+            content: ContentRenderer.render(extracted.content, style: .full),
             contentKind: .conversation,
             parserVersion: 2,
             // Unchanged from v1: the wrapped `.lines` page is legacy-shaped, so accumulation
             // still appends across windows until the anchored parser lands in Phase D.
             accumulationPolicy: .appendItems,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3),
-            structured: structured
+            structured: extracted.content,
+            truncated: extracted.truncated
         )
+    }
+
+    private func extract(window: AXNode) -> (content: CapturedContent, truncated: Bool)? {
+        let lines = messageLines(in: window)
+        guard !lines.isEmpty else { return nil }
+        var kept: [String] = []
+        var total = 0
+        var truncated = false
+        for line in lines.reversed() {
+            let add = line.count + 1
+            if total + add > Self.contentCap && !kept.isEmpty {
+                truncated = true
+                break
+            }
+            kept.insert(line, at: 0)
+            total += add
+        }
+        // Discord's own chrome filter and tree-order collection are kept: the generic v2 walk
+        // would re-emit "Add Reaction" and friends as labels, and Discord's AXFrame values are
+        // unreliable, so v2's frame-based rules are unsafe here. Phase D replaces this.
+        guard let content = GenericV2Content.lines(kept) else { return nil }
+        return (content, truncated)
     }
 
     /// "#<channel> | <server> - Discord" -> "discord:<server>/<channel>"; else "discord:<title>".

@@ -80,7 +80,7 @@ public struct WordParser: SourceParser {
         )
     }
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        StructuredEntityExtraction.documentContent(window: window)
+        StructuredEntityExtraction.documentContent(window: window)?.content
     }
 }
 
@@ -93,7 +93,7 @@ public struct PagesParser: SourceParser {
         )
     }
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        StructuredEntityExtraction.documentContent(window: window)
+        StructuredEntityExtraction.documentContent(window: window)?.content
     }
 }
 
@@ -103,7 +103,7 @@ public struct OutlookParser: SourceParser {
         StructuredEntityExtraction.email(window: window, app: app, sourceApp: "Outlook", prefix: "outlook")
     }
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        StructuredEntityExtraction.emailContent(window: window)
+        StructuredEntityExtraction.emailContent(window: window)?.content
     }
 }
 
@@ -113,7 +113,7 @@ public struct SparkParser: SourceParser {
         StructuredEntityExtraction.email(window: window, app: app, sourceApp: "Spark", prefix: "spark")
     }
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        StructuredEntityExtraction.emailContent(window: window)
+        StructuredEntityExtraction.emailContent(window: window)?.content
     }
 }
 
@@ -255,7 +255,7 @@ enum StructuredEntityExtraction {
         .accessibilityScroll(maxSteps: 4, maxCharacters: pageBudget)
 
     /// Generic v2 over the whole window. The anchored document parsers land in Phase D.
-    static func documentContent(window: AXNode) -> CapturedContent? {
+    static func documentContent(window: AXNode) -> GenericV2Content.Page? {
         GenericV2Content.page(window: window, budget: pageBudget,
                               offscreenPolicy: documentOffscreen)
     }
@@ -267,7 +267,7 @@ enum StructuredEntityExtraction {
         prefix: String,
         titleSuffixes: [String]
     ) -> ParsedCapture? {
-        guard let structured = documentContent(window: window) else { return nil }
+        guard let page = documentContent(window: window) else { return nil }
         var title = app.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         for suffix in titleSuffixes where title.hasSuffix(suffix) {
             title.removeLast(suffix.count)
@@ -277,17 +277,18 @@ enum StructuredEntityExtraction {
             sourceApp: sourceApp,
             sourceKey: "\(prefix):\(docSlug(title))",
             sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(structured, style: .full),
+            content: ContentRenderer.render(page.content, style: .full),
             contentKind: .document,
             parserVersion: 2,
             // Whole-page semantics (spec 4d): each extraction is the window's current state.
             accumulationPolicy: .replace,
             offscreenPolicy: documentOffscreen,
-            structured: structured
+            structured: page.content,
+            truncated: page.truncated
         )
     }
 
-    static func emailContent(window: AXNode) -> CapturedContent? {
+    static func emailContent(window: AXNode) -> GenericV2Content.Page? {
         GenericV2Content.page(window: window, budget: pageBudget,
                               offscreenPolicy: emailOffscreen)
     }
@@ -298,20 +299,21 @@ enum StructuredEntityExtraction {
         sourceApp: String,
         prefix: String
     ) -> ParsedCapture? {
-        guard let structured = emailContent(window: window) else { return nil }
+        guard let page = emailContent(window: window) else { return nil }
         let title = meaningfulWindowTitle(app.windowTitle, excluding: [sourceApp]) ?? "message"
         return ParsedCapture(
             sourceApp: sourceApp,
             sourceKey: "\(prefix):message:\(shortHash(title))",
             sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(structured, style: .full),
+            content: ContentRenderer.render(page.content, style: .full),
             // Outlook and Spark expose no sender or date, so they stay a page — but the kind
             // is still .email (spec 12 Q3).
             contentKind: .email,
             parserVersion: 2,
             accumulationPolicy: .replace,
             offscreenPolicy: emailOffscreen,
-            structured: structured
+            structured: page.content,
+            truncated: page.truncated
         )
     }
 

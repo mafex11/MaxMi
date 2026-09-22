@@ -517,7 +517,7 @@ git commit -m "test(capture): golden key-fixtures harness (clean + stable per ap
 ```bash
 cd /Users/mafex/code/personal/MaxMi
 ./packaging/make-app.sh
-pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"; sleep 2; open MaxMi.app
+pkill -9 -x MaxMi; sleep 2; open MaxMi.app
 ```
 Re-grant Accessibility if capture doesn't resume (`tccutil reset Accessibility dev.mafex.maxmi`, toggle on, relaunch).
 

@@ -1,0 +1,57 @@
+{
+  "role": "AXWindow",
+  "title": "general - Invented Workspace - Slack",
+  "focused": false,
+  "frame": { "x": 320, "y": 140, "width": 1100, "height": 800 },
+  "children": [
+    {
+      "role": "AXList",
+      "identifier": "message-list",
+      "focused": false,
+      "frame": { "x": 620, "y": 200, "width": 780, "height": 480 },
+      "children": [
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 620, "y": 220, "width": 780, "height": 40 },
+          "children": [
+            { "role": "AXStaticText", "value": "Ana Invented", "focused": false,
+              "frame": { "x": 620, "y": 220, "width": 120, "height": 18 }, "children": [] },
+            { "role": "AXStaticText", "value": "the budget test is green", "focused": false,
+              "frame": { "x": 620, "y": 240, "width": 400, "height": 18 }, "children": [] }
+          ]
+        },
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 620, "y": 280, "width": 780, "height": 40 },
+          "children": [
+            { "role": "AXStaticText", "value": "Bo Invented", "focused": false,
+              "frame": { "x": 620, "y": 280, "width": 120, "height": 18 }, "children": [] },
+            { "role": "AXStaticText", "value": "merging after review", "focused": false,
+              "frame": { "x": 620, "y": 300, "width": 400, "height": 18 }, "children": [] }
+          ]
+        },
+        {
+          "role": "AXRow",
+          "focused": false,
+          "frame": { "x": 620, "y": 340, "width": 780, "height": 40 },
+          "children": [
+            { "role": "AXTextArea", "identifier": "editing-bubble",
+              "value": "an edited bubble, not the composer", "focused": true,
+              "frame": { "x": 620, "y": 340, "width": 400, "height": 18 }, "children": [] }
+          ]
+        }
+      ]
+    },
+    {
+      "role": "AXTextArea",
+      "identifier": "message-input",
+      "placeholder": "Message #general",
+      "value": "shipping phase b today",
+      "focused": true,
+      "frame": { "x": 620, "y": 700, "width": 780, "height": 60 },
+      "children": []
+    }
+  ]
+}

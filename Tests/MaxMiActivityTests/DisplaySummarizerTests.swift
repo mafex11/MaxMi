@@ -35,6 +35,7 @@ actor MockRepo: ActivitySummaryRepository {
 actor MockRelay: ActivityGenerationRelay {
     private var shouldThrow = false
     private var returnedSummary = "Worked on X"
+    var timelineRequests: [String] = []
 
     func setShouldThrow(_ value: Bool) {
         shouldThrow = value
@@ -44,7 +45,8 @@ actor MockRelay: ActivityGenerationRelay {
         returnedSummary = value
     }
 
-    func summarizeSession(appLabel: String, evidence: [String]) async throws -> String {
+    func summarizeSession(appLabel: String, timelineText: String) async throws -> String {
+        timelineRequests.append(timelineText)
         if shouldThrow {
             throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "test error"])
         }
@@ -59,7 +61,7 @@ final class DisplaySummarizerTests: XCTestCase {
         await repo.setPending([PendingSession(
             id: "sess1",
             appLabel: "TestApp",
-            evidence: ["did work"],
+            timelineText: "09:02–09:14 TestApp: did work",
             expectedSourceHash: "hash123"
         )])
         await relay.setReturnedSummary("Worked on X")
@@ -80,7 +82,7 @@ final class DisplaySummarizerTests: XCTestCase {
         await repo.setPending([PendingSession(
             id: "sess2",
             appLabel: "TestApp",
-            evidence: ["did work"],
+            timelineText: "09:02–09:14 TestApp: did work",
             expectedSourceHash: "hash456"
         )])
         await relay.setShouldThrow(true)
@@ -97,14 +99,18 @@ final class DisplaySummarizerTests: XCTestCase {
         XCTAssertEqual(saved.count, 0, "should not save summary when relay throws")
     }
 
-    func testPromptFencesEvidenceAsUntrustedData() {
-        let prompt = AgentPrompts.summarizeForDisplay(
-            appLabel: "App",
-            evidence: ["screen content"],
-            maxEvidenceChars: 1000
-        )
-        XCTAssertTrue(prompt.contains("BEGIN_UNTRUSTED_DATA_"))
-        XCTAssertTrue(prompt.contains("END_UNTRUSTED_DATA_"))
-        XCTAssertTrue(prompt.contains("UNTRUSTED"))
+    func testSummarizeDueSendsTimelineTextNeverEvidenceArray() async {
+        let repo = MockRepo()
+        let relay = MockRelay()
+        await repo.setPending([PendingSession(
+            id: "s1", appLabel: "Warp",
+            timelineText: "09:02–09:14 Warp: ran swift test",
+            expectedSourceHash: "h1"
+        )])
+
+        await DisplaySummarizer(repo: repo, relay: relay).summarizeDue(nowMs: 1)
+
+        let requests = await relay.timelineRequests
+        XCTAssertEqual(requests, ["09:02–09:14 Warp: ran swift test"])
     }
 }

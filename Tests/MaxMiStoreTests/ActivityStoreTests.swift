@@ -55,6 +55,102 @@ final class ActivityStoreTests: XCTestCase {
         XCTAssertEqual(try store.sessionsNeedingSummary(nowMs: t0 + 7, limit: 10).map(\.id), [sessionID])
     }
 
+    func testSessionsNeedingSummaryUsesSharedSourceCloudEligibility() throws {
+        guard case .committed(let localVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Local",
+                sourceKey: "https://local-only.example/work",
+                sourceTitle: "Local",
+                content: "Keep this local"
+            ),
+            nowMs: t0
+        ) else { return XCTFail("expected local capture") }
+        guard case .committed(let pausedVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://paused.example/work",
+                sourceTitle: "Paused",
+                content: "Paused thread"
+            ),
+            nowMs: t0 + 10
+        ) else { return XCTFail("expected paused capture") }
+        guard case .committed(let blockedVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://blocked.example/work",
+                sourceTitle: "Blocked",
+                content: "Blocked domain"
+            ),
+            nowMs: t0 + 20
+        ) else { return XCTFail("expected blocked capture") }
+        guard case .committed(let ordinaryVersion, _, _) = try store.commitCapture(
+            CaptureInput(
+                sourceApp: "Web",
+                sourceKey: "https://ordinary.example/work",
+                sourceTitle: "Ordinary",
+                content: "Ordinary work"
+            ),
+            nowMs: t0 + 30
+        ) else { return XCTFail("expected ordinary capture") }
+
+        try store.setCloudProcessing("Local", allowed: false, nowMs: t0 + 40)
+        try store.setThreadPaused("https://paused.example/work", paused: true, nowMs: t0 + 40)
+        _ = try store.setDomain("blocked.example", blocked: true, nowMs: t0 + 40)
+
+        let localSession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.local", appLabel: "Local", versionID: localVersion,
+            content: "Keep this local", nowMs: t0 + 50
+        )
+        try store.closeSession(localSession, nowMs: t0 + 51)
+        let pausedSession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.paused", appLabel: "Paused", versionID: pausedVersion,
+            content: "Paused thread", nowMs: t0 + 60
+        )
+        try store.closeSession(pausedSession, nowMs: t0 + 61)
+        let blockedSession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.blocked", appLabel: "Blocked", versionID: blockedVersion,
+            content: "Blocked domain", nowMs: t0 + 70
+        )
+        try store.closeSession(blockedSession, nowMs: t0 + 71)
+        let ordinarySession = try store.recordActivityCapture(
+            appBundle: "com.maxmi.ordinary", appLabel: "Ordinary", versionID: ordinaryVersion,
+            content: "Ordinary work", nowMs: t0 + 80
+        )
+        try store.closeSession(ordinarySession, nowMs: t0 + 81)
+
+        XCTAssertEqual(
+            try store.sessionsNeedingSummary(nowMs: t0 + 90, limit: 10).map(\.id),
+            [ordinarySession]
+        )
+    }
+
+    func testBlockedDomainUserinfoURLIsExcludedInMemoryAndSQL() throws {
+        let url = "https://user:pass@blocked.example/work"
+        guard case .committed = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: url, sourceTitle: "Blocked", content: "content"),
+            nowMs: t0
+        ) else { return XCTFail("expected capture") }
+        let threadID = try store.threadID(forKey: url)
+        _ = try store.setDomain("blocked.example", blocked: true, nowMs: t0 + 1)
+
+        let eligibility = try store.sourceCloudEligibility()
+        XCTAssertFalse(eligibility.allows(sourceApp: "Web", threadID: threadID, url: url))
+
+        let filter = eligibility.sqlFilter(
+            sourceAppColumn: "t.source_app",
+            threadIDColumn: "t.id",
+            urlColumn: "t.source_key"
+        )
+        let matchingIDs = try db.dbQueue.read { database in
+            try String.fetchAll(
+                database,
+                sql: "SELECT t.id FROM threads t WHERE \(filter.condition)",
+                arguments: StatementArguments(filter.arguments)
+            )
+        }
+        XCTAssertFalse(matchingIDs.contains(threadID))
+    }
+
     func testDeleteActivityForAppCascades() throws {
         let s = try store.recordActivityCapture(appBundle: "com.secret", appLabel: "S", versionID: nil, content: "x", nowMs: t0)
         try store.closeActiveSession(nowMs: t0+1)
@@ -229,5 +325,49 @@ final class ActivityStoreTests: XCTestCase {
         // Should be sorted by label, then bundle (deterministic)
         XCTAssertEqual(apps[0].bundle, "com.aaa", "com.aaa comes before com.zzz alphabetically")
         XCTAssertEqual(apps[1].bundle, "com.zzz")
+    }
+
+    func testAppVisitsInWindowIncludeOverlapsAndOpenVisits() throws {
+        _ = try store.openVisit(appBundle: "a", appLabel: "Before", nowMs: t0 - 100_000)
+        try store.closeOpenVisits(nowMs: t0 - 90_000)
+        let spanning = try store.openVisit(appBundle: "b", appLabel: "Spanning", nowMs: t0 - 10_000)
+        try store.closeOpenVisits(nowMs: t0 + 10_000)
+        let open = try store.openVisit(appBundle: "c", appLabel: "Open", nowMs: t0 + 20_000)
+
+        let visits = try store.appVisits(fromMs: t0, toMs: t0 + 60_000)
+        XCTAssertEqual(visits.map(\.appLabel), ["Spanning", "Open"])
+        XCTAssertEqual(visits.map(\.id), [spanning, open], "ids, not just labels")
+        XCTAssertNil(visits.last?.endedAtMs)
+        XCTAssertEqual(visits.first?.appBundle, "b")
+    }
+
+    func testAppVisitsExcludeVisitsThatEndedBeforeTheWindow() throws {
+        _ = try store.openVisit(appBundle: "a", appLabel: "Before", nowMs: t0 - 100_000)
+        try store.closeOpenVisits(nowMs: t0 - 90_000)
+        XCTAssertTrue(try store.appVisits(fromMs: t0, toMs: t0 + 60_000).isEmpty)
+    }
+
+    func testAppVisitsExcludeVisitsThatStartAfterTheWindow() throws {
+        _ = try store.openVisit(appBundle: "a", appLabel: "After", nowMs: t0 + 90_000)
+        XCTAssertTrue(try store.appVisits(fromMs: t0, toMs: t0 + 60_000).isEmpty)
+    }
+
+    func testAppVisitsIncludeExactWindowBoundsAndExcludeAdjacentVisits() throws {
+        let endsAtStart = try store.openVisit(
+            appBundle: "a", appLabel: "Ends at start", nowMs: t0 - 20)
+        try store.closeOpenVisits(nowMs: t0)
+
+        _ = try store.openVisit(
+            appBundle: "b", appLabel: "Ends before start", nowMs: t0 - 10)
+        try store.closeOpenVisits(nowMs: t0 - 1)
+
+        let startsAtEnd = try store.openVisit(
+            appBundle: "c", appLabel: "Starts at end", nowMs: t0 + 60_000)
+        _ = try store.openVisit(
+            appBundle: "d", appLabel: "Starts after end", nowMs: t0 + 60_001)
+
+        let visits = try store.appVisits(fromMs: t0, toMs: t0 + 60_000)
+        XCTAssertEqual(visits.map(\.id), [endsAtStart, startsAtEnd])
+        XCTAssertEqual(visits.map(\.appLabel), ["Ends at start", "Starts at end"])
     }
 }

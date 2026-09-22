@@ -21,6 +21,7 @@ public struct MenuPopoverView: View {
     @Bindable private var recentCapturesViewModel: RecentCapturesViewModel
     @Bindable private var activityViewModel: ActivityViewModel
     @Bindable private var actionItemsViewModel: ActionItemsViewModel
+    @Bindable private var checkinViewModel: CheckinViewModel
     @Bindable private var settingsViewModel: SettingsViewModel
     @Bindable private var capturePrivacyViewModel: CapturePrivacyViewModel
     @Bindable private var dataControlsViewModel: DataControlsViewModel
@@ -35,6 +36,7 @@ public struct MenuPopoverView: View {
         recentCapturesViewModel: RecentCapturesViewModel,
         activityViewModel: ActivityViewModel,
         actionItemsViewModel: ActionItemsViewModel,
+        checkinViewModel: CheckinViewModel,
         settingsViewModel: SettingsViewModel,
         capturePrivacyViewModel: CapturePrivacyViewModel,
         dataControlsViewModel: DataControlsViewModel,
@@ -48,6 +50,7 @@ public struct MenuPopoverView: View {
         self.recentCapturesViewModel = recentCapturesViewModel
         self.activityViewModel = activityViewModel
         self.actionItemsViewModel = actionItemsViewModel
+        self.checkinViewModel = checkinViewModel
         self.settingsViewModel = settingsViewModel
         self.capturePrivacyViewModel = capturePrivacyViewModel
         self.dataControlsViewModel = dataControlsViewModel
@@ -66,6 +69,7 @@ public struct MenuPopoverView: View {
                     recentCapturesViewModel: recentCapturesViewModel,
                     activityViewModel: activityViewModel,
                     actionItemsViewModel: actionItemsViewModel,
+                    checkinViewModel: checkinViewModel,
                     onTogglePause: onTogglePause,
                     onStartVoiceNote: onStartVoiceNote,
                     onOpenMaxMi: onOpenMaxMi,
@@ -92,6 +96,7 @@ public struct MenuPopoverView: View {
                 case .home:
                     await recentCapturesViewModel.refresh()
                     await trayHomeViewModel.refresh()
+                    await checkinViewModel.refresh()
                 case .settings:
                     await settingsViewModel.refresh()
                     await capturePrivacyViewModel.refresh()

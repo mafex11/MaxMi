@@ -4,13 +4,13 @@ import MaxMiCore
 public struct PendingSession: Sendable {
     public let id: String
     public let appLabel: String
-    public let evidence: [String]
+    public let timelineText: String
     public let expectedSourceHash: String
 
-    public init(id: String, appLabel: String, evidence: [String], expectedSourceHash: String) {
+    public init(id: String, appLabel: String, timelineText: String, expectedSourceHash: String) {
         self.id = id
         self.appLabel = appLabel
-        self.evidence = evidence
+        self.timelineText = timelineText
         self.expectedSourceHash = expectedSourceHash
     }
 }
@@ -22,5 +22,5 @@ public protocol ActivitySummaryRepository: Sendable {
 }
 
 public protocol ActivityGenerationRelay: Sendable {
-    func summarizeSession(appLabel: String, evidence: [String]) async throws -> String
+    func summarizeSession(appLabel: String, timelineText: String) async throws -> String
 }

@@ -22,6 +22,24 @@ public struct ActivitySession: Sendable {
     }
 }
 
+public struct ActivityVisitRecord: Sendable, Equatable {
+    public let id: String
+    public let appBundle: String
+    public let appLabel: String
+    public let startedAtMs: EpochMs
+    /// nil for a visit that is still open.
+    public let endedAtMs: EpochMs?
+
+    public init(id: String, appBundle: String, appLabel: String, startedAtMs: EpochMs,
+                endedAtMs: EpochMs?) {
+        self.id = id
+        self.appBundle = appBundle
+        self.appLabel = appLabel
+        self.startedAtMs = startedAtMs
+        self.endedAtMs = endedAtMs
+    }
+}
+
 public enum ActivityConsent: String, Sendable {
     case unset, granted, declined
 }
@@ -44,6 +62,27 @@ extension Store {
     public func closeOpenVisits(nowMs: EpochMs) throws {
         try db.dbQueue.write { d in
             try d.execute(sql: "UPDATE activity_app_visits SET ended_at=? WHERE ended_at IS NULL", arguments: [nowMs])
+        }
+    }
+
+    /// Visits that OVERLAP the window, chronologically. An open visit is treated as running to
+    /// the end of the window, so a session in progress is not invisible.
+    public func appVisits(fromMs: EpochMs, toMs: EpochMs) throws -> [ActivityVisitRecord] {
+        try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: """
+                SELECT id, app_bundle, app_label, started_at, ended_at
+                FROM activity_app_visits
+                WHERE started_at <= ? AND coalesce(ended_at, ?) >= ?
+                ORDER BY started_at ASC, id ASC
+                """, arguments: [toMs, toMs, fromMs]).map { row in
+                    ActivityVisitRecord(
+                        id: row["id"],
+                        appBundle: row["app_bundle"],
+                        appLabel: row["app_label"],
+                        startedAtMs: row["started_at"],
+                        endedAtMs: row["ended_at"]
+                    )
+                }
         }
     }
 
@@ -184,9 +223,7 @@ extension Store {
     }
 
     public func sessionsNeedingSummary(nowMs: EpochMs, limit: Int) throws -> [ActivitySession] {
-        let reviewed = try cloudReviewedSourceApps()
-        let localOnly = try cloudLocalOnlySourceApps()
-        let reviewGateEnabled = try cloudReviewInitialized()
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
             let rows = try Row.fetchAll(d, sql: """
                 SELECT id, app_bundle, app_label, started_at, ended_at, last_activity_at, summary_ciphertext, summary_status
@@ -196,16 +233,21 @@ extension Store {
                 ORDER BY started_at DESC
                 """, arguments: [nowMs])
             return try rows.filter { row in
-                guard reviewGateEnabled else { return true }
                 let sessionID: String = row["id"]
-                let apps = try String.fetchAll(d, sql: """
-                    SELECT DISTINCT t.source_app
+                let sources = try Row.fetchAll(d, sql: """
+                    SELECT DISTINCT t.source_app, t.id AS thread_id, t.source_key
                     FROM activity_session_evidence e
                     JOIN versions v ON v.id = e.version_id
                     JOIN threads t ON t.id = v.thread_id
                     WHERE e.session_id = ?
                     """, arguments: [sessionID])
-                return !apps.isEmpty && apps.allSatisfy { reviewed.contains($0) && !localOnly.contains($0) }
+                return sources.allSatisfy { source in
+                    privacy.allows(
+                        sourceApp: source["source_app"],
+                        threadID: source["thread_id"],
+                        url: source["source_key"]
+                    )
+                }
             }.prefix(max(limit, 0)).map { mapActivitySession($0) }
         }
     }

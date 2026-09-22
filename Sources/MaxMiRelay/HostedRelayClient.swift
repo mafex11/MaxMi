@@ -77,14 +77,12 @@ public final class HostedRelayClient: GenerationMemoryRelay, @unchecked Sendable
     public func extract(
         newContent: String,
         previousContent: String?,
-        sourceApp: String,
-        sourceKey: String
+        metadata: ExtractMetadata
     ) async throws -> [String] {
         let prompt = ExtractPrompt.build(
             newContent: newContent,
             previousContent: previousContent,
-            sourceApp: sourceApp,
-            sourceKey: sourceKey
+            metadata: metadata
         )
         let text = try await generateContent(
             model: config.extractModel,
@@ -141,8 +139,7 @@ private struct UnavailableGenerationRelay: GenerationMemoryRelay {
     func extract(
         newContent: String,
         previousContent: String?,
-        sourceApp: String,
-        sourceKey: String
+        metadata: ExtractMetadata
     ) async throws -> [String] { throw RelayError.notConfigured }
 
     func embed(text: String) async throws -> [Float] { throw RelayError.notConfigured }

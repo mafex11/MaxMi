@@ -73,6 +73,19 @@ fileprivate func maxMiProcessCount(matching pattern: String) -> Int {
     }
 }
 
+/// A URL is safe to reuse only for the same browser window. Windows without a stable CGWindowID
+/// deliberately have no key, so the privacy gate fails closed rather than guessing from a title.
+struct BrowserWindowKey: Hashable {
+    let bundleID: String
+    let windowID: UInt32
+
+    init?(app: AppInfo) {
+        guard let windowID = app.windowID else { return nil }
+        self.bundleID = app.bundleID
+        self.windowID = windowID
+    }
+}
+
 @MainActor
 fileprivate func openPrivacySettings(_ pane: String) {
     guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
@@ -88,7 +101,22 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
         try store.pendingWork(nowMs: nowMs, idleThresholdMs: idleThresholdMs).map {
             PipelineVersion(id: $0.id, threadID: $0.threadID, content: $0.content,
                             contentHash: $0.contentHash, sourceApp: $0.sourceApp,
-                            sourceKey: $0.sourceKey, previousFrozenContent: $0.previousFrozenContent)
+                            sourceKey: $0.sourceKey, sourceTitle: $0.sourceTitle, url: $0.url,
+                            contentKind: $0.contentKind, capturedAt: $0.capturedAt,
+                            renderedDelta: $0.renderedDelta,
+                            previousCompactContent: $0.previousCompactContent,
+                            compactContent: $0.compactContent)
+        }
+    }
+    func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PipelineVersion] {
+        try store.pendingContextEmbeddingWork(nowMs: nowMs).map {
+            PipelineVersion(id: $0.id, threadID: $0.threadID, content: $0.content,
+                            contentHash: $0.contentHash, sourceApp: $0.sourceApp,
+                            sourceKey: $0.sourceKey, sourceTitle: $0.sourceTitle, url: $0.url,
+                            contentKind: $0.contentKind, capturedAt: $0.capturedAt,
+                            renderedDelta: $0.renderedDelta,
+                            previousCompactContent: $0.previousCompactContent,
+                            compactContent: $0.compactContent)
         }
     }
     func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative] {
@@ -106,6 +134,9 @@ final class StoreAdapter: MemoryStore, @unchecked Sendable {   // Store is inter
     func insertEmbedding(derivativeID: String, vector: [Float]) throws {
         try store.insertEmbedding(derivativeID: derivativeID, vector: vector)
     }
+    func insertContextEmbedding(versionID: String, vector: [Float]) throws {
+        try store.insertContextEmbedding(versionID: versionID, vector: vector)
+    }
     func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws {
         try store.enqueueRetry(kind: kind, versionID: versionID, derivativeID: derivativeID, error: error, nowMs: nowMs)
     }
@@ -120,6 +151,22 @@ final class AppWiring {
     let store: Store
     let pipeline: CapturePipeline
     var observer: FocusObserver?
+    /// Focused-field typing. Nothing is persisted inside it; the LRU is in-actor memory and is
+    /// gone on quit (spec 5c).
+    var typingObserver: TypingObserver?
+    /// Gates the AX READ, per app, before it happens. `onAXNotification` fires ahead of
+    /// `FocusObserver`'s capture debounce and for every value change any element publishes, so
+    /// without this a progress bar would buy a main-actor AX round trip per tick.
+    var typingPollGate = TypingPollGate()
+    /// Thread id of the last capture for a given app window, so a value change arriving BETWEEN
+    /// captures is still attributable even when a different focused field emits it. In-memory
+    /// only, bounded to `TypingObserver.maxTrackedFields` entries, cleared on shutdown.
+    var typingThreadIDs: [TypingThreadKey: String] = [:]
+    var typingThreadIDOrder: [TypingThreadKey] = []
+    /// Most recent successfully captured browser URL per stable window. This is the only browser
+    /// URL source used by focus/typing event policy; it avoids an AX tree walk on those paths.
+    var lastBrowserURLs: [BrowserWindowKey: String] = [:]
+    var lastBrowserURLOrder: [BrowserWindowKey] = []
     let menuBar: MenuBarController
     var pipelineTimer: Timer?
     var captureSummaryTimer: Timer?
@@ -148,6 +195,10 @@ final class AppWiring {
     let displaySummarizer: DisplaySummarizer
     let captureDisplaySummarizer: CaptureDisplaySummarizer
 
+    // Daily check-ins
+    let dailyCheckinGenerator: DailyCheckinGenerator
+    let checkinTrigger: CheckinTrigger
+
     // Agent scheduler
     let agentScheduler: AgentScheduler
     var agentBackgroundScheduler: NSBackgroundActivityScheduler?
@@ -159,6 +210,7 @@ final class AppWiring {
     let captureHealthWindow: CaptureHealthWindow
     let menuPopoverNavigation: MenuPopoverViewModel
     var trayHomeViewModel: TrayHomeViewModel!
+    var checkinViewModel: CheckinViewModel!
 
     init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -210,13 +262,52 @@ final class AppWiring {
         let activityRepo = StoreActivitySummaryRepository(store: store, modelID: config.extractModel)
         let activityRelay = GeminiActivityRelay(
             geminiClient: relay,
-            maxEvidenceChars: 12_000,
             modelID: config.extractModel
         )
-        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay, maxEvidenceChars: 12_000)
+        displaySummarizer = DisplaySummarizer(repo: activityRepo, relay: activityRelay)
         captureDisplaySummarizer = CaptureDisplaySummarizer(
             repo: StoreCaptureSummaryRepository(store: store, modelID: config.extractModel),
             relay: activityRelay
+        )
+
+        let checkinTimeZone = TimeZone.current
+        let checkinDayBucket: @Sendable (EpochMs, TimeZone) -> Int64 = { nowMs, timeZone in
+            var calendar = Calendar.current
+            calendar.timeZone = timeZone
+            let date = Date(timeIntervalSince1970: Double(nowMs) / 1_000)
+            return EpochMs(calendar.startOfDay(for: date).timeIntervalSince1970 * 1_000)
+        }
+        let checkinRepository = StoreCheckinRepository(
+            store: store,
+            clock: epochNowMs,
+            timeZone: checkinTimeZone
+        )
+        let checkinBuilder = CheckinInputBuilder(
+            repo: checkinRepository,
+            timeZone: checkinTimeZone,
+            dayBucket: checkinDayBucket
+        )
+        dailyCheckinGenerator = DailyCheckinGenerator(
+            repo: checkinRepository,
+            relay: activityRelay,
+            builder: checkinBuilder,
+            timeZone: checkinTimeZone
+        )
+        nonisolated(unsafe) let checkinStore = store
+        checkinTrigger = CheckinTrigger(
+            generator: dailyCheckinGenerator,
+            schedule: CheckinSchedule.isAutomaticGenerationEligible,
+            isActivitySynthesisEnabled: {
+                do {
+                    let consent = try checkinStore.activityConsent()
+                    let enabled = try checkinStore.activityEnabled()
+                    return consent == .granted && enabled
+                } catch {
+                    return false
+                }
+            },
+            clock: epochNowMs,
+            timeZone: checkinTimeZone
         )
 
         // Initialize agent scheduler
@@ -405,8 +496,8 @@ final class AppWiring {
         // Capture values needed for settings load closure before self is fully initialized
         let aiServiceAvailable = config.aiServiceConfigured
         let encryptionOK = encryptionAvailable
-        nonisolated(unsafe) let mb = menuBar
-        nonisolated(unsafe) let privacyWindow = activityPrivacyWindow
+        let mb = menuBar
+        let privacyWindow = activityPrivacyWindow
 
         let settingsViewModel = SettingsViewModel(
             load: { @Sendable in
@@ -820,6 +911,48 @@ final class AppWiring {
         menuPopoverNavigation = MenuPopoverViewModel()
 
         // Purpose-built tray home: live state, recent summaries, and private lexical search.
+        nonisolated(unsafe) let trayCheckinStore = store
+        let trayCheckinRepository = checkinRepository
+        let trayCheckinTrigger = checkinTrigger
+        checkinViewModel = CheckinViewModel(
+            load: { @Sendable dayBucket in
+                return await Task.detached(priority: .userInitiated) {
+                    guard let checkin = await trayCheckinRepository.currentCheckin(
+                        dayBucket: dayBucket
+                    ) else {
+                        return nil
+                    }
+                    let openItemIDs = Set(checkin.openItemIDs)
+                    let openItems = await trayCheckinRepository.openItems(limit: 15)
+                        .filter { openItemIDs.contains($0.id) }
+                        .map { CheckinOpenItemDTO(title: $0.title, ageDays: $0.ageDays) }
+                    let isEmptySummary = checkin.summary == nil
+                        || checkin.summary?.range(
+                            of: "nothing meaningful",
+                            options: .caseInsensitive
+                        ) != nil
+                    return CheckinDTO(
+                        dayBucket: checkin.dayBucket,
+                        generatedAtMs: checkin.generatedAtMs,
+                        summary: checkin.summary,
+                        dismissedAtMs: checkin.dismissedAtMs,
+                        isEmptySummary: isEmptySummary,
+                        openItems: openItems
+                    )
+                }.value
+            },
+            dismiss: { @Sendable dayBucket, nowMs in
+                try await Task.detached(priority: .userInitiated) {
+                    try trayCheckinStore.dismissCheckin(dayBucket: dayBucket, nowMs: nowMs)
+                }.value
+            },
+            regenerate: { @Sendable in
+                await trayCheckinTrigger.regenerateNow(nowMs: epochNowMs())
+            },
+            now: { epochNowMs() },
+            timeZone: checkinTimeZone,
+            dayBucket: checkinDayBucket
+        )
         trayHomeViewModel = TrayHomeViewModel(
             loadStatus: { @MainActor [weak self] in
                 guard let self else {
@@ -873,6 +1006,7 @@ final class AppWiring {
             recentCapturesViewModel: recentCapturesViewModel,
             activityViewModel: viewModel,
             actionItemsViewModel: actionItemsViewModel,
+            checkinViewModel: checkinViewModel,
             settingsViewModel: settingsViewModel,
             capturePrivacyViewModel: capturePrivacyViewModel,
             dataControlsViewModel: dataControlsViewModel,
@@ -896,6 +1030,7 @@ final class AppWiring {
                 case .home:
                     await recentCapturesViewModel.refresh()
                     await self.trayHomeViewModel.refresh()
+                    await self.checkinViewModel.refresh()
                 case .settings:
                     await settingsViewModel.refresh()
                     await capturePrivacyViewModel.refresh()
@@ -930,6 +1065,12 @@ final class AppWiring {
             onOpenCaptureHealth: { [weak self] in self?.captureHealthWindow.show() },
             onStartVoiceNote: { [weak self] in
                 Task { await self?.meetingSession?.startVoiceNote() }
+            },
+            onCheckInNow: { [weak self] in
+                guard let checkinTrigger = self?.checkinTrigger else { return }
+                Task.detached {
+                    await checkinTrigger.regenerateNow(nowMs: epochNowMs())
+                }
             },
             onOpenPrivacy: { [weak self] in self?.activityPrivacyWindow.show() },
             onOpenSettings: { [weak self] in
@@ -1004,6 +1145,14 @@ final class AppWiring {
         observer.onFocusChanged = { [weak self] app, isCapturable, pid in
             self?.handleFocusChange(app: app, isCapturable: isCapturable, pid: pid)
         }
+        // Consent and per-app exclusion are checked on the main actor in
+        // `pollFocusedFieldTyping`/`recordTypingEvent` via `isActivityEligible`; the observer's
+        // own predicate is the pure denylist guard (plan Ruling 5).
+        typingObserver = TypingObserver(isEligible: { !Denylist.isSensitiveApp($0) })
+        observer.onAXNotification = { [weak self] isValueChange, bundleID, pid in
+            guard isValueChange else { return }
+            self?.handleValueChangeNotification(bundleID: bundleID, pid: pid)
+        }
         observer.start()
         self.observer = observer
         // Pipeline sweep every 30s: picks up idle/frozen versions and due retries (spec §3a sweeper).
@@ -1011,6 +1160,10 @@ final class AppWiring {
             Task { @MainActor in
                 guard let self, !self.paused else { return }
                 await self.pipeline.tick()
+                let checkinTrigger = self.checkinTrigger
+                Task.detached {
+                    await checkinTrigger.tick(nowMs: epochNowMs())
+                }
                 // Close idle activity sessions (5 min gap)
                 _ = try? self.store.closeIdleSessions(idleGapMs: 5*60_000, nowMs: epochNowMs())
                 // Summarize due sessions if activity enabled
@@ -1076,10 +1229,20 @@ final class AppWiring {
                 outcome: .skipped(.excludedApp),
                 startedAtMs: nowMs
             )
+            return
         }
 
         // Open new visit ONLY if eligible
-        guard isActivityEligible(bundleID: app.bundleID) else { return }
+        let activityEligible = isActivityEligible(bundleID: app.bundleID)
+        guard activityEligible else { return }
+        let privacyApp = AppInfo(
+            bundleID: app.bundleID,
+            name: app.name,
+            windowTitle: nil,
+            windowID: AXReader.focusedWindowID(pid: pid)
+        )
+        let privacyDecision = eventPrivacyDecision(
+            app: privacyApp, isAppEligible: activityEligible)
 
         do {
             let visitID = try store.openVisit(appBundle: app.bundleID, appLabel: app.name, nowMs: nowMs)
@@ -1089,6 +1252,75 @@ final class AppWiring {
                 .error, subsystem: .activity, event: .activityStateWriteFailed, error: error
             )
         }
+
+        // A focus event has no thread and no capture attempt behind it: it fires before parsing,
+        // which is exactly why capture_events.thread_id is nullable (spec 12 Q4). Recorded after
+        // the visit so a failed event write never costs the visit. The window title is content,
+        // so the payload is encrypted like every other one.
+        guard privacyDecision.writesFocusEvent else { return }
+        do {
+            try store.recordCaptureEvent(
+                kind: .focus,
+                appBundle: app.bundleID,
+                threadID: nil,
+                versionID: nil,
+                trigger: .unknown,
+                payload: FocusEventPayload(
+                    bundleID: app.bundleID,
+                    appLabel: app.name,
+                    windowTitle: privacyDecision.includesFocusWindowTitle
+                        ? AXReader.focusedWindowTitle(pid: pid)
+                        : nil
+                ),
+                nowMs: nowMs
+            )
+        } catch {
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .captureEventWriteFailed, error: error
+            )
+        }
+    }
+
+    /// Resolve browser URL policy from the most recent capture for this exact browser window.
+    /// The gate never walks an AX tree: a missing stable window id or remembered URL fails closed
+    /// for typing and redacts a focus title.
+    private func eventPrivacyDecision(
+        app: AppInfo,
+        isAppEligible: Bool
+    ) -> EventPrivacyGate.Decision {
+        guard isAppEligible else {
+            return EventPrivacyGate.decision(
+                bundleID: app.bundleID,
+                isAppEligible: false,
+                browserURL: nil,
+                blockedDomains: [])
+        }
+        guard ApplicationRegistry.isBrowser(app.bundleID) else {
+            return EventPrivacyGate.decision(
+                bundleID: app.bundleID,
+                isAppEligible: true,
+                browserURL: nil,
+                blockedDomains: [])
+        }
+        let blockedDomains: Set<String>
+        do {
+            blockedDomains = try store.blockedDomains()
+        } catch {
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .capturePolicyReadFailed, error: error
+            )
+            return EventPrivacyGate.decision(
+                bundleID: app.bundleID,
+                isAppEligible: false,
+                browserURL: nil,
+                blockedDomains: [])
+        }
+        return EventPrivacyGate.decision(
+            bundleID: app.bundleID,
+            isAppEligible: true,
+            browserURLLookup: { self.lastBrowserURL(for: app) },
+            blockedDomains: blockedDomains
+        )
     }
 
     private func isActivityEligible(bundleID: String) -> Bool {
@@ -1174,6 +1406,11 @@ final class AppWiring {
         meetingPreparationTask = nil
         observer?.stop()
         observer = nil
+        typingObserver = nil
+        typingThreadIDs.removeAll()
+        typingThreadIDOrder.removeAll()
+        lastBrowserURLs.removeAll()
+        lastBrowserURLOrder.removeAll()
         meetingDetector?.stop()
         meetingDetector = nil
 
@@ -1452,6 +1689,9 @@ final class AppWiring {
         do {
             let parsed: ParsedCapture?
             var browserTruncated = false
+            /// The URL this capture navigated TO, for a `navigation` event. Non-nil only on the
+            /// browser path — a native window has no URL to report.
+            var browserURL: String?
 
             // Browsers: engine-aware URL extraction followed by semantic web-app routing.
             if let browser = ApplicationRegistry.browser(for: app.bundleID) {
@@ -1460,6 +1700,7 @@ final class AppWiring {
                 )
                 effectiveParserName = result.parserID
                 browserTruncated = result.truncated
+                browserURL = result.url
                 guard !Denylist.isBlockedWebURL(result.url) else {
                     recordCaptureHealth(
                         app: appInfo, trigger: trigger, parser: effectiveParserName,
@@ -1579,8 +1820,16 @@ final class AppWiring {
                 break
             }
             let nowMs = epochNowMs()
-            let wasTruncated = browserTruncated
-                || (parsed.content.count >= 8_000 && Browser(rawValue: app.bundleID) == nil)
+            // The parser reports its own budgeting; `browserTruncated` adds the one fact the
+            // parser cannot see (the tab text hitting BrowserTabExtractor's cap). The old
+            // `content.count >= 8_000` guess false-positived on every 8k-32k document.
+            let wasTruncated = browserTruncated || parsed.truncated
+            // Read BEFORE the commit overwrites latest_contexts. Only a browser navigation needs
+            // it, so no other capture pays for the read.
+            let previousURL: String? = trigger == .browserNavigation
+                ? ((try? store.previousContextURL(sourceApp: parsed.sourceApp,
+                                                  sourceKey: cleanKey)) ?? nil)
+                : nil
             let envelope = parsed.envelope(
                 cleanSourceKey: cleanKey,
                 parserID: effectiveParserName,
@@ -1588,6 +1837,9 @@ final class AppWiring {
                 truncated: wasTruncated
             )
             let result = try store.commitCapture(envelope, nowMs: nowMs)
+            if let browserURL {
+                rememberBrowserURL(browserURL, for: appInfo)
+            }
 
             // After normal memory capture commits, record activity evidence ONLY if generation matches AND committed (not deduplicated)
             let eligible = isActivityEligible(bundleID: appInfo.bundleID)
@@ -1608,6 +1860,42 @@ final class AppWiring {
                             .error, subsystem: .activity, event: .activityCaptureFailed, error: error
                         )
                     }
+                }
+            }
+
+            // Events are derived signals, so a failed write is logged and dropped — never
+            // allowed to fail the capture that produced it.
+            // `eligible` is the `isActivityEligible(bundleID:)` answer already bound above —
+            // three `Store` reads. It is passed in, never recomputed.
+            if case .committed(let versionID, _, let delta) = result {
+                let eventThreadID: String?
+                do {
+                    eventThreadID = try store.threadID(
+                        sourceApp: parsed.sourceApp, sourceKey: cleanKey)
+                } catch {
+                    SafeLogger.shared.log(
+                        .error, subsystem: .capture, event: .captureEventThreadLookupFailed,
+                        error: error
+                    )
+                    eventThreadID = nil
+                }
+                recordCaptureEvents(
+                    app: appInfo, eligible: eligible, threadID: eventThreadID,
+                    versionID: versionID, result: result, delta: delta, trigger: trigger,
+                    browserURL: browserURL, previousURL: previousURL, nowMs: nowMs
+                )
+                // The capture's own focused element is the primary source: it was resolved from
+                // the tree we already walked. `focusedElementSnapshot` is the fallback for the
+                // shapes that carry no `GenericPage` (conversations, terminals, tasks).
+                let focusedForTyping: FocusedElement? = {
+                    if case .generic(let page) = envelope.structured, let focused = page.focused {
+                        return focused
+                    }
+                    return AXReader.focusedElementSnapshot(pid: pid).map(FocusedElement.init(node:))
+                }()
+                if let focusedForTyping {
+                    recordTypingEvent(app: appInfo, pid: pid, focused: focusedForTyping, trigger: trigger,
+                                      threadID: eventThreadID, versionID: versionID)
                 }
             }
 
@@ -1808,6 +2096,213 @@ final class AppWiring {
             // Diagnostics must never break capture or recursively record their own failure.
             SafeLogger.shared.log(
                 .error, subsystem: .capture, event: .captureHealthWriteFailed
+            )
+        }
+    }
+
+    /// Decides whether this value change is allowed to cost an AX read, BEFORE taking one.
+    ///
+    /// A burst is coalesced into one trailing read rather than dropped, so the last value of the
+    /// burst is still seen — which is the value the user finished typing.
+    private func handleValueChangeNotification(bundleID: String, pid: pid_t) {
+        switch typingPollGate.admit(key: bundleID, nowMs: epochNowMs()) {
+        case .read:
+            pollFocusedFieldTyping(bundleID: bundleID, pid: pid)
+        case .alreadyScheduled:
+            return
+        case .schedule(let afterMs):
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(afterMs))
+                guard let self else { return }
+                self.typingPollGate.completeScheduled(key: bundleID, nowMs: epochNowMs())
+                self.pollFocusedFieldTyping(bundleID: bundleID, pid: pid)
+            }
+        }
+    }
+
+    /// The focused field changed value without a capture running. `focusedElementSnapshot` wakes
+    /// `AXManualAccessibility` itself, so this works for Electron apps that expose nothing until
+    /// an assistive client asks. Never called directly from the notification —
+    /// `handleValueChangeNotification` gates it first.
+    private func pollFocusedFieldTyping(bundleID: String, pid: pid_t) {
+        let privacyApp = AppInfo(
+            bundleID: bundleID,
+            name: bundleID,
+            windowTitle: nil,
+            windowID: AXReader.focusedWindowID(pid: pid)
+        )
+        guard !isShuttingDown, !isLifecycleSuspended,
+              isActivityEligible(bundleID: bundleID),
+              eventPrivacyDecision(
+                app: privacyApp,
+                isAppEligible: true
+              ).writesTypingEvent,
+              let node = AXReader.focusedElementSnapshot(pid: pid) else { return }
+        let app = AppInfo(
+            bundleID: bundleID,
+            name: NSWorkspace.shared.frontmostApplication?.localizedName ?? bundleID,
+            // BOTH window inputs, exactly as the capture path supplies them.
+            // `AXReader.focusedWindowID(pid:)` returns nil for a window with no CGWindowID, and
+            // `FocusedFieldKey` then falls back to the title — so passing `windowTitle: nil` here
+            // would mint a DIFFERENT key from the capture path for the same field, make every
+            // notification a first sighting, and emit nothing for that app forever. Both calls
+            // read `kAXTitleAttribute` of the same focused window, so the titles agree.
+            windowTitle: AXReader.focusedWindowTitle(pid: pid),
+            windowID: privacyApp.windowID
+        )
+        recordTypingEvent(app: app, pid: pid, focused: FocusedElement(node: node),
+                          trigger: .accessibilityChanged, threadID: nil, versionID: nil)
+    }
+
+    /// One `typing` event, if the observer decides the value change was meaningful. The observer
+    /// owns the emit debounce, the diff and the secure-field refusal; this method owns the thread
+    /// attribution and the DB write.
+    private func recordTypingEvent(
+        app: AppInfo,
+        pid: pid_t,
+        focused: FocusedElement,
+        trigger: CaptureTrigger,
+        threadID: String?,
+        versionID: String?
+    ) {
+        guard let typingObserver, !focused.isSecure, !isShuttingDown, !isLifecycleSuspended,
+              isActivityEligible(bundleID: app.bundleID),
+              eventPrivacyDecision(
+                app: app, isAppEligible: true).writesTypingEvent else { return }
+        let fieldKey = FocusedFieldKey(app: app, focused: focused)
+        let threadKey = TypingThreadKey(fieldKey: fieldKey)
+        // The capture path knows the thread; the poll path does not, because no capture ran. Reuse
+        // the thread the latest capture in this SAME app window established, so typing between
+        // captures is still attributable even if a different focused field emitted it. nil until
+        // there has been such a capture, which is one reason capture_events.thread_id is nullable.
+        if let threadID { rememberTypingThreadID(threadID, for: threadKey) }
+        let resolvedThreadID = TypingThreadAttribution.resolve(
+            explicitThreadID: threadID, rememberedThreadIDs: typingThreadIDs, for: threadKey
+        )
+        let nowMs = epochNowMs()
+        Task { @MainActor [weak self] in
+            guard let observedEvent = await typingObserver.observe(
+                focused, key: fieldKey, nowMs: nowMs
+            ),
+                  let self else { return }
+            guard let event = TypingEventPersistenceDecision.eventToPersist(
+                observedEvent,
+                isActivityEligible: self.eventPrivacyDecision(
+                    app: app,
+                    isAppEligible: self.isActivityEligible(bundleID: app.bundleID)
+                ).writesTypingEvent,
+                isObserverActive: self.typingObserver != nil,
+                isCaptureLifecycleActive: !self.isShuttingDown && !self.isLifecycleSuspended
+            ) else {
+                SafeLogger.shared.log(
+                    .info, subsystem: .capture, event: .typingEventDropped
+                )
+                return
+            }
+            do {
+                try self.store.recordCaptureEvent(
+                    kind: .typing, appBundle: app.bundleID, threadID: resolvedThreadID,
+                    versionID: versionID, trigger: trigger, payload: event, nowMs: nowMs
+                )
+            } catch {
+                SafeLogger.shared.log(
+                    .error, subsystem: .capture, event: .captureEventWriteFailed, error: error
+                )
+            }
+        }
+    }
+
+    /// Most-recently-used last, bounded to the observer's field limit. Thread attribution keys
+    /// windows rather than fields, so several fields in one window share one remembered thread.
+    private func rememberTypingThreadID(_ threadID: String, for key: TypingThreadKey) {
+        typingThreadIDOrder.removeAll { $0 == key }
+        typingThreadIDOrder.append(key)
+        typingThreadIDs[key] = threadID
+        while typingThreadIDOrder.count > TypingObserver.maxTrackedFields {
+            typingThreadIDs[typingThreadIDOrder.removeFirst()] = nil
+        }
+    }
+
+    private func lastBrowserURL(for app: AppInfo) -> String? {
+        guard let key = BrowserWindowKey(app: app) else { return nil }
+        return lastBrowserURLs[key]
+    }
+
+    /// Most-recently-used last, with the same small in-memory bound as typing state.
+    private func rememberBrowserURL(_ url: String, for app: AppInfo) {
+        guard let key = BrowserWindowKey(app: app) else { return }
+        lastBrowserURLOrder.removeAll { $0 == key }
+        lastBrowserURLOrder.append(key)
+        lastBrowserURLs[key] = url
+        while lastBrowserURLOrder.count > TypingObserver.maxTrackedFields {
+            lastBrowserURLs[lastBrowserURLOrder.removeFirst()] = nil
+        }
+    }
+
+    /// The `content_delta`, `dialog` and `navigation` events for one committed capture.
+    /// `finishCapture` is the only site that knows the app, the trigger and the previous URL
+    /// (spec 12 Q12), so this is deliberately not in the store.
+    ///
+    /// A `.deduplicated` commit writes nothing: nothing changed, so there is nothing to record.
+    private func recordCaptureEvents(
+        app: AppInfo,
+        // `isActivityEligible(bundleID:)`, evaluated once by the caller. Three `Store` reads per
+        // evaluation, and `finishCapture` already has the answer — so it is a parameter, not a
+        // second call.
+        eligible: Bool,
+        threadID: String?,
+        versionID: String,
+        result: CommitResult,
+        delta: CaptureDelta,
+        trigger: CaptureTrigger,
+        browserURL: String?,
+        previousURL: String?,
+        nowMs: EpochMs
+    ) {
+        guard eligible else { return }
+        // The tested decision retains all warranted event kinds when `threadID` is nil; this
+        // method only supplies their payloads.
+        let events = CaptureEventDecision.events(
+            for: result, trigger: trigger, hasBrowserURL: browserURL != nil, threadID: threadID)
+        guard !events.isEmpty else { return }
+        do {
+            for event in events {
+                switch event.kind {
+                case .contentDelta:
+                    try store.recordCaptureEvent(
+                        kind: .contentDelta, appBundle: app.bundleID, threadID: event.threadID,
+                        versionID: versionID, trigger: trigger, payload: delta, nowMs: nowMs
+                    )
+                case .dialog:
+                    // Non-empty only when a `.dialog` region appeared that the previous capture
+                    // did not have — the comparison happens in `CaptureDelta.between`, the one
+                    // place that sees both sides.
+                    try store.recordCaptureEvent(
+                        kind: .dialog, appBundle: app.bundleID, threadID: event.threadID,
+                        versionID: versionID, trigger: trigger,
+                        payload: DialogEventPayload(
+                            blocks: DialogEventPayload.capped(delta.dialogBlocks)),
+                        nowMs: nowMs
+                    )
+                case .navigation:
+                    // `kinds` only contains `.navigation` when `browserURL != nil`, so the
+                    // force-unwrap-free fallback below is unreachable; it is written as a `guard`
+                    // rather than a `!` so a future change to the rule cannot crash a capture.
+                    guard let newURL = browserURL else { continue }
+                    try store.recordCaptureEvent(
+                        kind: .navigation, appBundle: app.bundleID, threadID: event.threadID,
+                        versionID: versionID, trigger: trigger,
+                        payload: NavigationEventPayload(fromURL: previousURL, toURL: newURL),
+                        nowMs: nowMs
+                    )
+                case .focus, .typing:
+                    // Written by `handleFocusChange` and `recordTypingEvent`, not by a commit.
+                    continue
+                }
+            }
+        } catch {
+            SafeLogger.shared.log(
+                .error, subsystem: .capture, event: .captureEventWriteFailed, error: error
             )
         }
     }

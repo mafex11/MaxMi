@@ -6,8 +6,13 @@ public struct PendingCaptureSummary: Sendable, Equatable {
     public let threadID: String
     public let appLabel: String
     public let sourceTitle: String?
+    public let url: String?
     public let contentKind: CaptureContentKind
-    public let content: String
+    public let capturedAt: EpochMs
+    public let trigger: CaptureTrigger
+    public let structured: CapturedContent
+    public let delta: CaptureDelta
+    public let typedText: String?
     public let expectedSourceHash: String
     public let promptVersion: String
 }
@@ -19,47 +24,104 @@ extension Store {
         limit: Int = 1
     ) throws -> [PendingCaptureSummary] {
         let boundedLimit = min(max(limit, 1), 20)
-        let reviewed = try cloudReviewedSourceApps()
-        let localOnly = try cloudLocalOnlySourceApps()
-        let reviewGateEnabled = try cloudReviewInitialized()
+        let privacy = try sourceCloudEligibility()
         return try db.dbQueue.read { d in
-            try Row.fetchAll(d, sql: """
-                SELECT c.thread_id, c.content_ciphertext, c.content_hash, c.content_kind,
-                       t.source_app, t.source_title
+            let privacySQL = privacy.sqlFilter(
+                sourceAppColumn: "t.source_app",
+                threadIDColumn: "t.id",
+                urlColumn: "t.source_key"
+            )
+            return try Row.fetchAll(d, sql: """
+                SELECT c.thread_id, c.content_ciphertext, c.structured_ciphertext,
+                       c.content_hash, c.content_kind, c.trigger, c.captured_at,
+                       t.source_app, t.source_key, t.source_title,
+                       (SELECT e.payload_ciphertext
+                        FROM capture_events e
+                        WHERE e.kind = 'content_delta' AND e.thread_id = c.thread_id
+                        ORDER BY e.at_ms DESC, e.id DESC
+                        LIMIT 1) AS delta_ciphertext,
+                       (SELECT e.payload_ciphertext
+                        FROM capture_events e
+                        WHERE e.kind = 'typing' AND e.thread_id = c.thread_id
+                        ORDER BY e.at_ms DESC, e.id DESC
+                        LIMIT 1) AS typing_ciphertext
                 FROM latest_contexts c JOIN threads t ON t.id=c.thread_id
-                WHERE c.captured_at <= ?
+                WHERE (\(privacySQL.condition))
+                  AND c.captured_at <= ?
                   AND (
                     c.summary_status='pending'
                     OR (c.summary_status='failed' AND coalesce(c.summary_next_attempt_at, 0) <= ?)
                     OR (
-                        t.source_app='WhatsApp'
-                        AND coalesce(c.summary_prompt_version, '') <> ?
+                        coalesce(c.summary_prompt_version, '') <> CASE
+                            WHEN c.content_kind = 'conversation' THEN ?
+                            ELSE ?
+                        END
                     )
                 )
                 ORDER BY c.captured_at DESC, c.thread_id
-                """, arguments: [
-                    nowMs - settleMs,
-                    nowMs,
-                    CaptureDisplaySummaryFormat.recentConversation,
-                ]).filter { row in
+                """, arguments: StatementArguments(
+                    privacySQL.arguments + [
+                        nowMs - settleMs,
+                        nowMs,
+                        CaptureDisplaySummaryFormat.recentConversation,
+                        CaptureDisplaySummaryFormat.standard,
+                    ]
+                )).filter { row in
                     let sourceApp: String = row["source_app"]
-                    return !reviewGateEnabled || (reviewed.contains(sourceApp) && !localOnly.contains(sourceApp))
+                    let threadID: String = row["thread_id"]
+                    let sourceKey: String = row["source_key"]
+                    return privacy.allows(sourceApp: sourceApp, threadID: threadID, url: sourceKey)
                 }.prefix(boundedLimit).map { row in
                     let contentKind = CaptureContentKind(rawValue: row["content_kind"]) ?? .generic
                     let sourceApp: String = row["source_app"]
+                    let renderedContent = decryptOrMarker(row["content_ciphertext"])
+                    let structured = structuredOrLegacy(
+                        row["structured_ciphertext"] as String?,
+                        renderedContent: renderedContent,
+                        kind: contentKind
+                    )
                     return PendingCaptureSummary(
                         threadID: row["thread_id"],
                         appLabel: sourceApp,
                         sourceTitle: row["source_title"],
+                        url: summaryURL(of: structured),
                         contentKind: contentKind,
-                        content: decryptOrMarker(row["content_ciphertext"]),
+                        capturedAt: row["captured_at"],
+                        trigger: CaptureTrigger(rawValue: row["trigger"]) ?? .unknown,
+                        structured: structured,
+                        delta: decodeSummaryCaptureDelta(row["delta_ciphertext"] as String?) ?? .empty,
+                        typedText: decodeSummaryTypedText(row["typing_ciphertext"] as String?),
                         expectedSourceHash: row["content_hash"],
                         promptVersion: CaptureDisplaySummaryFormat.promptVersion(
                             sourceApp: sourceApp,
                             contentKind: contentKind
                         )
                     )
-                }
+            }
+        }
+    }
+
+    private func decodeSummaryCaptureDelta(_ ciphertext: String?) -> CaptureDelta? {
+        guard let ciphertext, let plaintext = try? cipher.decrypt(ciphertext) else { return nil }
+        return try? JSONDecoder().decode(CaptureDelta.self, from: Data(plaintext.utf8))
+    }
+
+    private func decodeSummaryTypedText(_ ciphertext: String?) -> String? {
+        guard let ciphertext,
+              let plaintext = try? cipher.decrypt(ciphertext),
+              let event = try? JSONDecoder().decode(TypingEvent.self, from: Data(plaintext.utf8))
+        else { return nil }
+        return event.insertedText
+    }
+
+    private func summaryURL(of content: CapturedContent) -> String? {
+        switch content {
+        case .document(let document):
+            return document.url
+        case .generic(let page):
+            return page.url
+        case .conversation, .tasks, .calendar, .terminal:
+            return nil
         }
     }
 

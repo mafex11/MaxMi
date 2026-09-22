@@ -10,8 +10,34 @@ public struct SlackParser: SourceParser {
     public init() {}
 
     public func parseStructured(window: AXNode, app: AppInfo) throws -> CapturedContent? {
-        let messages = messages(in: window, windowX: window.frame?.origin.x ?? 0)
+        extract(window: window, app: app)?.content
+    }
+
+    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
+        guard let extracted = extract(window: window, app: app) else { return nil }
+        return ParsedCapture(
+            sourceApp: "Slack",
+            sourceKey: key(fromTitle: app.windowTitle),
+            sourceTitle: app.windowTitle,
+            content: ContentRenderer.render(extracted.content, style: .full),
+            contentKind: .conversation,
+            parserVersion: 2,
+            accumulationPolicy: .appendItems,
+            offscreenPolicy: .accessibilityScroll(maxSteps: 3),
+            structured: extracted.content,
+            truncated: extracted.truncated
+        )
+    }
+
+    private func extract(
+        window: AXNode,
+        app: AppInfo
+    ) -> (content: CapturedContent, truncated: Bool)? {
+        var messages = messages(in: window, windowX: window.frame?.origin.x ?? 0)
         guard !messages.isEmpty else { return nil }
+        // The composer's current text, so the next summary can see what the user is writing. The
+        // accumulator keeps at most one draft per sender and never merges a draft into history.
+        if let draft = ComposerDraft.draft(window: window) { messages.append(draft) }
         let conversation = Conversation(
             channel: channel(fromTitle: app.windowTitle),
             isGroup: isGroup(fromTitle: app.windowTitle),
@@ -20,22 +46,9 @@ public struct SlackParser: SourceParser {
         // Newest-anchored HARD cap on the STRUCTURED value: the rendered text is derived from it,
         // so capping the string afterwards would be undone by CaptureEnvelope, and one
         // pathological message must not bloat a version unboundedly.
-        return CaptureAccumulator.boundHard(.conversation(conversation), to: Self.contentCap)
-    }
-
-    public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let structured = try parseStructured(window: window, app: app) else { return nil }
-        return ParsedCapture(
-            sourceApp: "Slack",
-            sourceKey: key(fromTitle: app.windowTitle),
-            sourceTitle: app.windowTitle,
-            content: ContentRenderer.render(structured, style: .full),
-            contentKind: .conversation,
-            parserVersion: 2,
-            accumulationPolicy: .appendItems,
-            offscreenPolicy: .accessibilityScroll(maxSteps: 3),
-            structured: structured
-        )
+        let unbounded = CapturedContent.conversation(conversation)
+        let content = CaptureAccumulator.boundHard(unbounded, to: Self.contentCap)
+        return (content, content != unbounded)
     }
 
     /// "<view> - <workspace> - Slack" -> "<view>"; else the whole title.

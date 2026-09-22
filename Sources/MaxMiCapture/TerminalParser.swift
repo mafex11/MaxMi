@@ -36,7 +36,8 @@ public struct TerminalParser: SourceParser {
         // One AX walk per capture: `parse` reads the blob itself (the thread key needs the raw
         // prompt lines) and shares the segmentation with `parseStructured`.
         guard let blob = largestTextArea(in: window), !blob.isEmpty else { return nil }
-        let session = structured(fromScrollback: blob, app: app)
+        let unbounded = unboundedStructured(fromScrollback: blob, app: app)
+        let session = CaptureAccumulator.bound(unbounded, to: Self.contentCap)
         return ParsedCapture(
             sourceApp: app.name,                 // "Warp", "Terminal", "iTerm2"
             sourceKey: terminalKey(app: app, content: blob),
@@ -46,19 +47,24 @@ public struct TerminalParser: SourceParser {
             parserVersion: 2,
             accumulationPolicy: .appendItems,
             offscreenPolicy: .visibleOnly(maxCharacters: 64_000),
-            structured: session
+            structured: session,
+            truncated: session != unbounded
         )
     }
 
     /// The typed session for one scrollback blob.
     func structured(fromScrollback blob: String, app: AppInfo) -> CapturedContent {
+        // Newest-anchored cap on the STRUCTURED value: the rendered text is derived from it,
+        // so capping the string afterwards would just be undone by the renderer.
+        CaptureAccumulator.bound(unboundedStructured(fromScrollback: blob, app: app), to: Self.contentCap)
+    }
+
+    private func unboundedStructured(fromScrollback blob: String, app: AppInfo) -> CapturedContent {
         let session = TerminalSession(
             cwd: sessionCwd(fromTitle: app.windowTitle),
             segments: Self.segments(fromScrollback: blob)
         )
-        // Newest-anchored hard cap on the STRUCTURED value: the rendered text is derived from it,
-        // so capping the string afterwards would just be undone by the renderer.
-        return CaptureAccumulator.bound(.terminal(session), to: Self.contentCap)
+        return .terminal(session)
     }
 
     /// Split the scrollback on prompt lines. Failure to recognise any prompt yields one segment

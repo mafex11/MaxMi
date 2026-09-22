@@ -14,8 +14,13 @@ struct StoreCaptureSummaryRepository: CaptureDisplaySummaryRepository, @unchecke
                     threadID: capture.threadID,
                     appLabel: capture.appLabel,
                     sourceTitle: capture.sourceTitle,
+                    url: capture.url,
                     contentKind: capture.contentKind,
-                    content: capture.content,
+                    capturedAt: capture.capturedAt,
+                    trigger: capture.trigger,
+                    structured: capture.structured,
+                    delta: capture.delta,
+                    typedText: capture.typedText,
                     expectedSourceHash: capture.expectedSourceHash,
                     promptVersion: capture.promptVersion
                 )

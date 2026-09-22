@@ -27,4 +27,31 @@ extension Store {
                 .map { ($0["derivative_id"], $0["distance"]) }
         }
     }
+
+    public func insertContextEmbedding(versionID: String, vector: [Float]) throws {
+        guard vector.count == 1_536 else {
+            throw StoreError.dimensionMismatch(expected: 1_536, got: vector.count)
+        }
+        let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+        try db.dbQueue.write { d in
+            try d.execute(
+                sql: "INSERT OR REPLACE INTO context_embeddings (version_id, embedding) VALUES (?, ?)",
+                arguments: [versionID, blob]
+            )
+        }
+    }
+
+    public func nearestContexts(
+        to vector: [Float],
+        limit: Int
+    ) throws -> [(versionID: String, distance: Double)] {
+        let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+        return try db.dbQueue.read { d in
+            try Row.fetchAll(d, sql: """
+                SELECT version_id, distance FROM context_embeddings
+                WHERE embedding MATCH ? AND k = ? ORDER BY distance
+                """, arguments: [blob, limit])
+                .map { ($0["version_id"], $0["distance"]) }
+        }
+    }
 }

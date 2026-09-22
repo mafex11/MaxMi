@@ -53,6 +53,83 @@ final class MemoryDataControlsTests: XCTestCase {
         XCTAssertEqual(try store.blockedDomains(), ["example.com"])
     }
 
+    func testPruneDeletesContextEmbeddingsForPrunedVersions() throws {
+        guard case .committed(let oldVersionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "old-context", sourceTitle: "Old",
+                         content: "old context content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("old fixture must commit")
+        }
+        guard case .committed(let newVersionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "new-context", sourceTitle: "New",
+                         content: "new context content"),
+            nowMs: t0 + 100_000
+        ) else {
+            return XCTFail("new fixture must commit")
+        }
+        let vector = [Float](repeating: 0.25, count: 1_536)
+        try store.insertContextEmbedding(versionID: oldVersionID, vector: vector)
+        try store.insertContextEmbedding(versionID: newVersionID, vector: vector)
+
+        _ = try store.pruneMemory(olderThan: t0 + 50_000)
+
+        let remaining = try store.db.dbQueue.read { d in
+            try String.fetchAll(d, sql: "SELECT version_id FROM context_embeddings")
+        }
+        XCTAssertEqual(remaining, [newVersionID])
+    }
+
+    func testDeleteAllMemoryDeletesContextEmbeddings() throws {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "context", sourceTitle: "Context",
+                         content: "context content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("fixture must commit")
+        }
+        try store.insertContextEmbedding(
+            versionID: versionID,
+            vector: [Float](repeating: 0.25, count: 1_536)
+        )
+
+        _ = try store.deleteAllMemory()
+
+        let count = try store.db.dbQueue.read { d in
+            try Int.fetchOne(d, sql: "SELECT count(*) FROM context_embeddings")
+        }
+        XCTAssertEqual(count, 0)
+    }
+
+    func testDeleteAllMemoryRemovesCheckinsAndContextEmbeddings() throws {
+        guard case .committed(let versionID, _, _) = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: "combined", sourceTitle: "Combined",
+                         content: "combined content"),
+            nowMs: t0
+        ) else {
+            return XCTFail("fixture must commit")
+        }
+        try store.insertContextEmbedding(
+            versionID: versionID,
+            vector: [Float](repeating: 0.25, count: 1_536)
+        )
+        try store.saveCheckin(
+            dayBucket: 20_833,
+            generatedAtMs: t0,
+            summary: "Combined fixture",
+            openItemIDs: [],
+            resolvedYesterdayCount: 0,
+            promptVersion: "checkin-v1"
+        )
+
+        _ = try store.deleteAllMemory()
+
+        try store.db.dbQueue.read { d in
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM checkins"), 0)
+            XCTAssertEqual(try Int.fetchOne(d, sql: "SELECT count(*) FROM context_embeddings"), 0)
+        }
+    }
+
     func testConsistentBackupCanBeOpened() throws {
         _ = try store.commitCapture(
             CaptureInput(sourceApp: "Web", sourceKey: "one", sourceTitle: "One", content: "content"),
@@ -94,7 +171,7 @@ final class MemoryDataControlsTests: XCTestCase {
             databaseURL: activeURL,
             archiveDirectory: archivesURL
         )
-        XCTAssertEqual(result.migrationIdentifier, "v10")
+        XCTAssertEqual(result.migrationIdentifier, "v13")
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.preservedDatabaseURL.path))
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
@@ -147,36 +224,36 @@ final class MemoryDataControlsTests: XCTestCase {
         XCTAssertEqual(keys, ["unchanged"])
     }
 
-    func testRestoreUpgradesNMinusOneBackupAndPreservesEncryptedRows() throws {
+    func testRestoreUpgradesV11BackupAndPreservesEncryptedRows() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let activeURL = root.appendingPathComponent("maxmi.db")
-        let v8URL = root.appendingPathComponent("maxmi-v8.db")
+        let v11URL = root.appendingPathComponent("maxmi-v11.db")
 
-        let v8 = try MaxMiDatabase(path: v8URL.path, migrate: false)
-        try Migrations.migrator.migrate(v8.dbQueue, upTo: "v8")
+        let v11 = try MaxMiDatabase(path: v11URL.path, migrate: false)
+        try Migrations.migrator.migrate(v11.dbQueue, upTo: "v11")
         // Seeded with the v8 column set on purpose: `Store.commitCapture` writes the CURRENT
         // schema (v10 `structured_ciphertext`), so it cannot be used to fill an old backup.
-        try seedV8Row(v8, content: "encrypted")
-        try v8.dbQueue.inDatabase { try $0.execute(sql: "PRAGMA journal_mode = DELETE") }
-        try v8.dbQueue.close()
+        try seedV8Row(v11, content: "encrypted")
+        try v11.dbQueue.inDatabase { try $0.execute(sql: "PRAGMA journal_mode = DELETE") }
+        try v11.dbQueue.close()
 
         let active = try MaxMiDatabase(path: activeURL.path)
         try active.dbQueue.close()
         let result = try DatabaseRecovery.restore(
-            backupURL: v8URL,
+            backupURL: v11URL,
             databaseURL: activeURL,
             archiveDirectory: root.appendingPathComponent("Backups", isDirectory: true)
         )
-        XCTAssertEqual(result.migrationIdentifier, "v10")
+        XCTAssertEqual(result.migrationIdentifier, "v13")
 
         let restored = try MaxMiDatabase(path: activeURL.path, readOnly: true)
         defer { try? restored.dbQueue.close() }
         try restored.dbQueue.read { database in
             XCTAssertEqual(
                 try String.fetchOne(database, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v10"
+                "v13"
             )
             let ciphertext = try String.fetchOne(database, sql: "SELECT content FROM versions")
             XCTAssertTrue(ciphertext?.hasPrefix("enc:v1:") == true)
@@ -261,5 +338,65 @@ final class MemoryDataControlsTests: XCTestCase {
                           'visibleOnly',0,32000,'unknown',?,?,0)
                 """, arguments: [ciphertext, hash, t0, content.count])
         }
+    }
+
+    private func seedCaptureEvent(atMs: EpochMs, threadKey: String) throws {
+        _ = try store.commitCapture(
+            CaptureInput(sourceApp: "Web", sourceKey: threadKey, sourceTitle: "T",
+                         content: "content \(threadKey)"),
+            nowMs: atMs
+        )
+        try recordCaptureEvent(atMs: atMs, threadID: try store.threadID(forKey: threadKey))
+    }
+
+    private func recordCaptureEvent(atMs: EpochMs, threadID: String?) throws {
+        try store.recordCaptureEvent(
+            kind: .contentDelta,
+            appBundle: "com.example.web",
+            threadID: threadID,
+            versionID: nil,
+            trigger: .periodic,
+            payload: CaptureDelta(addedChars: 4),
+            nowMs: atMs
+        )
+    }
+
+    func testPruneDeletesCaptureEventsOlderThanTheCutoffAndCountsThem() throws {
+        try seedCaptureEvent(atMs: t0, threadKey: "old")
+        try recordCaptureEvent(atMs: t0 + 100_000, threadID: try store.threadID(forKey: "old"))
+        try seedCaptureEvent(atMs: t0 + 100_000, threadKey: "new")
+        try recordCaptureEvent(atMs: t0, threadID: nil)
+        try recordCaptureEvent(atMs: t0 + 100_000, threadID: nil)
+
+        let result = try store.pruneMemory(olderThan: t0 + 50_000)
+        XCTAssertEqual(result.events, 3)
+        let remaining = try store.recentCaptureEvents()
+        let newThreadID = try store.threadID(forKey: "new")
+        XCTAssertEqual(remaining.count, 2)
+        XCTAssertTrue(remaining.contains {
+            $0.threadID == newThreadID && $0.atMs == t0 + 100_000
+        })
+        XCTAssertTrue(remaining.contains { $0.threadID == nil && $0.atMs == t0 + 100_000 })
+        XCTAssertFalse(remaining.contains { $0.threadID == nil && $0.atMs == t0 })
+    }
+
+    func testDeleteAllMemoryRemovesCaptureEventsAndCountsThem() throws {
+        try seedCaptureEvent(atMs: t0, threadKey: "one")
+        try recordCaptureEvent(atMs: t0, threadID: nil)
+        let result = try store.deleteAllMemory()
+        XCTAssertEqual(result.events, 2)
+        XCTAssertTrue(try store.recentCaptureEvents().isEmpty)
+    }
+
+    /// The trim gate must not survive a delete-all: a fresh database should trim on its first
+    /// write, not wait an hour.
+    func testDeleteAllMemoryClearsTheTrimGate() throws {
+        try seedCaptureEvent(atMs: t0, threadKey: "one")
+        _ = try store.deleteAllMemory()
+        let gate = try store.db.dbQueue.read { d in
+            try String.fetchOne(d, sql: "SELECT value FROM settings WHERE key=?",
+                                arguments: [CaptureEventRetention.lastTrimSettingsKey])
+        }
+        XCTAssertNil(gate)
     }
 }

@@ -101,6 +101,13 @@ public final class FocusObserver {
     let isCapturable: @Sendable (String) -> Bool
     let onCapture: @MainActor (AppInfo, pid_t, CaptureTrigger) -> Void
     public var onFocusChanged: (@MainActor (AppInfo, _ isCapturable: Bool, pid_t) -> Void)?
+    /// Every AX notification this observer receives, before it decides whether to schedule a
+    /// capture. `isValueChange` is computed here rather than passing the raw notification name so
+    /// callers do not have to import ApplicationServices to compare it.
+    ///
+    /// The typing observer needs this: a value change on the focused field is exactly the signal
+    /// that the user typed, and it already arrives — no new notification plumbing.
+    public var onAXNotification: (@MainActor (_ isValueChange: Bool, _ bundleID: String, _ pid: pid_t) -> Void)?
 
     var debounceTask: Task<Void, Never>?
     var activationCaptureTask: Task<Void, Never>?
@@ -272,6 +279,8 @@ public final class FocusObserver {
 
     func handleAXNotification(_ notification: String) {
         guard let current else { return }
+        onAXNotification?(notification == kAXValueChangedNotification,
+                          current.bundleID, current.pid)
         let trigger = CaptureNotificationClassifier.trigger(
             notification: notification,
             isBrowser: ApplicationRegistry.isBrowser(current.bundleID),

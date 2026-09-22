@@ -59,7 +59,12 @@ public enum WebAppCaptureParser {
             || isLinkedInMessaging
         let isEmail = app == .gmail || app == .outlook
 
-        let typedMessages = isConversation ? messages(in: window) : []
+        var typedMessages = isConversation ? messages(in: window) : []
+        // Only when there IS a conversation: a draft alone is not a chat, and the generic page
+        // path already carries the composer's text as an `authoredByUser` block.
+        if !typedMessages.isEmpty, let draft = ComposerDraft.draft(window: window) {
+            typedMessages.append(draft)
+        }
         let structured: CapturedContent
         let preservedBoundaries: Bool
         let accumulation: CaptureAccumulationPolicy
@@ -119,7 +124,8 @@ public enum WebAppCaptureParser {
             parserVersion: 2,
             accumulationPolicy: accumulation,
             offscreenPolicy: .accessibilityScroll(maxSteps: 3, maxCharacters: 64_000),
-            structured: structured
+            structured: structured,
+            truncated: truncated
         )
         return WebAppParseResult(
             capture: capture, app: app,

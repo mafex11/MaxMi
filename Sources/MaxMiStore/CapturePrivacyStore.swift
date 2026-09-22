@@ -33,6 +33,117 @@ public enum CloudProcessingState: String, Sendable, Equatable {
     case localOnly
 }
 
+struct SourcePrivacySQL {
+    let condition: String
+    let arguments: [DatabaseValueConvertible?]
+}
+
+/// A frozen snapshot of the source privacy settings used by every cloud/model and reader path.
+///
+/// `pausedThreadIDs` resolves the user-facing paused source keys once, so all consumers answer
+/// the same question using the stable `threads.id` carried by versions and contexts.
+struct SourceCloudEligibility {
+    let reviewedSourceApps: Set<String>
+    let localOnlySourceApps: Set<String>
+    let reviewGateEnabled: Bool
+    let pausedThreadIDs: Set<String>
+    let blockedDomains: Set<String>
+
+    init(
+        reviewedSourceApps: Set<String>,
+        localOnlySourceApps: Set<String>,
+        reviewGateEnabled: Bool,
+        pausedThreadIDs: Set<String> = [],
+        blockedDomains: Set<String> = []
+    ) {
+        self.reviewedSourceApps = reviewedSourceApps
+        self.localOnlySourceApps = localOnlySourceApps
+        self.reviewGateEnabled = reviewGateEnabled
+        self.pausedThreadIDs = pausedThreadIDs
+        self.blockedDomains = blockedDomains
+    }
+
+    /// Whether content for this source/thread may leave local storage for a model or reader.
+    /// Local-only is intentionally checked before the disabled review gate: Keep Local remains
+    /// unconditional even while Minimi-style source review is disabled.
+    func allows(sourceApp: String, threadID: String, url: String?) -> Bool {
+        guard !localOnlySourceApps.contains(sourceApp) else { return false }
+        guard !reviewGateEnabled || reviewedSourceApps.contains(sourceApp) else { return false }
+        guard !pausedThreadIDs.contains(threadID) else { return false }
+        guard let url, URL(string: url)?.host?.isEmpty == false else { return true }
+        return !Denylist.isBlockedByUser(url, blockedDomains: blockedDomains)
+    }
+
+    /// SQL equivalent of `allows(sourceApp:threadID:url:)` for rows that already join `threads`.
+    /// The fragment deliberately treats non-URL source keys as allowed, matching `allows`.
+    func sqlFilter(
+        sourceAppColumn: String,
+        threadIDColumn: String,
+        urlColumn: String
+    ) -> SourcePrivacySQL {
+        var conditions: [String] = []
+        var arguments: [DatabaseValueConvertible?] = []
+
+        if !localOnlySourceApps.isEmpty {
+            let apps = localOnlySourceApps.sorted()
+            conditions.append("\(sourceAppColumn) NOT IN (\(Store.placeholders(apps.count)))")
+            arguments.append(contentsOf: apps)
+        }
+        if reviewGateEnabled {
+            let apps = reviewedSourceApps.sorted()
+            guard !apps.isEmpty else {
+                return SourcePrivacySQL(condition: "0", arguments: [])
+            }
+            conditions.append("\(sourceAppColumn) IN (\(Store.placeholders(apps.count)))")
+            arguments.append(contentsOf: apps)
+        }
+        if !pausedThreadIDs.isEmpty {
+            let ids = pausedThreadIDs.sorted()
+            conditions.append("\(threadIDColumn) NOT IN (\(Store.placeholders(ids.count)))")
+            arguments.append(contentsOf: ids)
+        }
+        if !blockedDomains.isEmpty {
+            let host = Self.sqlHostExpression(for: urlColumn)
+            for domain in blockedDomains.sorted() {
+                conditions.append("(\(host) <> ? AND \(host) NOT LIKE ?)")
+                arguments.append(domain.lowercased())
+                arguments.append("%.\(domain.lowercased())")
+            }
+        }
+        return SourcePrivacySQL(
+            condition: conditions.isEmpty ? "1" : conditions.joined(separator: " AND "),
+            arguments: arguments
+        )
+    }
+
+    private static func sqlHostExpression(for urlColumn: String) -> String {
+        let authority = "substr(\(urlColumn), instr(\(urlColumn), '://') + 3)"
+        let authorityEnd = """
+        min(
+          CASE WHEN instr(\(authority), '/') = 0 THEN length(\(authority)) + 1 ELSE instr(\(authority), '/') END,
+          CASE WHEN instr(\(authority), '?') = 0 THEN length(\(authority)) + 1 ELSE instr(\(authority), '?') END,
+          CASE WHEN instr(\(authority), '#') = 0 THEN length(\(authority)) + 1 ELSE instr(\(authority), '#') END
+        )
+        """
+        let hostAndPort = "substr(\(authority), 1, (\(authorityEnd)) - 1)"
+        let hostWithUserInfoRemoved = """
+        CASE
+          WHEN instr(\(hostAndPort), '@') = 0 THEN \(hostAndPort)
+          ELSE substr(\(hostAndPort), instr(\(hostAndPort), '@') + 1)
+        END
+        """
+        return """
+        lower(
+          CASE
+            WHEN instr(\(urlColumn), '://') = 0 THEN ''
+            WHEN instr(\(hostWithUserInfoRemoved), ':') = 0 THEN \(hostWithUserInfoRemoved)
+            ELSE substr(\(hostWithUserInfoRemoved), 1, instr(\(hostWithUserInfoRemoved), ':') - 1)
+          END
+        )
+        """
+    }
+}
+
 extension Store {
     /// One-time upgrade behavior: sources already present before the review gate shipped retain
     /// their old cloud-processing behavior. Source apps first seen afterwards require review.
@@ -77,6 +188,29 @@ extension Store {
     // for per-source approval (the approval UI is hidden). Was: settingValue == "true". The stored
     // `cloud_review_initialized` value is left intact so the gate can be re-enabled by restoring this.
     public func cloudReviewInitialized() throws -> Bool { false }
+
+    func sourceCloudEligibility() throws -> SourceCloudEligibility {
+        let pausedSourceKeys = try pausedThreads()
+        let pausedThreadIDs: Set<String>
+        if pausedSourceKeys.isEmpty {
+            pausedThreadIDs = []
+        } else {
+            pausedThreadIDs = try db.dbQueue.read { database in
+                Set(try String.fetchAll(
+                    database,
+                    sql: "SELECT id FROM threads WHERE source_key IN (\(Self.placeholders(pausedSourceKeys.count)))",
+                    arguments: StatementArguments(pausedSourceKeys.sorted())
+                ))
+            }
+        }
+        return try SourceCloudEligibility(
+            reviewedSourceApps: cloudReviewedSourceApps(),
+            localOnlySourceApps: cloudLocalOnlySourceApps(),
+            reviewGateEnabled: cloudReviewInitialized(),
+            pausedThreadIDs: pausedThreadIDs,
+            blockedDomains: blockedDomains()
+        )
+    }
 
     public func capturePauseState(nowMs: EpochMs) throws -> CapturePauseState {
         let raw = try settingValue("capture_pause")

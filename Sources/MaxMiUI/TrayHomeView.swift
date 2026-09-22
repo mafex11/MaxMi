@@ -7,6 +7,7 @@ public struct TrayHomeView: View {
     @Bindable private var recentCapturesViewModel: RecentCapturesViewModel
     @Bindable private var activityViewModel: ActivityViewModel
     @Bindable private var actionItemsViewModel: ActionItemsViewModel
+    @Bindable private var checkinViewModel: CheckinViewModel
     private let onTogglePause: @MainActor () -> Void
     private let onStartVoiceNote: @MainActor () -> Void
     private let onOpenMaxMi: @MainActor () -> Void
@@ -17,6 +18,7 @@ public struct TrayHomeView: View {
         recentCapturesViewModel: RecentCapturesViewModel,
         activityViewModel: ActivityViewModel,
         actionItemsViewModel: ActionItemsViewModel,
+        checkinViewModel: CheckinViewModel,
         onTogglePause: @escaping @MainActor () -> Void,
         onStartVoiceNote: @escaping @MainActor () -> Void,
         onOpenMaxMi: @escaping @MainActor () -> Void,
@@ -26,6 +28,7 @@ public struct TrayHomeView: View {
         self.recentCapturesViewModel = recentCapturesViewModel
         self.activityViewModel = activityViewModel
         self.actionItemsViewModel = actionItemsViewModel
+        self.checkinViewModel = checkinViewModel
         self.onTogglePause = onTogglePause
         self.onStartVoiceNote = onStartVoiceNote
         self.onOpenMaxMi = onOpenMaxMi
@@ -38,6 +41,8 @@ public struct TrayHomeView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacing1) {
             header
+            TodayCardView(viewModel: checkinViewModel)
+                .padding(.horizontal, Theme.spacing2)
             sectionRow
             // Variant B (Timeline): rows sit flat on the background with hairline dividers — no card.
             RecentCapturesView(viewModel: recentCapturesViewModel, limit: Self.recentLimit)
@@ -55,6 +60,7 @@ public struct TrayHomeView: View {
             while !Task.isCancelled {
                 await recentCapturesViewModel.refresh()
                 await viewModel.refresh()
+                await checkinViewModel.refresh()
                 try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2s
             }
         }

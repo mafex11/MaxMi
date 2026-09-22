@@ -33,7 +33,7 @@ Every task's requirements implicitly include this section. Values are copied ver
 - **No new network destinations.** Gemini only, one shared `GeminiThrottle` (§8).
 - **Fixtures are hand-scrubbed.** Never commit real page text, messages, file contents, URLs, names, or tokens (`Tests/MaxMiCaptureTests/Fixtures/README.md`). Every new fixture gets a row in that README's table.
 - **Commit messages are plain imperative** ("Add CapturedContent typed capture enum"). **No `Co-Authored-By` trailers, no AI attribution anywhere** — not in commit messages, code comments, or docs.
-- **Live verification ritual** (§9, unchanged): `./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi" && sleep 2 && open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
+- **Live verification ritual** (§9, unchanged): `./packaging/make-app.sh && pkill -9 -x MaxMi && sleep 2 && open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
 
 ### Two deliberate behaviour changes this phase ships
 
@@ -6509,7 +6509,7 @@ Expected: every `…Parser: SourceParser` conformer in `Sources/MaxMiCapture/` h
 - [ ] **Step 4: Rebuild the app (no `tccutil reset`)**
 
 ```bash
-./packaging/make-app.sh && pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi" && sleep 2 && open MaxMi.app
+./packaging/make-app.sh && pkill -9 -x MaxMi && sleep 2 && open MaxMi.app
 ```
 
 **Do NOT run `tccutil reset`.** Signed builds keep the Accessibility grant across rebuilds; resetting it revokes the grant and capture silently stops. Note the wall-clock time of the `open` — every capture you verify must be timestamped strictly after it.

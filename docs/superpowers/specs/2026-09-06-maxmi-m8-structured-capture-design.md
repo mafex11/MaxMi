@@ -474,6 +474,7 @@ Exactly one of the three `added*` arrays is non-empty for any given delta; the o
 -- Migrations.swift: m.registerMigration("v11")
 CREATE TABLE capture_events (
   id                 TEXT PRIMARY KEY,
+  app_bundle         TEXT,
   thread_id          TEXT REFERENCES threads(id) ON DELETE CASCADE,
   version_id         TEXT REFERENCES versions(id) ON DELETE SET NULL,
   at_ms              INTEGER NOT NULL,
@@ -486,7 +487,7 @@ CREATE INDEX idx_capture_events_at     ON capture_events(at_ms DESC, id DESC);
 CREATE INDEX idx_capture_events_thread ON capture_events(thread_id, at_ms DESC);
 ```
 
-`thread_id` is **nullable** because a `focus` event precedes any thread for that window (§12 Q4). `id` is `Ident.uuidv7(nowMs:)`. `trigger` is `CaptureTrigger.rawValue`, or `"unknown"` for events not born of a capture attempt. `hour_bucket` is `HourBucket.bucket(forMs: at_ms)`. `PRAGMA foreign_keys = ON` is already enabled (M6a).
+`app_bundle` is **nullable** plaintext — the same shape and the same reasoning as `activity_app_visits.app_bundle` (`Migrations.swift:96-100`): a bundle id is an identifier, not content, and §11 criterion 4 ("nothing is written for a denylisted, excluded, or non-consented app") is only checkable if a row can be attributed to an app without decrypting its payload. It is nil only for a row whose writer genuinely has no app (none today). `thread_id` is **nullable** because a `focus` event precedes any thread for that window (§12 Q4). `id` is `Ident.uuidv7(nowMs:)`. `trigger` is `CaptureTrigger.rawValue`, or `"unknown"` for events not born of a capture attempt. `hour_bucket` is `HourBucket.bucket(forMs: at_ms)`. `PRAGMA foreign_keys = ON` is already enabled (M6a).
 
 New store type `Sources/MaxMiStore/CaptureEventStore.swift`:
 
@@ -917,7 +918,7 @@ Migration v10/v11 are additive and nullable, so rollback is "ignore the new colu
 
 **Phase D.** `AXQuery`: each grammar token; predicate ANDing; index selection; `domClass` case-insensitivity; cache hit does not change results; invalid path returns nil in release configuration. Per parser, **≥2 recorded, hand-scrubbed AX fixtures with a golden expected `CapturedContent` JSON**, at least one of them with a nonzero window origin. Two specific generic-v2 fixtures are required: a **Finder** window where sidebar folders land in `.sidebar`, column headers and rows in `.main` as `.tableRow`s, and the "Uploading 34 items" status in `.toolbar`; and a **dialog-over-window** case (the Cloudflare WARP quit dialog) where the dialog's blocks land in `.dialog` and survive budget trimming while `main` is trimmed.
 
-**Live verification ritual** (per repo docs, unchanged): `./packaging/make-app.sh`, then `pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"`, then `open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
+**Live verification ritual:** `./packaging/make-app.sh`, then `pkill -9 -x MaxMi`, then `open MaxMi.app`. **No `tccutil reset`** — signed builds keep the Accessibility grant across rebuilds. Verify captures by timestamp strictly after the new process start.
 
 ## 10. Sequencing
 
@@ -1005,6 +1006,10 @@ Three additions the architect approved on 2026-09-07. Each bullet below records 
 - §3 Non-goals — **the daily morning check-in moves from M9 into Phase C** (§14c): a new `checkins` table (migration `v12`, or folded into `v11` if Phase C ships both migrations together — the plan decides and says which), an `AgentPrompts.dailyCheckin` prompt, and a Today card at the top of the `MaxMiUI` popover. **Reminders and reminder slots stay in M9** — Q9 is unchanged, and §14c stores no `remind_at` and sends no slot legend.
 - §4c / §5b / §14a / §14c — **migration identifiers are now allocated in ship order, not per section.** The tree is at `v10` (`Migrations.currentIdentifier = "v10"`, Phase A merged). §5b already declares `v11` for Phase B's `capture_events`; §14a declares `v11` for `context_embeddings` and §14c declares `v12` for `checkins`. These are *relative* labels — Phase B and Phase C are independently shippable (§10) and either can land first, so whichever migration lands first takes `v11` and the rest follow in sequence. Each phase's implementation plan pins its absolute identifier and bumps `Migrations.currentIdentifier` to match. All three migrations are additive and mutually independent, so the ordering is free. `DatabaseRecovery` needs no edit in any ordering: its accept-set is `Set(Migrations.migrator.migrations)` and its head check reads `Migrations.currentIdentifier` (`DatabaseRecovery.swift:106,132`), both derived from the migrator.
 - §7c / Phase D plan — **five web-app parsers registered by host** (Gmail, LinkedIn messaging, Outlook web, Slack web, Teams web) are specified in §14b and appended to the Phase D plan as **tasks 22-26**, after its existing Task 21. They introduce no new type, table or migration; they use `ParserConfig.hosts`, which the Phase D plan already adds in Task 5 for exactly this purpose. Every DOM anchor in §14b is flagged as a **candidate** that must be verified against a live `tools/ax-snapshot-record.swift` dump before use, with the verified set recorded in each parser's header comment.
+- §5b — **`capture_events` gains an `app_bundle TEXT` column (nullable, plaintext), and `Store.recordCaptureEvent` gains an `appBundle:` parameter.** §5b's original DDL carried no app identifier, and the only app name in a row lived inside the encrypted `focus` payload — so §11 exit criterion 4's second half ("nothing is written for a denylisted, excluded, or non-consented app") could not be verified by any query, and the Phase B plan's live check for it was unsound. **Decision:** store the bundle id in its own plaintext column, exactly as `activity_app_visits.app_bundle` already does (`Migrations.swift:96-100`), so `SELECT count(*) FROM capture_events WHERE app_bundle = ? AND at_ms > ?` answers the criterion directly. The column is not indexed: the only query shape is the exit-criterion check and the existing `idx_capture_events_at` covers its time bound. Written by every event site (`focus`, `navigation`, `content_delta`, `dialog`, `typing`), all of which already know the app before they pass the privacy gate.
+- §14c Trigger — **automatic daily check-in generation remains inside `isActivitySynthesisEnabled()`.** The check-in is an Activity feature and therefore requires the existing Activity consent/enablement gate in addition to the first eligible AppWiring pipeline-timer tick at or after 08:00 local. Manual “Check in now” remains the explicit overwrite path.
+- §8 Privacy / relay boundary — **the shared `GeminiThrottle` applies to direct `GeminiClient` traffic only.** `HostedRelayClient` continues to rely on its server-side limits; Phase C adds no hosted-relay throttle abstraction.
+- §9 Live verification ritual — **the authoritative process stop command is `pkill -9 -x MaxMi`.** The former `pkill -9 -f "MaxMi.app/Contents/MacOS/MaxMi"` pattern can match a worker process whose argv includes the ritual text, so it must not be used.
 
 **Amendments (2026-09-07, Phase D plan repair)**
 

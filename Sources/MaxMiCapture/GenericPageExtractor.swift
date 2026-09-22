@@ -73,6 +73,24 @@ public enum GenericPageExtractor {
         var entries: [BlockEntry]
     }
 
+    /// Provenance for the exact block the preferred focused node emitted. `claimOrder` identifies
+    /// the region claim and `entryOrder` identifies the block within the walk; assembly resolves
+    /// those two stable identifiers to the final `.main` block index after sorting and dedup.
+    struct MainFocusAnchor {
+        let claimOrder: Int
+        let entryOrder: Int
+    }
+
+    struct FocusedNode {
+        let node: AXNode
+        let path: [Int]
+    }
+
+    struct Assembly {
+        let regions: [Region]
+        let mainFocusAnchorIndex: Int?
+    }
+
     /// `window` is the node `AXReader.snapshotFrontmostWindow` already resolved. The extractor
     /// never re-resolves it.
     public static func extract(
@@ -81,21 +99,24 @@ public enum GenericPageExtractor {
         url: String?,
         options: Options = Options()
     ) -> Result {
+        let focusedNode = preferredFocusedNode(in: window)
+        let focused = makeFocusedElement(from: focusedNode?.node ?? focusedElement)
         var claims = [Claim(kind: .main,
                             y: window.frame?.minY ?? 0,
                             x: window.frame?.minX ?? 0,
                             order: 0,
                             entries: [])]
         var order = 0
+        var mainFocusAnchor: MainFocusAnchor?
         walk(window, window: window, claimIndex: 0, parentIsSplitGroup: false,
-             listDepth: 0, options: options, order: &order, claims: &claims)
-        let budgeted = applyBudgets(assemble(claims), options: options)
+             listDepth: 0, nodePath: [], focusedPath: focusedNode?.path, options: options,
+             order: &order, mainFocusAnchor: &mainFocusAnchor, claims: &claims)
+        let assembly = assemble(claims, mainFocusAnchor: mainFocusAnchor)
+        let budgeted = applyBudgets(assembly.regions,
+                                    mainFocusAnchorIndex: assembly.mainFocusAnchorIndex,
+                                    options: options)
         return Result(
-            page: GenericPage(
-                regions: budgeted.regions,
-                focused: resolveFocusedElement(in: window, fallback: focusedElement),
-                url: url
-            ),
+            page: GenericPage(regions: budgeted.regions, focused: focused, url: url),
             truncated: budgeted.truncated
         )
     }
@@ -106,8 +127,11 @@ public enum GenericPageExtractor {
         claimIndex: Int,
         parentIsSplitGroup: Bool,
         listDepth: Int,
+        nodePath: [Int],
+        focusedPath: [Int]?,
         options: Options,
         order: inout Int,
+        mainFocusAnchor: inout MainFocusAnchor?,
         claims: inout [Claim]
     ) {
         if menuRoles.contains(node.role) { return }
@@ -128,9 +152,21 @@ public enum GenericPageExtractor {
             currentClaim = claims.count - 1
         }
 
-        if let block = block(for: node, listDepth: listDepth) {
+        if var block = block(for: node, listDepth: listDepth) {
+            // The block the user is typing into. `dedupKey` intentionally ignores authorship, so
+            // marking a block cannot change dedup behaviour.
+            if node.focused, inputRoles.contains(node.role), node.subrole != secureSubrole {
+                block = Block(type: block.type, text: block.text, authoredByUser: true)
+            }
+            let entryOrder = order
             claims[currentClaim].entries.append(BlockEntry(
-                y: node.frame?.minY ?? 0, x: node.frame?.minX ?? 0, order: order, block: block))
+                y: node.frame?.minY ?? 0, x: node.frame?.minX ?? 0, order: entryOrder, block: block))
+            if focusedPath == nodePath, claims[currentClaim].kind == .main {
+                mainFocusAnchor = MainFocusAnchor(
+                    claimOrder: claims[currentClaim].order,
+                    entryOrder: entryOrder
+                )
+            }
             order += 1
             // A node that emits text stops recursion into its own children — this is what
             // prevents a paragraph and its five text runs all appearing.
@@ -138,10 +174,11 @@ public enum GenericPageExtractor {
         }
         let childDepth = listContainerRoles.contains(node.role) ? listDepth + 1 : listDepth
         let childInSplitGroup = node.role == "AXSplitGroup"
-        for child in node.children {
+        for (childIndex, child) in node.children.enumerated() {
             walk(child, window: window, claimIndex: currentClaim,
                  parentIsSplitGroup: childInSplitGroup, listDepth: childDepth,
-                 options: options, order: &order, claims: &claims)
+                 nodePath: nodePath + [childIndex], focusedPath: focusedPath, options: options,
+                 order: &order, mainFocusAnchor: &mainFocusAnchor, claims: &claims)
         }
     }
 
@@ -270,8 +307,9 @@ public enum GenericPageExtractor {
     /// claims in (y, x) order; within a claim, order blocks visually (y, then x, then emission
     /// order) — the same visual ordering `DocumentExtraction.bodyText` applied. Then drop
     /// duplicates of the same shape and text (see `dedupKey`), first occurrence winning.
-    static func assemble(_ claims: [Claim]) -> [Region] {
+    static func assemble(_ claims: [Claim], mainFocusAnchor: MainFocusAnchor?) -> Assembly {
         var regions: [Region] = []
+        var mainFocusAnchorIndex: Int?
         for kind in ContentRenderer.regionOrder {
             let matching = claims
                 .filter { $0.kind == kind && !$0.entries.isEmpty }
@@ -290,29 +328,45 @@ public enum GenericPageExtractor {
                     return $0.order < $1.order
                 }
                 for entry in ordered where seen.insert(dedupKey(entry.block)).inserted {
+                    if kind == .main,
+                       mainFocusAnchor?.claimOrder == claim.order,
+                       mainFocusAnchor?.entryOrder == entry.order {
+                        mainFocusAnchorIndex = blocks.count
+                    }
                     blocks.append(entry.block)
                 }
             }
             guard !blocks.isEmpty else { continue }
             regions.append(Region(kind: kind, blocks: blocks))
         }
-        return regions
+        return Assembly(regions: regions, mainFocusAnchorIndex: mainFocusAnchorIndex)
     }
 
     /// Preferred source is the deepest node in the window tree with `focused == true`; when the
     /// tree has none, the caller's `AXReader.focusedElementSnapshot` result is used. Menu
     /// subtrees are excluded here for the same reason they are excluded from the text walk.
     static func resolveFocusedElement(in window: AXNode, fallback: AXNode?) -> FocusedElement? {
-        var best: (depth: Int, node: AXNode)?
-        func visit(_ node: AXNode, depth: Int) {
+        makeFocusedElement(from: preferredFocusedNode(in: window)?.node ?? fallback)
+    }
+
+    static func preferredFocusedNode(in window: AXNode) -> FocusedNode? {
+        var best: (depth: Int, node: AXNode, path: [Int])?
+        func visit(_ node: AXNode, depth: Int, path: [Int]) {
             if menuRoles.contains(node.role) { return }
             if node.focused, best == nil || depth > best!.depth {
-                best = (depth, node)
+                best = (depth, node, path)
             }
-            for child in node.children { visit(child, depth: depth + 1) }
+            for (childIndex, child) in node.children.enumerated() {
+                visit(child, depth: depth + 1, path: path + [childIndex])
+            }
         }
-        visit(window, depth: 0)
-        guard let node = best?.node ?? fallback else { return nil }
+        visit(window, depth: 0, path: [])
+        guard let best else { return nil }
+        return FocusedNode(node: best.node, path: best.path)
+    }
+
+    static func makeFocusedElement(from node: AXNode?) -> FocusedElement? {
+        guard let node else { return nil }
         let isSecure = node.subrole == secureSubrole
         return FocusedElement(
             role: node.role,

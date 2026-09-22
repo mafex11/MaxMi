@@ -6,9 +6,13 @@ public struct MemoryDeletionResult: Sendable, Equatable {
     public let threads: Int
     public let versions: Int
     public let facts: Int
+    /// `capture_events` rows removed. Reported separately from memories because events are
+    /// derived signals with their own 30-day retention (spec 5b).
+    public let events: Int
 
-    public init(threads: Int, versions: Int, facts: Int) {
+    public init(threads: Int, versions: Int, facts: Int, events: Int) {
         self.threads = threads; self.versions = versions; self.facts = facts
+        self.events = events
     }
 }
 
@@ -96,6 +100,10 @@ extension Store {
 
             try database.execute(sql: "CREATE TEMP TABLE maxmi_prune_threads(id TEXT PRIMARY KEY)")
             try database.execute(sql: "INSERT INTO maxmi_prune_threads SELECT id FROM threads WHERE updated_at < ?", arguments: [cutoffMs])
+            let eventCount = try Int.fetchOne(database, sql: """
+                SELECT count(*) FROM capture_events
+                WHERE at_ms < ? OR thread_id IN (SELECT id FROM maxmi_prune_threads)
+                """, arguments: [cutoffMs]) ?? 0
             try database.execute(sql: "CREATE TEMP TABLE maxmi_prune_versions(id TEXT PRIMARY KEY)")
             try database.execute(sql: """
                 INSERT INTO maxmi_prune_versions
@@ -114,6 +122,13 @@ extension Store {
                 )
                 """)
             try database.execute(sql: """
+                DELETE FROM context_embeddings
+                WHERE version_id IN (SELECT id FROM maxmi_prune_versions)
+                   OR version_id IN (
+                       SELECT id FROM versions WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)
+                   )
+                """)
+            try database.execute(sql: """
                 DELETE FROM retry_queue
                 WHERE version_id IN (SELECT id FROM maxmi_prune_versions)
                    OR derivative_id IN (SELECT id FROM derivatives WHERE thread_id IN (SELECT id FROM maxmi_prune_threads))
@@ -126,6 +141,10 @@ extension Store {
             try database.execute(sql: "DELETE FROM derivatives WHERE version_id IN (SELECT id FROM maxmi_prune_versions)")
             try database.execute(sql: "DELETE FROM versions WHERE id IN (SELECT id FROM maxmi_prune_versions)")
 
+            try database.execute(sql: """
+                DELETE FROM capture_events
+                WHERE at_ms < ? OR thread_id IN (SELECT id FROM maxmi_prune_threads)
+                """, arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM latest_contexts WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)")
             try database.execute(sql: "DELETE FROM meetings WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)")
             try database.execute(sql: "DELETE FROM message_fingerprints WHERE thread_id IN (SELECT id FROM maxmi_prune_threads)")
@@ -140,10 +159,15 @@ extension Store {
             try database.execute(sql: "DELETE FROM agent_runs WHERE coalesce(ended_at, started_at) < ?", arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM capture_health_events WHERE at_ms < ?", arguments: [cutoffMs])
             try database.execute(sql: "DELETE FROM message_fingerprints WHERE seen_at < ?", arguments: [cutoffMs])
+            try database.execute(
+                sql: "DELETE FROM checkins WHERE generated_at_ms < ?",
+                arguments: [cutoffMs]
+            )
 
             try database.execute(sql: "DROP TABLE maxmi_prune_versions")
             try database.execute(sql: "DROP TABLE maxmi_prune_threads")
-            return MemoryDeletionResult(threads: threadCount, versions: versionCount, facts: factCount)
+            return MemoryDeletionResult(threads: threadCount, versions: versionCount,
+                                        facts: factCount, events: eventCount)
         }
     }
 
@@ -152,9 +176,11 @@ extension Store {
             let result = MemoryDeletionResult(
                 threads: try Int.fetchOne(database, sql: "SELECT count(*) FROM threads") ?? 0,
                 versions: try Int.fetchOne(database, sql: "SELECT count(*) FROM versions") ?? 0,
-                facts: try Int.fetchOne(database, sql: "SELECT count(*) FROM derivatives") ?? 0
+                facts: try Int.fetchOne(database, sql: "SELECT count(*) FROM derivatives") ?? 0,
+                events: try Int.fetchOne(database, sql: "SELECT count(*) FROM capture_events") ?? 0
             )
             try database.execute(sql: "DELETE FROM derivative_embeddings")
+            try database.execute(sql: "DELETE FROM context_embeddings")
             try database.execute(sql: "DELETE FROM retry_queue")
             try database.execute(sql: "DELETE FROM agent_action_item_events")
             try database.execute(sql: "DELETE FROM agent_action_items")
@@ -169,7 +195,13 @@ extension Store {
             try database.execute(sql: "DELETE FROM versions")
             try database.execute(sql: "DELETE FROM threads")
             try database.execute(sql: "DELETE FROM capture_health_events")
+            try database.execute(sql: "DELETE FROM capture_events")
+            try database.execute(sql: "DELETE FROM checkins")
             try database.execute(sql: "DELETE FROM settings WHERE key='paused_threads'")
+            // The trim gate must not outlive the rows it was gating, or a fresh database waits an
+            // hour before its first trim.
+            try database.execute(sql: "DELETE FROM settings WHERE key=?",
+                                 arguments: [CaptureEventRetention.lastTrimSettingsKey])
             return result
         }
     }

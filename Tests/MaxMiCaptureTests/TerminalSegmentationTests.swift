@@ -137,4 +137,18 @@ final class TerminalSegmentationTests: XCTestCase {
             window: window(lines.joined(separator: "\n")), app: app()))
         XCTAssertLessThanOrEqual(capture.content.count, TerminalParser.contentCap)
     }
+
+    func testSelfBoundingCaptureReportsTruncation() throws {
+        let small = try XCTUnwrap(try TerminalParser().parse(
+            window: window("dev@mac ~/code/MaxMi % echo ready\nready"), app: app()))
+        XCTAssertFalse(small.truncated)
+
+        let oversize = try XCTUnwrap(try TerminalParser().parse(
+            window: window((0..<400).flatMap {
+                ["dev@mac ~/code/MaxMi % echo \($0)", String(repeating: "y", count: 40)]
+            }.joined(separator: "\n")),
+            app: app()
+        ))
+        XCTAssertTrue(oversize.truncated)
+    }
 }

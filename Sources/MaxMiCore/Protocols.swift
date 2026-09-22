@@ -1,7 +1,11 @@
 import Foundation
 
 public protocol MemoryRelay: Sendable {
-    func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String]
+    func extract(
+        newContent: String,
+        previousContent: String?,
+        metadata: ExtractMetadata
+    ) async throws -> [String]
     func embed(text: String) async throws -> [Float]
 }
 
@@ -26,18 +30,48 @@ public enum RelayError: Error {
 }
 
 public struct PipelineVersion: Sendable, Equatable {
-    public let id: String, threadID: String, content: String, contentHash: String
-    public let sourceApp: String, sourceKey: String
-    public let previousFrozenContent: String?
-    public init(id: String, threadID: String, content: String, contentHash: String,
-                sourceApp: String, sourceKey: String, previousFrozenContent: String?) {
+    public let id: String
+    public let threadID: String
+    public let content: String
+    public let contentHash: String
+    public let sourceApp: String
+    public let sourceKey: String
+    public let sourceTitle: String?
+    public let url: String?
+    public let contentKind: CaptureContentKind
+    public let capturedAt: EpochMs
+    public let renderedDelta: String
+    public let previousCompactContent: String?
+    public let compactContent: String
+
+    public init(
+        id: String,
+        threadID: String,
+        content: String,
+        contentHash: String,
+        sourceApp: String,
+        sourceKey: String,
+        sourceTitle: String?,
+        url: String?,
+        contentKind: CaptureContentKind,
+        capturedAt: EpochMs,
+        renderedDelta: String,
+        previousCompactContent: String?,
+        compactContent: String
+    ) {
         self.id = id
         self.threadID = threadID
         self.content = content
         self.contentHash = contentHash
         self.sourceApp = sourceApp
         self.sourceKey = sourceKey
-        self.previousFrozenContent = previousFrozenContent
+        self.sourceTitle = sourceTitle
+        self.url = url
+        self.contentKind = contentKind
+        self.capturedAt = capturedAt
+        self.renderedDelta = renderedDelta
+        self.previousCompactContent = previousCompactContent
+        self.compactContent = compactContent
     }
 }
 
@@ -51,12 +85,14 @@ public struct PipelineDerivative: Sendable, Equatable {
 
 public protocol MemoryStore: Sendable {
     func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PipelineVersion]
+    func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PipelineVersion]
     func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative]
     func pendingDerivatives(versionID: String) throws -> [PipelineDerivative]
     func markExtracted(versionID: String, contentHashRead: String) throws -> Bool
     func markExtractFailed(versionID: String) throws
     func markEmbedded(derivativeID: String) throws
     func insertEmbedding(derivativeID: String, vector: [Float]) throws
+    func insertContextEmbedding(versionID: String, vector: [Float]) throws
     func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws
     func dueRetries(nowMs: EpochMs) throws -> [(id: String, kind: String, versionID: String?, derivativeID: String?)]
     func clearRetry(id: String) throws

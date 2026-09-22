@@ -3,11 +3,13 @@ import XCTest
 
 final class MockStore: MemoryStore, @unchecked Sendable {
     var work: [PipelineVersion] = []
+    var contextWork: [PipelineVersion] = []
     var insertedFacts: [String] = []
     var newDerivatives: [PipelineDerivative] = []      // what insertDerivatives returns
     var stillPending: [PipelineDerivative] = []
     var embedded: [String] = []
     var vectors: [String: [Float]] = [:]
+    var contextEmbeddingVersionIDs: [String] = []
     var extractedOK: [(String, String)] = []
     var markExtractedResult = true
     var failed: [String] = []
@@ -16,6 +18,7 @@ final class MockStore: MemoryStore, @unchecked Sendable {
     var cleared: [String] = []
 
     func pendingWork(nowMs: EpochMs, idleThresholdMs: EpochMs) throws -> [PipelineVersion] { work }
+    func pendingContextEmbeddingWork(nowMs: EpochMs) throws -> [PipelineVersion] { contextWork }
     func insertDerivatives(versionID: String, threadID: String, facts: [String], nowMs: EpochMs) throws -> [PipelineDerivative] {
         insertedFacts.append(contentsOf: facts); return newDerivatives
     }
@@ -26,6 +29,9 @@ final class MockStore: MemoryStore, @unchecked Sendable {
     func markExtractFailed(versionID: String) throws { failed.append(versionID) }
     func markEmbedded(derivativeID: String) throws { embedded.append(derivativeID) }
     func insertEmbedding(derivativeID: String, vector: [Float]) throws { vectors[derivativeID] = vector }
+    func insertContextEmbedding(versionID: String, vector: [Float]) throws {
+        contextEmbeddingVersionIDs.append(versionID)
+    }
     func enqueueRetry(kind: String, versionID: String?, derivativeID: String?, error: String, nowMs: EpochMs) throws {
         retries.append((kind, versionID, error))
     }
@@ -36,25 +42,55 @@ final class MockStore: MemoryStore, @unchecked Sendable {
 final class MockRelay: MemoryRelay, @unchecked Sendable {
     var extractResult: Result<[String], Error> = .success([])
     var embedResult: Result<[Float], Error> = .success(Array(repeating: 0.1, count: 1536))
-    var extractCalls: [(new: String, prev: String?)] = []
+    var embedResults: [Result<[Float], Error>] = []
+    var extractCalls: [(new: String, previous: String?)] = []
+    var extractMetadata: [ExtractMetadata] = []
     var embedCalls: [String] = []
-    func extract(newContent: String, previousContent: String?, sourceApp: String, sourceKey: String) async throws -> [String] {
-        extractCalls.append((newContent, previousContent)); return try extractResult.get()
+    func extract(
+        newContent: String,
+        previousContent: String?,
+        metadata: ExtractMetadata
+    ) async throws -> [String] {
+        extractCalls.append((newContent, previousContent))
+        extractMetadata.append(metadata)
+        return try extractResult.get()
     }
     func embed(text: String) async throws -> [Float] {
-        embedCalls.append(text); return try embedResult.get()
+        embedCalls.append(text)
+        let result = embedResults.isEmpty ? embedResult : embedResults.removeFirst()
+        return try result.get()
     }
 }
 
 final class PipelineTests: XCTestCase {
-    func version(_ id: String = "v1", prev: String? = nil) -> PipelineVersion {
-        PipelineVersion(id: id, threadID: "t1", content: "page text", contentHash: "hash1",
-                        sourceApp: "Web", sourceKey: "https://e.com", previousFrozenContent: prev)
+    func version(
+        _ id: String = "v1",
+        content: String = "page text",
+        renderedDelta: String = "page delta",
+        previousCompactContent: String? = nil,
+        compactContent: String? = nil
+    ) -> PipelineVersion {
+        PipelineVersion(
+            id: id,
+            threadID: "t1",
+            content: content,
+            contentHash: "hash1",
+            sourceApp: "Web",
+            sourceKey: "https://e.com",
+            sourceTitle: "Example",
+            url: "https://e.com",
+            contentKind: .document,
+            capturedAt: 1_800_000_000_000,
+            renderedDelta: renderedDelta,
+            previousCompactContent: previousCompactContent,
+            compactContent: compactContent ?? content
+        )
     }
     func makeSUT() -> (CapturePipeline, MockStore, MockRelay) {
         let s = MockStore(); let r = MockRelay()
         return (CapturePipeline(store: s, relay: r, clock: { 1_000_000 }), s, r)
     }
+    var unitVector: [Float] { Array(repeating: 0.1, count: 1536) }
 
     func testHappyPathExtractEmbedComplete() async {
         let (p, s, r) = makeSUT()
@@ -70,11 +106,11 @@ final class PipelineTests: XCTestCase {
         XCTAssertEqual(s.extractedOK.first?.1, "hash1", "completes with the hash it READ")
         XCTAssertTrue(s.retries.isEmpty)
     }
-    func testPreviousFrozenContentPassedAsBaseline() async {
+    func testPreviousCompactContentPassedAsContext() async {
         let (p, s, r) = makeSUT()
-        s.work = [version(prev: "old frozen text")]
+        s.work = [version(previousCompactContent: "old compact text")]
         await p.tick()
-        XCTAssertEqual(r.extractCalls.first?.prev, "old frozen text")
+        XCTAssertEqual(r.extractCalls.first?.previous, "old compact text")
     }
     func testNetworkErrorEnqueuesRetryNotFailed() async {
         let (p, s, r) = makeSUT()
@@ -132,14 +168,76 @@ final class PipelineTests: XCTestCase {
     }
     func testUnreadableMemoryMarkerSkipsProcessing() async {
         let (p, s, r) = makeSUT()
-        let corrupt = PipelineVersion(id: "v-bad", threadID: "t1",
-                                      content: "[unreadable memory]", contentHash: "hash1",
-                                      sourceApp: "Web", sourceKey: "https://e.com",
-                                      previousFrozenContent: nil)
+        let corrupt = version("v-bad", content: "[unreadable memory]")
         s.work = [corrupt]
         await p.tick()
         XCTAssertTrue(r.extractCalls.isEmpty, "should not send corruption marker to relay")
         XCTAssertEqual(s.failed, ["v-bad"], "should be marked as failed to prevent reprocessing")
         XCTAssertTrue(s.extractedOK.isEmpty, "should not be marked as extracted")
+    }
+
+    func testPipelineExtractsRenderedDeltaWithPreviousCompactContext() async {
+        let (pipeline, store, relay) = makeSUT()
+        store.work = [version(
+            renderedDelta: "Added database migration.",
+            previousCompactContent: "Earlier migration context."
+        )]
+
+        await pipeline.tick()
+
+        let calls = await relay.extractCalls
+        let metadata = await relay.extractMetadata
+        XCTAssertEqual(calls.first?.new, "Added database migration.")
+        XCTAssertEqual(calls.first?.previous, "Earlier migration context.")
+        XCTAssertEqual(metadata.first?.kind, .document)
+    }
+
+    func testOneContextEmbeddingFollowsDerivativeEmbeddingsAndCompletesExtraction() async {
+        let (pipeline, store, relay) = makeSUT()
+        store.work = [version(compactContent: "A useful captured page that is longer than forty characters.")]
+        store.newDerivatives = [.init(id: "d1", content: "Fact.")]
+
+        await pipeline.tick()
+
+        XCTAssertEqual(relay.embedCalls, [
+            "Fact.",
+            "Web · Example\nA useful captured page that is longer than forty characters.",
+        ])
+        XCTAssertEqual(store.contextEmbeddingVersionIDs, ["v1"])
+        XCTAssertEqual(store.extractedOK.map(\.0), ["v1"])
+    }
+
+    func testShortContextContentIsNotEmbeddedOrRetried() async {
+        let (pipeline, store, relay) = makeSUT()
+        store.work = [version(compactContent: String(repeating: "x", count: 39))]
+
+        await pipeline.tick()
+
+        XCTAssertTrue(store.contextEmbeddingVersionIDs.isEmpty)
+        XCTAssertFalse(store.retries.contains { $0.kind == "embed_version" })
+        XCTAssertEqual(relay.embedCalls, [])
+    }
+
+    func testContextEmbedFailureEnqueuesEmbedVersionButDoesNotFailExtraction() async {
+        let (pipeline, store, relay) = makeSUT()
+        store.work = [version(compactContent: String(repeating: "x", count: 40))]
+        store.newDerivatives = [.init(id: "d1", content: "Fact.")]
+        relay.embedResults = [.success(unitVector), .failure(RelayError.httpStatus(429))]
+
+        await pipeline.tick()
+
+        XCTAssertTrue(store.retries.contains { $0.kind == "embed_version" && $0.versionID == "v1" })
+        XCTAssertEqual(store.extractedOK.map(\.0), ["v1"])
+        XCTAssertTrue(store.failed.isEmpty)
+    }
+
+    func testPendingContextEmbeddingWorkEmbedsWithoutExtractingAgain() async {
+        let (pipeline, store, relay) = makeSUT()
+        store.contextWork = [version(compactContent: String(repeating: "x", count: 40))]
+
+        await pipeline.tick()
+
+        XCTAssertEqual(store.contextEmbeddingVersionIDs, ["v1"])
+        XCTAssertTrue(relay.extractCalls.isEmpty)
     }
 }

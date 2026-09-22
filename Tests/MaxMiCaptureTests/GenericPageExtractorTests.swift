@@ -251,4 +251,39 @@ final class GenericPageExtractorTests: XCTestCase {
         XCTAssertEqual(options.restShare, 0.15)
         XCTAssertEqual(options.offscreenPolicy.mode, .visibleOnly)
     }
+
+    /// The block the user is typing into is marked, so the next capture's summary can say the
+    /// user wrote it rather than that the page contains it.
+    func testFocusedInputBlockIsMarkedAuthoredByUser() {
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "Note", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 800, height: 600), focused: false,
+            children: [
+                AXNode(role: "AXStaticText", value: "existing paragraph", title: nil, url: nil,
+                       frame: CGRect(x: 0, y: 0, width: 400, height: 18), focused: false,
+                       children: []),
+                AXNode(role: "AXTextArea", value: "the line I am writing", title: nil, url: nil,
+                       frame: CGRect(x: 0, y: 30, width: 400, height: 18), focused: true,
+                       children: [], identifier: "body"),
+            ])
+        let page = GenericPageExtractor.extract(window: window, focusedElement: nil, url: nil).page
+        let blocks = page.regions.flatMap(\.blocks)
+        XCTAssertEqual(blocks.filter(\.authoredByUser).map(\.text), ["the line I am writing"])
+        XCTAssertFalse(try! XCTUnwrap(blocks.first).authoredByUser)
+    }
+
+    func testFocusedSecureFieldIsNotMarkedAuthoredByUser() {
+        let window = AXNode(
+            role: "AXWindow", value: nil, title: "Login", url: nil,
+            frame: CGRect(x: 0, y: 0, width: 400, height: 200), focused: false,
+            children: [
+                AXNode(role: "AXTextField", value: nil, title: nil, url: nil,
+                       frame: CGRect(x: 0, y: 0, width: 200, height: 18), focused: true,
+                       children: [], subrole: GenericPageExtractor.secureSubrole),
+            ])
+        let blocks = GenericPageExtractor.extract(window: window, focusedElement: nil, url: nil)
+            .page.regions.flatMap(\.blocks)
+        XCTAssertEqual(blocks.map(\.text), [GenericPageExtractor.secureMask])
+        XCTAssertFalse(blocks[0].authoredByUser)
+    }
 }
