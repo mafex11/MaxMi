@@ -39,7 +39,6 @@ public enum GenericPageExtractor {
         "AXButton", "AXLink", "AXMenuItem", "AXCheckBox", "AXRadioButton", "AXImage",
     ]
     static let listContainerRoles: Set<String> = ["AXList", "AXOutline"]
-    static let secureSubrole = "AXSecureTextField"
     static let secureMask = "«secure field»"
     static let dialogRoles: Set<String> = ["AXSheet", "AXDialog", "AXPopover"]
     static let dialogSubroles: Set<String> = ["AXDialog", "AXSystemDialog"]
@@ -155,7 +154,7 @@ public enum GenericPageExtractor {
         if var block = block(for: node, listDepth: listDepth) {
             // The block the user is typing into. `dedupKey` intentionally ignores authorship, so
             // marking a block cannot change dedup behaviour.
-            if node.focused, inputRoles.contains(node.role), !isSecure(node) {
+            if node.focused, inputRoles.contains(node.role), !node.isSecureField {
                 block = Block(type: block.type, text: block.text, authoredByUser: true)
             }
             let entryOrder = order
@@ -191,7 +190,7 @@ public enum GenericPageExtractor {
 
     static func block(for node: AXNode, listDepth: Int) -> Block? {
         // Checked first and at any role: a secure field's value is never read.
-        if isSecure(node) {
+        if node.isSecureField {
             return Block(type: .input(placeholder: nil), text: secureMask)
         }
         if node.role == "AXHeading" {
@@ -261,7 +260,7 @@ public enum GenericPageExtractor {
             if menuRoles.contains(current.role) || current.hidden { return }
             // A cell is not a loophole around the secure-field rule: the value is never read here
             // either, and the subtree is not descended into.
-            if isSecure(current) { return }
+            if current.isSecureField { return }
             if roles.contains(current.role) {
                 let text = readableText(current)
                 if !text.isEmpty {
@@ -367,7 +366,7 @@ public enum GenericPageExtractor {
 
     static func makeFocusedElement(from node: AXNode?) -> FocusedElement? {
         guard let node else { return nil }
-        let isSecure = isSecure(node)
+        let isSecure = node.isSecureField
         return FocusedElement(
             role: node.role,
             identifier: node.identifier,
@@ -377,9 +376,4 @@ public enum GenericPageExtractor {
         )
     }
 
-    /// Accessibility represents secure text either as the role itself or as a secure subrole.
-    /// Keep this at the extraction boundary so all parser consumers inherit the redaction.
-    static func isSecure(_ node: AXNode) -> Bool {
-        node.role == secureSubrole || node.subrole?.localizedCaseInsensitiveContains("secure") == true
-    }
 }

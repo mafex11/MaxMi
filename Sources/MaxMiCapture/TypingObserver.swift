@@ -286,7 +286,7 @@ extension FocusedElement {
             identifier: node.identifier,
             value: node.value,
             selectedText: node.selectedText,
-            isSecure: node.subrole == GenericPageExtractor.secureSubrole
+            isSecure: node.isSecureField
         )
     }
 }

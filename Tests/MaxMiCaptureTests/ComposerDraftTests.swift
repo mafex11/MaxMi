@@ -37,7 +37,7 @@ final class ComposerDraftTests: XCTestCase {
     func testNoDraftForASecureField() {
         let window = node(role: "AXWindow", value: nil, children: [
             node(role: "AXTextField", value: "hunter2", identifier: "password", focused: true,
-                 subrole: GenericPageExtractor.secureSubrole),
+                 subrole: "AXSecureTextField"),
         ])
         XCTAssertNil(ComposerDraft.draft(window: window))
     }

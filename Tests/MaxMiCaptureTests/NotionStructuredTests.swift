@@ -125,7 +125,7 @@ final class NotionStructuredTests: XCTestCase {
                 node("AXSecureTextField", value: secrets[0],
                      frame: CGRect(x: 300, y: 200, width: 400, height: 24)),
                 node("AXStaticText", value: secrets[1],
-                     subrole: GenericPageExtractor.secureSubrole, selectedText: secrets[2],
+                     subrole: "AXSecureTextField", selectedText: secrets[2],
                      frame: CGRect(x: 300, y: 240, width: 400, height: 24)),
             ]),
             context: context("Roadmap — Notion")))

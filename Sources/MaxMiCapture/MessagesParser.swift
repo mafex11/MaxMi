@@ -68,7 +68,7 @@ extension MessagesParser: StructuredParser {
     static func bubbles(in snapshot: AXNode) -> [AXNode] {
         let found = AXQuery.all(in: snapshot) {
             bubbleRoles.contains($0.role)
-                && $0.subrole != GenericPageExtractor.secureSubrole
+                && !$0.isSecureField
                 && ($0.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
         }
         return AXQuery.sortedByVisualOrder(found, relativeTo: snapshot.frame)

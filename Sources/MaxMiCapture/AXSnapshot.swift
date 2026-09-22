@@ -113,3 +113,12 @@ public struct AXNode: Codable, Sendable {
 }
 
 extension AXNode: Equatable {}
+
+public extension AXNode {
+    /// Accessibility represents secure inputs either as the secure text-field role itself or
+    /// with a role-specific subrole containing "secure". Every capture path shares this rule.
+    var isSecureField: Bool {
+        role == "AXSecureTextField"
+            || subrole?.localizedCaseInsensitiveContains("secure") == true
+    }
+}

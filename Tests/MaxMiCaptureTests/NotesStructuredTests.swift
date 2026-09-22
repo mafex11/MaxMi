@@ -113,7 +113,7 @@ final class NotesStructuredTests: XCTestCase {
                 node("AXSecureTextField", value: secrets[0],
                      frame: CGRect(x: 320, y: 180, width: 300, height: 24)),
                 node("AXTextField", value: secrets[1],
-                     subrole: GenericPageExtractor.secureSubrole, selectedText: secrets[2],
+                     subrole: "AXSecureTextField", selectedText: secrets[2],
                      frame: CGRect(x: 320, y: 220, width: 300, height: 24)),
             ]),
             context: context("Private note")))

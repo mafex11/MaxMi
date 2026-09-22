@@ -19,6 +19,12 @@ public enum AXReader {
         return !forced.intersection(domAttributeNames).isEmpty
     }
 
+    /// The reader's security gate deliberately delegates to the shared AX-node policy. Keeping
+    /// the gate separately testable verifies that `convert` stops before secret-bearing reads.
+    static func stopsAtSecureField(_ metadata: AXNode) -> Bool {
+        metadata.isSecureField
+    }
+
     /// The CGWindowID of the app's currently focused window, or nil. Stable while the window lives.
     public static func focusedWindowID(pid: pid_t) -> UInt32? {
         let app = AXUIElementCreateApplication(pid)
@@ -111,8 +117,14 @@ public enum AXReader {
         // masking after the fact would still have put the secret in this process's memory and in
         // `AXNode`, where any consumer could pick it up.
         let subrole = copyAttr(el, kAXSubroleAttribute) as? String
-        let isSecure = subrole == GenericPageExtractor.secureSubrole
-        let rawValue = isSecure ? nil : copyAttr(el, kAXValueAttribute)
+        let metadata = AXNode(
+            role: role, value: nil, title: nil, url: nil, frame: nil, focused: false,
+            children: [], subrole: subrole
+        )
+        // Do not read value/selected text or descend into a secure node. Its children can expose
+        // the secret through static-text descendants even when the field itself is masked.
+        guard !stopsAtSecureField(metadata) else { return metadata }
+        let rawValue = copyAttr(el, kAXValueAttribute)
         let value = (rawValue as? String) ?? (rawValue as? NSNumber)?.stringValue
         let title = copyAttr(el, kAXTitleAttribute) as? String
         // AXURL (WebKit/Gecko) then AXDocument (Chromium) — spec §5 primary URL source.
@@ -132,7 +144,7 @@ public enum AXReader {
         let headingLevel = role == "AXHeading"
             ? (copyAttr(el, "AXHeadingLevel") as? NSNumber)?.intValue
             : nil
-        let isTextEntry = Self.textEntryRoles.contains(role) && !isSecure
+        let isTextEntry = Self.textEntryRoles.contains(role)
         let placeholder = isTextEntry ? copyAttr(el, kAXPlaceholderValueAttribute) as? String : nil
         let selectedText = isTextEntry ? copyAttr(el, kAXSelectedTextAttribute) as? String : nil
         // Web/Electron DOM anchors. Gated so native subtrees pay nothing for them.

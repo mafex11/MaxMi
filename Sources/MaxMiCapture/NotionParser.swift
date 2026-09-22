@@ -72,7 +72,7 @@ extension NotionParser: StructuredParser {
     static func blocks(under root: AXNode) -> [Block] {
         var found: [AXNode] = []
         func visit(_ node: AXNode) {
-            if node.hidden || node.subrole == GenericPageExtractor.secureSubrole { return }
+            if node.hidden || node.isSecureField { return }
             let classes = (node.domClassList ?? []).map { $0.lowercased() }
             if skippedClasses.contains(where: { skipped in
                 classes.contains { $0.contains(skipped) }

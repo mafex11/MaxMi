@@ -140,7 +140,7 @@ final class AXQueryHelperTests: XCTestCase {
             role: "AXTextField", value: "hunter2", title: nil, url: nil,
             frame: CGRect(x: 0, y: 0, width: 80, height: 16), focused: false,
             children: [text("hunter2", y: 0, x: 0)], identifier: nil, label: nil,
-            subrole: GenericPageExtractor.secureSubrole, headingLevel: nil, selected: false,
+            subrole: "AXSecureTextField", headingLevel: nil, selected: false,
             placeholder: nil, selectedText: nil, hidden: false, domClassList: nil,
             domIdentifier: nil)
         let root = node("AXGroup", children: [

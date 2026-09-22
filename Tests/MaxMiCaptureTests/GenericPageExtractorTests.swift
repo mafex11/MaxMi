@@ -280,7 +280,7 @@ final class GenericPageExtractorTests: XCTestCase {
             children: [
                 AXNode(role: "AXTextField", value: nil, title: nil, url: nil,
                        frame: CGRect(x: 0, y: 0, width: 200, height: 18), focused: true,
-                       children: [], subrole: GenericPageExtractor.secureSubrole),
+                       children: [], subrole: "AXSecureTextField"),
             ])
         let blocks = GenericPageExtractor.extract(window: window, focusedElement: nil, url: nil)
             .page.regions.flatMap(\.blocks)

@@ -44,8 +44,7 @@ public enum ComposerDraft {
     static func focusedComposer(_ node: AXNode, inMessageList: Bool) -> AXNode? {
         if GenericPageExtractor.menuRoles.contains(node.role) { return nil }
         let inList = inMessageList || messageListContainerRoles.contains(node.role)
-        if node.focused, composerRoles.contains(node.role),
-           node.subrole != GenericPageExtractor.secureSubrole, !inList {
+        if node.focused, composerRoles.contains(node.role), !node.isSecureField, !inList {
             return node
         }
         for child in node.children {

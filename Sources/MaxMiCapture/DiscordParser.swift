@@ -131,9 +131,7 @@ extension DiscordParser: StructuredParser {
     private static func textNodesInTreeOrder(_ node: AXNode) -> [TextNode] {
         var result: [TextNode] = []
         func visit(_ current: AXNode, path: [Int]) {
-            guard current.subrole != GenericPageExtractor.secureSubrole,
-                  current.role != "AXSecureTextField"
-            else { return }
+            guard !current.isSecureField else { return }
             if ["AXStaticText", "AXHeading"].contains(current.role),
                let value = (current.value ?? current.title)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !value.isEmpty {

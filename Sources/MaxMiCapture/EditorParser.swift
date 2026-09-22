@@ -55,7 +55,7 @@ public struct EditorParser: SourceParser, StructuredParser {
 
     static func editorTextArea(in snapshot: AXNode) -> AXNode? {
         AXQuery.findAll("//AXGroup[identifier*=\"editor\"]//AXTextArea", in: snapshot)
-            .filter { $0.subrole != GenericPageExtractor.secureSubrole }
+            .filter { !$0.isSecureField }
             .filter { ($0.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
             .max { ($0.value ?? "").count < ($1.value ?? "").count }
     }

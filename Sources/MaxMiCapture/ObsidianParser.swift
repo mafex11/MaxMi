@@ -80,7 +80,7 @@ extension ObsidianParser: StructuredParser {
         let texts = AXQuery.all(in: pane) {
             ($0.role == "AXHeading" || $0.role == "AXStaticText")
                 && !$0.hidden
-                && $0.subrole != GenericPageExtractor.secureSubrole
+                && !$0.isSecureField
         }
         var seen = Set<String>()
         let blocks = AXQuery.sortedByVisualOrder(texts, relativeTo: pane.frame)

@@ -104,8 +104,7 @@ extension SlackParser: StructuredParser {
     private static func staticTextNodes(in root: AXNode) -> [TextNode] {
         var found: [TextNode] = []
         func visit(_ node: AXNode, path: [Int]) {
-            if AXQuery.menuRoles.contains(node.role) || node.hidden
-                || GenericPageExtractor.isSecure(node) {
+            if AXQuery.menuRoles.contains(node.role) || node.hidden || node.isSecureField {
                 return
             }
             if node.role == "AXStaticText",

@@ -69,6 +69,17 @@ final class AXNodeDOMAttributeTests: XCTestCase {
             role: "AXGroup", inWebArea: false, forced: ["AXDOMIdentifier"]))
         XCTAssertFalse(AXReader.readsDOMAttributes(
             role: "AXGroup", inWebArea: false, forced: ["AXHeadingLevel"]),
-            "only the two DOM attribute names are honoured")
+                      "only the two DOM attribute names are honoured")
+    }
+
+    func testReaderStopsAtAnUnusuallyNamedSecureField() {
+        let secure = AXNode(
+            role: "AXTextField", value: nil, title: nil, url: nil, frame: nil,
+            focused: false, children: [], subrole: "VendorSecureEntry"
+        )
+
+        XCTAssertTrue(secure.isSecureField)
+        XCTAssertTrue(AXReader.stopsAtSecureField(secure),
+                      "the reader must not read values or descend past unusual secure subroles")
     }
 }

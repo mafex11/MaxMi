@@ -66,7 +66,7 @@ public struct NotesParser: SourceParser, StructuredParser {
 
     private func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
         guard let body = AXQuery.find("//*[identifier=\"\(Self.bodyIdentifier)\"]", in: snapshot),
-              body.subrole != GenericPageExtractor.secureSubrole,
+              !body.isSecureField,
               let raw = body.value,
               !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
