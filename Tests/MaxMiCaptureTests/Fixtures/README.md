@@ -22,6 +22,12 @@ Fixtures contain scrubbed Accessibility-tree shapes and invented content only.
 | `dom-attributes.json` | Hand-authored web-area DOM shape at a nonzero window origin | `AXNode` decoding of `domClassList`/`domIdentifier`, `AXQuery` `domClass`/`domId` predicates |
 | `slack-composer-draft.json` | Hand-authored Slack-shaped window at a nonzero origin with a focused composer, plus a second focused text area inside the message `AXList` | `ComposerDraft` picking the composer, not the list descendant |
 | `generic-empty-golden.json` | Hand-authored deterministic `CapturedContentEnvelope` for an empty generic page | Fixture loader golden encoder/decoder |
+<!-- lane-c begin -->
+| `finder-list.json` | Hand-authored scrubbed Finder list-view shape at the screen origin | `FinderParser` sidebar, listing, selection and toolbar regions |
+| `finder-list-golden.json` | Golden `CapturedContentEnvelope` for `finder-list.json` | `FinderParser` |
+| `finder-offset-copy.json` | Hand-authored scrubbed Finder copy-progress shape at a nonzero screen origin | `FinderParser` sidebar, listing, selection and toolbar regions |
+| `finder-offset-copy-golden.json` | Golden `CapturedContentEnvelope` for `finder-offset-copy.json` | `FinderParser` |
+<!-- lane-c end -->
 
 Never commit real page text, messages, file contents, URLs, names, or tokens. Preserve only the
 minimum role/frame structure required for a regression test.

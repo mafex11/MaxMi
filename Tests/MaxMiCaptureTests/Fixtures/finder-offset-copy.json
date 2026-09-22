@@ -1,0 +1,53 @@
+{
+  "role": "AXWindow", "value": null, "title": "project", "url": "file:///sample-root/project",
+  "frame": {"x":1440,"y":220,"width":1200,"height":800}, "focused": false, "children": [
+    {"role": "AXToolbar", "value": null, "title": null, "url": null,
+     "frame": {"x":1440,"y":220,"width":1200,"height":40}, "focused": false, "children": [
+      {"role": "AXStaticText", "value": "Uploading 34 items", "title": null, "url": null,
+       "frame": {"x":1840,"y":228,"width":260,"height":20}, "focused": false, "children": []}
+    ]},
+    {"role": "AXSplitGroup", "value": null, "title": null, "url": null,
+     "frame": {"x":1440,"y":260,"width":1200,"height":760}, "focused": false, "children": [
+      {"role": "AXGroup", "value": null, "title": null, "url": null, "identifier": "Finder.sidebar",
+       "frame": {"x":1440,"y":260,"width":240,"height":760}, "focused": false, "children": [
+        {"role": "AXOutline", "value": null, "title": null, "url": null,
+         "frame": {"x":1440,"y":260,"width":240,"height":760}, "focused": false, "children": [
+          {"role": "AXRow", "value": null, "title": null, "url": null,
+           "frame": {"x":1450,"y":300,"width":220,"height":20}, "focused": false, "children": [
+            {"role": "AXStaticText", "value": "Downloads", "title": null, "url": null,
+             "frame": {"x":1450,"y":300,"width":200,"height":16}, "focused": false, "children": []}
+          ]}
+        ]}
+      ]},
+      {"role": "AXTable", "value": null, "title": null, "url": null,
+       "frame": {"x":1680,"y":260,"width":960,"height":760}, "focused": false, "children": [
+        {"role": "AXRow", "value": null, "title": null, "url": null,
+         "frame": {"x":1680,"y":320,"width":960,"height":20}, "focused": false, "children": [
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":1680,"y":320,"width":160,"height":20}, "focused": false, "children": [
+            {"role": "AXStaticText", "value": "Archive.zip", "title": null, "url": null,
+             "frame": {"x":1680,"y":320,"width":160,"height":16}, "focused": false, "children": []}
+          ]},
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":2040,"y":320,"width":160,"height":20}, "focused": false, "children": [
+            {"role": "AXStaticText", "value": "3 KB", "title": null, "url": null,
+             "frame": {"x":2040,"y":320,"width":160,"height":16}, "focused": false, "children": []}
+          ]}
+        ]},
+        {"role": "AXRow", "value": null, "title": null, "url": null, "selected": true,
+         "frame": {"x":1680,"y":350,"width":960,"height":20}, "focused": false, "children": [
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":1680,"y":350,"width":160,"height":20}, "focused": false, "children": [
+            {"role": "AXStaticText", "value": "Guide.md", "title": null, "url": null,
+             "frame": {"x":1680,"y":350,"width":160,"height":16}, "focused": false, "children": []}
+          ]},
+          {"role": "AXCell", "value": null, "title": null, "url": null,
+           "frame": {"x":2040,"y":350,"width":160,"height":20}, "focused": false, "children": [
+            {"role": "AXStaticText", "value": "12 KB", "title": null, "url": null,
+             "frame": {"x":2040,"y":350,"width":160,"height":16}, "focused": false, "children": []}
+          ]}
+        ]}
+      ]}
+    ]}
+  ]
+}
