@@ -5,10 +5,12 @@ import MaxMiCore
 final class NotionStructuredTests: XCTestCase {
     func node(_ role: String, value: String? = nil, url: String? = nil,
               domClassList: [String]? = nil, headingLevel: Int? = nil,
+              subrole: String? = nil, selectedText: String? = nil,
               frame: CGRect, children: [AXNode] = []) -> AXNode {
         AXNode(role: role, value: value, title: nil, url: url, frame: frame, focused: false,
-               children: children, identifier: nil, label: nil, subrole: nil,
-               headingLevel: headingLevel, selected: false, placeholder: nil, selectedText: nil,
+               children: children, identifier: nil, label: nil, subrole: subrole,
+               headingLevel: headingLevel, selected: false, placeholder: nil,
+               selectedText: selectedText,
                hidden: false, domClassList: domClassList, domIdentifier: nil)
     }
 
@@ -18,9 +20,22 @@ final class NotionStructuredTests: XCTestCase {
     }
 
     /// A Notion window: topbar, page frame with two blocks, a right margin and a property group.
-    func window(frameClass: String = "notion-frame", origin: CGPoint = .zero) -> AXNode {
+    func window(frameClass: String = "notion-frame", origin: CGPoint = .zero,
+                pageChildren: [AXNode] = []) -> AXNode {
         let x = origin.x
         let y = origin.y
+        let page = [
+            node("AXHeading", value: "Q3 plan", headingLevel: 1,
+                 frame: CGRect(x: x + 300, y: y + 100, width: 400, height: 30)),
+            text("Ship the index rebuild.", y: y + 150, x: x + 300),
+            node("AXGroup", domClassList: ["notion-page-properties"],
+                 frame: CGRect(x: x + 300, y: y + 60, width: 400, height: 30), children: [
+                text("Status: In progress", y: y + 60, x: x + 300),
+            ]),
+            node("AXGroup", domClassList: ["layout-margin-right"],
+                 frame: CGRect(x: x + 1100, y: y + 100, width: 280, height: 700),
+                 children: [text("Comments", y: y + 100, x: x + 1100)]),
+        ] + pageChildren
         return node("AXWindow", frame: CGRect(origin: origin,
                                              size: CGSize(width: 1400, height: 900)),
                     children: [
@@ -31,18 +46,8 @@ final class NotionStructuredTests: XCTestCase {
                     text("Roadmap", y: y + 12, x: x + 20),
                 ]),
                 node("AXGroup", domClassList: [frameClass],
-                     frame: CGRect(x: x, y: y + 44, width: 1400, height: 856), children: [
-                    node("AXHeading", value: "Q3 plan", headingLevel: 1,
-                         frame: CGRect(x: x + 300, y: y + 100, width: 400, height: 30)),
-                    text("Ship the index rebuild.", y: y + 150, x: x + 300),
-                    node("AXGroup", domClassList: ["notion-page-properties"],
-                         frame: CGRect(x: x + 300, y: y + 60, width: 400, height: 30), children: [
-                        text("Status: In progress", y: y + 60, x: x + 300),
-                    ]),
-                    node("AXGroup", domClassList: ["layout-margin-right"],
-                         frame: CGRect(x: x + 1100, y: y + 100, width: 280, height: 700),
-                         children: [text("Comments", y: y + 100, x: x + 1100)]),
-                ]),
+                     frame: CGRect(x: x, y: y + 44, width: 1400, height: 856),
+                     children: page),
             ]),
         ])
     }
@@ -54,7 +59,8 @@ final class NotionStructuredTests: XCTestCase {
 
     func document(_ content: CapturedContent?) throws -> Document {
         guard case .document(let doc) = try XCTUnwrap(content) else {
-            throw XCTSkip("expected .document, got \(String(describing: content))")
+            XCTFail("expected .document, got \(String(describing: content))")
+            throw NSError(domain: "NotionStructuredTests", code: 1)
         }
         return doc
     }
@@ -110,6 +116,46 @@ final class NotionStructuredTests: XCTestCase {
     func testTopbarTextIsNotDuplicatedIntoTheBody() throws {
         let doc = try document(NotionParser().parse(window(), context: context("Roadmap — Notion")))
         XCTAssertFalse(doc.blocks.contains { $0.text == "Roadmap" })
+    }
+
+    func testSecureFieldsInsideThePageAreNeverCaptured() throws {
+        let secrets = ["role secret", "subrole secret", "selected secret"]
+        let content = try XCTUnwrap(NotionParser().parse(
+            window(pageChildren: [
+                node("AXSecureTextField", value: secrets[0],
+                     frame: CGRect(x: 300, y: 200, width: 400, height: 24)),
+                node("AXStaticText", value: secrets[1],
+                     subrole: GenericPageExtractor.secureSubrole, selectedText: secrets[2],
+                     frame: CGRect(x: 300, y: 240, width: 400, height: 24)),
+            ]),
+            context: context("Roadmap — Notion")))
+        let doc = try document(content)
+        let rendered = ContentRenderer.render(content, style: .full)
+        for secret in secrets {
+            XCTAssertFalse(doc.title.contains(secret))
+            XCTAssertFalse(doc.blocks.contains { $0.text.contains(secret) })
+            XCTAssertFalse(rendered.contains(secret))
+        }
+    }
+
+    func testStructuredPathBoundsOversizeDocumentsAndV1MarksThemTruncated() throws {
+        let pageChildren = (0..<40).map { index in
+            text("line \(index) " + String(repeating: "x", count: 1_000),
+                 y: CGFloat(200 + index * 20), x: 300)
+        }
+        let snapshot = window(pageChildren: pageChildren)
+        let v2 = try XCTUnwrap(NotionParser().parse(
+            snapshot, context: context("Roadmap — Notion")))
+        XCTAssertLessThanOrEqual(
+            ContentRenderer.render(v2, style: .full).count,
+            StructuredEntityExtraction.pageBudget
+        )
+
+        let app = AppInfo(bundleID: ParserRegistry.notionBundleID, name: "Notion",
+                          windowTitle: "Roadmap — Notion")
+        let v1 = try XCTUnwrap(NotionParser().parse(window: snapshot, app: app))
+        XCTAssertTrue(v1.truncated)
+        XCTAssertEqual(v1.structured, v2)
     }
 
     func testUrlComesFromTheContextWhenPresent() throws {

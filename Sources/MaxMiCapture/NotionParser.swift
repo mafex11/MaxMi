@@ -14,9 +14,9 @@ public struct NotionParser: SourceParser {
     }
 
     public func parse(window: AXNode, app: AppInfo) throws -> ParsedCapture? {
-        guard let unbounded = try parse(window, context: ParseContext(app: app)) else { return nil }
-        let structured = CaptureAccumulator.boundHard(
-            unbounded, to: StructuredEntityExtraction.pageBudget)
+        let context = ParseContext(app: app)
+        guard let structured = try parse(window, context: context),
+              let unbounded = unboundedDocument(window, context: context) else { return nil }
         let title = app.windowTitle?.isEmpty == false ? app.windowTitle! : "untitled"
         return ParsedCapture(sourceApp: "Notion", sourceKey: "notion:\(docSlug(title))",
                              sourceTitle: app.windowTitle,
@@ -99,6 +99,11 @@ extension NotionParser: StructuredParser {
     }
 
     public func parse(_ snapshot: AXNode, context: ParseContext) throws -> CapturedContent? {
+        guard let unbounded = unboundedDocument(snapshot, context: context) else { return nil }
+        return CaptureAccumulator.bound(unbounded, to: StructuredEntityExtraction.pageBudget)
+    }
+
+    func unboundedDocument(_ snapshot: AXNode, context: ParseContext) -> CapturedContent? {
         guard let root = Self.pageRoot(in: snapshot) else { return nil }
         let title = Self.pageTitle(in: snapshot, windowTitle: context.windowTitle)
         let blocks = Self.blocks(under: root).filter { $0.text != title }
