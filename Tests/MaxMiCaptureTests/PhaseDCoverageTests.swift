@@ -389,10 +389,16 @@ final class PhaseDCoverageTests: XCTestCase {
             .appendingPathComponent("Sources")
         let enumerator = try XCTUnwrap(FileManager.default.enumerator(
             at: sources, includingPropertiesForKeys: nil))
+        // M9 (spec §12 amendment, 2026-09-22) sanctions exactly one `.flagsChanged`-only NSEvent
+        // monitor for the Option double-tap gesture; TypingObserverTests pins its file and mask.
+        let sanctionedMonitorFile = sources.appendingPathComponent("MaxMi/OptionDoubleTapMonitor.swift")
+            .standardizedFileURL
         for case let url as URL in enumerator where url.pathExtension == "swift" {
             let text = try String(contentsOf: url, encoding: .utf8)
             XCTAssertFalse(text.contains("CGEventTap"), "\(url.lastPathComponent)")
-            XCTAssertFalse(text.contains("addGlobalMonitorForEvents"), "\(url.lastPathComponent)")
+            if url.standardizedFileURL != sanctionedMonitorFile {
+                XCTAssertFalse(text.contains("addGlobalMonitorForEvents"), "\(url.lastPathComponent)")
+            }
         }
     }
 }
